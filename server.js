@@ -21,7 +21,7 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => {
     console.log('Connected to MongoDB');
     app.listen(5000, () => {
-      console.log('Server running on http://localhost:5000');
+      console.log('Server running on https://center-kitchen-backend.onrender.com');
     });
   })
   .catch(err => {
