@@ -34,4 +34,21 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ✅ Update an order by ID
+router.put('/:id', async (req, res) => {
+  try {
+    const updatedOrder = await Order.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true } // return the updated document
+    );
+    if (!updatedOrder) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    res.json(updatedOrder);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;
