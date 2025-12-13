@@ -1,23 +1,37 @@
-// models/Order.js
-const mongoose = require('mongoose');
+const express = require('express');
+const router = express.Router();
+const Order = require('../models/Order');
 
-const orderSchema = new mongoose.Schema({
-  outletName: {
-    type: String,
-    required: true
-  },
-  sauce: {
-    type: String,
-    required: true
-  },
-  quantity: {
-    type: Number,
-    required: true
-  },
-  deliveryDate: {
-    type: String,
-    required: true
+// POST: Create order
+router.post('/', async (req, res) => {
+  try {
+    const newOrder = new Order(req.body);
+    await newOrder.save();
+    res.status(201).json(newOrder);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
   }
 });
 
-module.exports = mongoose.model('Order', orderSchema);
+// GET: Fetch all orders
+router.get('/', async (req, res) => {
+  try {
+    const orders = await Order.find();
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// DELETE: Remove order
+router.delete('/:id', async (req, res) => {
+  try {
+    const deleted = await Order.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: 'Order not found' });
+    res.json({ message: 'Order deleted' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+module.exports = router;
