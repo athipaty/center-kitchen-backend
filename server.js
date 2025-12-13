@@ -11,6 +11,13 @@ app.use(express.json());
 const orderRoutes = require('./routes/orders');
 app.use('/orders', orderRoutes);
 
+const outletRoutes = require('./routes/outlets');
+app.use('/outlets', outletRoutes);
+
+const sauceRoutes = require('./routes/sauces');
+app.use('/sauces', sauceRoutes);
+
+
 // MongoDB connect
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
