@@ -1,37 +1,45 @@
-// routes/orders.js
-
 const express = require('express');
 const router = express.Router();
 const Order = require('../models/Order');
 
-// ✅ Get all orders
+
+// =======================
+// GET all orders
+// =======================
 router.get('/', async (req, res) => {
   try {
     const orders = await Order.find();
     res.json(orders);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
-// ✅ Create a new order
-router.post('/', async (req, res) => {
-  const order = new Order({
-    outletName: req.body.outletName,
-    sauce: req.body.sauce,
-    quantity: req.body.quantity,
-    deliveryDate: req.body.deliveryDate
-  });
 
+// =======================
+// CREATE new order
+// =======================
+router.post('/', async (req, res) => {
   try {
+    const order = new Order({
+      outletName: req.body.outletName,
+      sauce: req.body.sauce,
+      quantity: req.body.quantity,
+      deliveryDate: req.body.deliveryDate,
+      status: req.body.status || 'pending', // ✅ default pending
+    });
+
     const newOrder = await order.save();
     res.status(201).json(newOrder);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
   }
 });
 
-// ✅ Update an order by ID
+
+// =======================
+// UPDATE order (edit OR mark delivered)
+// =======================
 router.put('/:id', async (req, res) => {
   try {
     const updatedOrder = await Order.findByIdAndUpdate(
@@ -40,9 +48,10 @@ router.put('/:id', async (req, res) => {
         outletName: req.body.outletName,
         sauce: req.body.sauce,
         quantity: req.body.quantity,
-        deliveryDate: req.body.deliveryDate
+        deliveryDate: req.body.deliveryDate,
+        status: req.body.status, // ✅ IMPORTANT
       },
-      { new: true } // return the updated document
+      { new: true }
     );
 
     if (!updatedOrder) {
@@ -50,23 +59,24 @@ router.put('/:id', async (req, res) => {
     }
 
     res.json(updatedOrder);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
-// ✅ Delete an order by ID
+
+// =======================
+// DELETE order
+// =======================
 router.delete('/:id', async (req, res) => {
   try {
-    const deletedOrder = await Order.findByIdAndDelete(req.params.id);
-
-    if (!deletedOrder) {
+    const deleted = await Order.findByIdAndDelete(req.params.id);
+    if (!deleted) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
-    res.json({ message: 'Order deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.json({ message: 'Order deleted' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
