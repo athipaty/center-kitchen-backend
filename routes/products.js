@@ -93,4 +93,17 @@ router.put('/:barcode', async (req, res) => {
   }
 });
 
+// DELETE a product by barcode
+router.delete('/:barcode', async (req, res) => {
+  try {
+    const { barcode } = req.params;
+    const deleted = await Product.findOneAndDelete({ barcode, outletName });
+    if (!deleted) return res.status(404).json({ message: 'Product not found' });
+    res.json({ message: 'Deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error deleting product', error: err });
+  }
+});
+
+
 module.exports = router;
