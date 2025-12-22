@@ -17,6 +17,9 @@ app.use('/outlets', outletRoutes);
 const sauceRoutes = require('./routes/sauces');
 app.use('/sauces', sauceRoutes);
 
+const productRoutes = require('./routes/products');
+app.use('/products', productRoutes);
+
 
 // MongoDB connect
 mongoose.connect(process.env.MONGO_URI)
