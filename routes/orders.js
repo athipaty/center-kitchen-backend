@@ -15,26 +15,24 @@ router.get("/", async (req, res) => {
 
     const filter = {};
 
-    // Outlet-scoped (used by OrderPage)
-    if (outletId) {
+    // 🔥 Only filter outletId if NOT Center Kitchen
+    if (outletId && outletId !== "ALL") {
       filter.outletId = outletId;
     }
 
-    // Optional status filter
     if (status) {
       filter.status = status;
     }
 
-    const orders = await Order.find(filter).sort({
-      deliveryDate: 1,
-      createdAt: -1,
-    });
+    const orders = await Order.find(filter)
+      .sort({ deliveryDate: 1, createdAt: -1 });
 
     res.json(orders);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
+
 
 /* ================================
    CREATE order
