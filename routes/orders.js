@@ -3,26 +3,30 @@ const router = express.Router();
 const Order = require("../models/Order");
 
 /* ================================
-   GET orders (OUTLET-SCOPED)
+   GET orders
+   - Outlet: ?outletId=xxx
+   - Center Kitchen: no outletId → ALL
 ================================ */
 router.get("/", async (req, res) => {
   try {
     const { outletId, status } = req.query;
 
-    if (!outletId) {
-      return res.status(400).json({
-        message: "outletId is required",
-      });
+    const filter = {};
+
+    // Outlet-scoped (used by OrderPage)
+    if (outletId) {
+      filter.outletId = outletId;
     }
 
-    const filter = { outletId };
-
+    // Optional status filter
     if (status) {
       filter.status = status;
     }
 
-    const orders = await Order.find(filter)
-      .sort({ deliveryDate: 1, createdAt: -1 });
+    const orders = await Order.find(filter).sort({
+      deliveryDate: 1,
+      createdAt: -1,
+    });
 
     res.json(orders);
   } catch (err) {
@@ -67,7 +71,7 @@ router.post("/", async (req, res) => {
 });
 
 /* ================================
-   UPDATE order
+   UPDATE order (outlet-protected)
 ================================ */
 router.put("/:id", async (req, res) => {
   try {
@@ -92,6 +96,7 @@ router.put("/:id", async (req, res) => {
 
     Object.assign(order, req.body);
     const updated = await order.save();
+
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -115,11 +120,16 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// ✅ Mark order as delivered
+/* ================================
+   MARK order as delivered
+================================ */
 router.patch("/:id/deliver", async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
 
     order.status = "delivered";
     await order.save();
@@ -129,6 +139,5 @@ router.patch("/:id/deliver", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-
 
 module.exports = router;
