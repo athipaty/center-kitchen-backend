@@ -57,7 +57,7 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "outletId is required" });
     }
 
-    // 🔒 Resolve outlet name from DB
+    // 🔒 Resolve outlet name from DB (source of truth)
     const outlet = await Outlet.findById(outletId);
     if (!outlet) {
       return res.status(400).json({ message: "Invalid outletId" });
@@ -65,7 +65,7 @@ router.post("/", async (req, res) => {
 
     const order = new Order({
       outletId,
-      outletName: outlet.name,
+      outletName: outlet.name, // ✅ ALWAYS SET HERE
       sauce,
       quantity,
       deliveryDate,
@@ -104,6 +104,7 @@ router.put("/:id", async (req, res) => {
         .json({ message: "Unauthorized or order not found" });
     }
 
+    // 🔒 Only allow safe fields to change
     const { quantity, deliveryDate, sauce, status } = req.body;
 
     if (quantity !== undefined) order.quantity = quantity;
@@ -111,9 +112,9 @@ router.put("/:id", async (req, res) => {
     if (sauce) order.sauce = sauce;
     if (status) order.status = status;
 
-    await order.save();
+    const updatedOrder = await order.save(); // ✅ FIXED
 
-    res.json(updated);
+    res.json(updatedOrder); // ✅ FIXED
   } catch (err) {
     console.error("PUT /orders error:", err);
     res.status(500).json({ message: err.message });
@@ -126,9 +127,11 @@ router.put("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const deleted = await Order.findByIdAndDelete(req.params.id);
+
     if (!deleted) {
       return res.status(404).json({ message: "Order not found" });
     }
+
     res.json({ message: "Order deleted" });
   } catch (err) {
     res.status(500).json({ message: err.message });
