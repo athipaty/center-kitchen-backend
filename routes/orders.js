@@ -113,30 +113,13 @@ router.put("/:id", async (req, res) => {
 /* ================================
    DELETE order (SAFE)
    ================================ */
+// ✅ Delete an order by ID
 router.delete("/:id", async (req, res) => {
   try {
-    const { outletId, outletName } = req.query;
-
-    if (!outletId && !outletName) {
-      return res.status(400).json({
-        message: "Outlet verification required",
-      });
-    }
-
-    const filter = { _id: req.params.id };
-
-    if (outletId) {
-      filter.outletId = outletId;
-    } else {
-      filter.outletName = outletName;
-    }
-
-    const deleted = await Order.findOneAndDelete(filter);
+    const deleted = await Order.findByIdAndDelete(req.params.id);
 
     if (!deleted) {
-      return res.status(404).json({
-        message: "Order not found or unauthorized",
-      });
+      return res.status(404).json({ message: "Order not found" });
     }
 
     res.json({ message: "Order deleted" });
