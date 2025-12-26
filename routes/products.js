@@ -2,17 +2,13 @@ const express = require('express');
 const router = express.Router();
 const Product = require('../models/Product');
 
-/**
- * GET all products (optional outlet filter)
- * /products?outletName=SGO
- */
+// Get all products (filterable by outlet)
 router.get('/', async (req, res) => {
   try {
     const filter = {};
     if (req.query.outletName) {
       filter.outletName = req.query.outletName;
     }
-
     const products = await Product.find(filter).sort({ name: 1 });
     res.json(products);
   } catch (err) {
@@ -20,30 +16,18 @@ router.get('/', async (req, res) => {
   }
 });
 
-/**
- * GET product by barcode
- * /products/:barcode
- */
+// Get product by barcode
 router.get('/:barcode', async (req, res) => {
   try {
-    const product = await Product.findOne({
-      barcode: req.params.barcode,
-    });
-
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
-
+    const product = await Product.findOne({ barcode: req.params.barcode });
+    if (!product) return res.status(404).json({ message: 'Product not found' });
     res.json(product);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-/**
- * POST new product
- * /products
- */
+// Create new product
 router.post('/', async (req, res) => {
   try {
     const { barcode, name, quantity, outletName } = req.body;
@@ -53,13 +37,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Product already exists' });
     }
 
-    const product = new Product({
-      barcode,
-      name,
-      quantity,
-      outletName,
-    });
-
+    const product = new Product({ barcode, name, quantity, outletName });
     await product.save();
     res.status(201).json(product);
   } catch (err) {
@@ -67,24 +45,16 @@ router.post('/', async (req, res) => {
   }
 });
 
-/**
- * PUT update product quantity
- * /products/:barcode
- */
+// Update product
 router.put('/:barcode', async (req, res) => {
   try {
-    const { quantity, outletName } = req.body;
+    const { quantity, outletName, name } = req.body;
+    const product = await Product.findOne({ barcode: req.params.barcode, outletName });
 
-    const product = await Product.findOne({
-      barcode: req.params.barcode,
-      outletName,
-    });
-
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
+    if (!product) return res.status(404).json({ message: 'Product not found' });
 
     product.quantity = quantity;
+    product.name = name || product.name;
     await product.save();
 
     res.json(product);
@@ -93,17 +63,23 @@ router.put('/:barcode', async (req, res) => {
   }
 });
 
-// DELETE a product by barcode
+// Delete product
 router.delete('/:barcode', async (req, res) => {
   try {
-    const { barcode } = req.params;
-    const deleted = await Product.findOneAndDelete({ barcode, outletName });
-    if (!deleted) return res.status(404).json({ message: 'Product not found' });
+    const { outletName } = req.query;
+    const deleted = await Product.findOneAndDelete({
+      barcode: req.params.barcode,
+      outletName,
+    });
+
+    if (!deleted) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
     res.json({ message: 'Deleted successfully' });
   } catch (err) {
     res.status(500).json({ message: 'Error deleting product', error: err });
   }
 });
-
 
 module.exports = router;
