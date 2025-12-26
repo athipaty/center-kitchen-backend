@@ -45,8 +45,13 @@ router.get("/", async (req, res) => {
 ================================ */
 router.post("/", async (req, res) => {
   try {
-    const { outletId, sauce, quantity, deliveryDate, status = "pending" } =
-      req.body;
+    const {
+      outletId,
+      sauce,
+      quantity,
+      deliveryDate,
+      status = "pending",
+    } = req.body;
 
     if (!outletId) {
       return res.status(400).json({ message: "outletId is required" });
@@ -99,8 +104,14 @@ router.put("/:id", async (req, res) => {
         .json({ message: "Unauthorized or order not found" });
     }
 
-    Object.assign(order, req.body);
-    const updated = await order.save();
+    const { quantity, deliveryDate, sauce, status } = req.body;
+
+    if (quantity !== undefined) order.quantity = quantity;
+    if (deliveryDate) order.deliveryDate = deliveryDate;
+    if (sauce) order.sauce = sauce;
+    if (status) order.status = status;
+
+    await order.save();
 
     res.json(updated);
   } catch (err) {
