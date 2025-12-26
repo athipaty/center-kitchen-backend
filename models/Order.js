@@ -1,19 +1,16 @@
 const mongoose = require("mongoose");
 
-const orderSchema = new mongoose.Schema(
+const OrderSchema = new mongoose.Schema(
   {
-    // 🔐 NEW: strong relationship
     outletId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Outlet",
-      required: false, // TEMP: allow old data
-      index: true,
+      required: true,
     },
 
-    // ⚠️ TEMP: keep for backward compatibility
     outletName: {
       type: String,
-      required: true,
+      default: "",
     },
 
     sauce: {
@@ -24,6 +21,7 @@ const orderSchema = new mongoose.Schema(
     quantity: {
       type: Number,
       required: true,
+      min: 0,
     },
 
     deliveryDate: {
@@ -33,13 +31,11 @@ const orderSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "delivered"],
+      enum: ["pending", "delivered", "cancelled"],
       default: "pending",
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-module.exports = mongoose.model("Order", orderSchema);
+module.exports = mongoose.model("Order", OrderSchema);
