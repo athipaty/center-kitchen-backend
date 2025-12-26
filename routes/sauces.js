@@ -69,16 +69,32 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-/**
- * DELETE /sauces/:id
- */
+/* ================================
+   DELETE sauce (SAFE)
+================================ */
 router.delete("/:id", async (req, res) => {
   try {
-    const deleted = await Sauce.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ message: "Sauce not found" });
+    const sauce = await Sauce.findById(req.params.id);
+    if (!sauce) {
+      return res.status(404).json({ message: "Sauce not found" });
+    }
 
-    res.json({ message: "Sauce deleted" });
+    // 🔒 Check if sauce is used in any order
+    const usedCount = await Order.countDocuments({
+      sauce: sauce.sauceName,
+      outletId: sauce.outletId,
+    });
+
+    if (usedCount > 0) {
+      return res.status(409).json({
+        message: "Cannot delete sauce. It is already used in existing orders.",
+      });
+    }
+
+    await Sauce.findByIdAndDelete(req.params.id);
+    res.json({ message: "Sauce deleted successfully" });
   } catch (err) {
+    console.error("DELETE /sauces error:", err);
     res.status(500).json({ message: err.message });
   }
 });
