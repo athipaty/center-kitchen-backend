@@ -12,12 +12,18 @@ router.get("/", async (req, res) => {
   try {
     const { outletId } = req.query;
 
-    const filter = {};
-    if (outletId) filter.outletId = outletId;
+    let filter = {};
 
-    const sauces = await Sauce.find(filter).sort({ outletId: 1, sauceName: 1 });
+    // Outlet-specific
+    if (outletId && outletId !== "ALL") {
+      filter.outletId = outletId;
+    }
+
+    const sauces = await Sauce.find(filter).populate("outletId", "name");
+
     res.json(sauces);
   } catch (err) {
+    console.error("GET /sauces error:", err);
     res.status(500).json({ message: err.message });
   }
 });

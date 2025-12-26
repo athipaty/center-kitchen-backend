@@ -1,14 +1,23 @@
-// models/Sauce.js
 const mongoose = require("mongoose");
 
-const SauceSchema = new mongoose.Schema({
-  outletId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Outlet",
-    required: true,
+const sauceSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true, // 👈 REQUIRED
+      trim: true,
+    },
+    outletId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Outlet",
+      required: true,
+    },
+    standardWeightKg: {
+      type: Number,
+      required: true,
+    },
   },
-  name: { type: String, required: true },
-  standardWeightKg: { type: Number, required: true },
-}, { timestamps: true });
+  { timestamps: true }
+);
 
-module.exports = mongoose.model("Sauce", SauceSchema);
+module.exports = mongoose.model("Sauce", sauceSchema);
