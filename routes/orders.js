@@ -3,35 +3,39 @@ const router = express.Router();
 const Order = require("../models/Order");
 const Outlet = require("../models/Outlet");
 
-
 /* ================================
    GET orders
    - Outlet: ?outletId=xxx
-   - Center Kitchen: no outletId → ALL
+   - Center Kitchen: no outletId OR outletId=ALL
 ================================ */
 router.get("/", async (req, res) => {
   try {
     const { outletId, status } = req.query;
-
     const filter = {};
 
-    // Outlet-scoped (used by OrderPage)
-    if (outletId) {
+    // Outlet-scoped only when valid outletId is provided
+    if (outletId && outletId !== "ALL") {
       filter.outletId = outletId;
     }
 
-    // Optional status filter
     if (status) {
       filter.status = status;
     }
 
-    const orders = await Order.find(filter).sort({
-      deliveryDate: 1,
-      createdAt: -1,
+    const orders = await Order.find(filter)
+      .sort({ deliveryDate: 1, createdAt: -1 })
+      .lean();
+
+    // 🛡️ SAFETY: ensure outletName always exists
+    orders.forEach((o) => {
+      if (!o.outletName) {
+        o.outletName = "Unknown Outlet";
+      }
     });
 
     res.json(orders);
   } catch (err) {
+    console.error("GET /orders error:", err);
     res.status(500).json({ message: err.message });
   }
 });
@@ -41,31 +45,22 @@ router.get("/", async (req, res) => {
 ================================ */
 router.post("/", async (req, res) => {
   try {
-    const {
-      outletId,
-      sauce,
-      quantity,
-      deliveryDate,
-      status = "pending",
-    } = req.body;
+    const { outletId, sauce, quantity, deliveryDate, status = "pending" } =
+      req.body;
 
     if (!outletId) {
-      return res.status(400).json({
-        message: "outletId is required",
-      });
+      return res.status(400).json({ message: "outletId is required" });
     }
 
-    // ✅ Resolve outlet name from DB (SOURCE OF TRUTH)
+    // 🔒 Resolve outlet name from DB
     const outlet = await Outlet.findById(outletId);
     if (!outlet) {
-      return res.status(400).json({
-        message: "Invalid outletId",
-      });
+      return res.status(400).json({ message: "Invalid outletId" });
     }
 
     const order = new Order({
       outletId,
-      outletName: outlet.name, // ✅ ALWAYS SET
+      outletName: outlet.name,
       sauce,
       quantity,
       deliveryDate,
@@ -75,10 +70,10 @@ router.post("/", async (req, res) => {
     const newOrder = await order.save();
     res.status(201).json(newOrder);
   } catch (err) {
+    console.error("POST /orders error:", err);
     res.status(400).json({ message: err.message });
   }
 });
-
 
 /* ================================
    UPDATE order (outlet-protected)
@@ -88,9 +83,9 @@ router.put("/:id", async (req, res) => {
     const { outletId } = req.body;
 
     if (!outletId) {
-      return res.status(400).json({
-        message: "outletId is required for update",
-      });
+      return res
+        .status(400)
+        .json({ message: "outletId is required for update" });
     }
 
     const order = await Order.findOne({
@@ -99,9 +94,9 @@ router.put("/:id", async (req, res) => {
     });
 
     if (!order) {
-      return res.status(403).json({
-        message: "Unauthorized or order not found",
-      });
+      return res
+        .status(403)
+        .json({ message: "Unauthorized or order not found" });
     }
 
     Object.assign(order, req.body);
@@ -109,21 +104,20 @@ router.put("/:id", async (req, res) => {
 
     res.json(updated);
   } catch (err) {
+    console.error("PUT /orders error:", err);
     res.status(500).json({ message: err.message });
   }
 });
 
 /* ================================
-   DELETE order
+   DELETE order (not used by kitchen)
 ================================ */
 router.delete("/:id", async (req, res) => {
   try {
     const deleted = await Order.findByIdAndDelete(req.params.id);
-
     if (!deleted) {
       return res.status(404).json({ message: "Order not found" });
     }
-
     res.json({ message: "Order deleted" });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -131,15 +125,12 @@ router.delete("/:id", async (req, res) => {
 });
 
 /* ================================
-   MARK order as delivered
+   MARK delivered
 ================================ */
 router.patch("/:id/deliver", async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
-
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
-    }
+    if (!order) return res.status(404).json({ message: "Order not found" });
 
     order.status = "delivered";
     await order.save();
@@ -150,6 +141,21 @@ router.patch("/:id/deliver", async (req, res) => {
   }
 });
 
+/* ================================
+   UNDO delivered
+================================ */
+router.patch("/:id/undo-deliver", async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
 
+    order.status = "pending";
+    await order.save();
+
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 
 module.exports = router;
