@@ -3,22 +3,28 @@ const express = require("express");
 const router = express.Router();
 const Sauce = require("../models/Sauce");
 
-// ✅ Get sauces (filter by outletId)
-router.get("/", async (req, res) => {
+// ✅ Create sauce
+router.post("/", async (req, res) => {
   try {
-    const { outletId } = req.query;
-
-    if (!outletId) {
-      return res.status(400).json({
-        message: "outletId is required",
-      });
-    }
-
-    const sauces = await Sauce.find({ outletId });
-    res.json(sauces);
+    const sauce = new Sauce(req.body);
+    const saved = await sauce.save();
+    res.status(201).json(saved);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(400).json({ message: err.message });
   }
 });
+
+// ✅ Update sauce
+router.put("/:id", async (req, res) => {
+  try {
+    const updated = await Sauce.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+    });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
 
 module.exports = router;

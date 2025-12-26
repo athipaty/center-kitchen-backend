@@ -115,4 +115,20 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// ✅ Mark order as delivered
+router.patch("/:id/deliver", async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    order.status = "delivered";
+    await order.save();
+
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
 module.exports = router;
