@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const Order = require("../models/Order");
+const Outlet = require("../models/Outlet");
+
 
 /* ================================
    GET orders
@@ -41,7 +43,6 @@ router.post("/", async (req, res) => {
   try {
     const {
       outletId,
-      outletName = "",
       sauce,
       quantity,
       deliveryDate,
@@ -54,9 +55,17 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // ✅ Resolve outlet name from DB (SOURCE OF TRUTH)
+    const outlet = await Outlet.findById(outletId);
+    if (!outlet) {
+      return res.status(400).json({
+        message: "Invalid outletId",
+      });
+    }
+
     const order = new Order({
       outletId,
-      outletName,
+      outletName: outlet.name, // ✅ ALWAYS SET
       sauce,
       quantity,
       deliveryDate,
@@ -69,6 +78,7 @@ router.post("/", async (req, res) => {
     res.status(400).json({ message: err.message });
   }
 });
+
 
 /* ================================
    UPDATE order (outlet-protected)
