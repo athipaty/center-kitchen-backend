@@ -4,24 +4,18 @@ const Order = require("../models/Order");
 
 /* ================================
    GET orders (OUTLET-SCOPED)
-   ================================ */
+================================ */
 router.get("/", async (req, res) => {
   try {
-    const { outletId, outletName, status } = req.query;
+    const { outletId, status } = req.query;
 
-    if (!outletId && !outletName) {
+    if (!outletId) {
       return res.status(400).json({
-        message: "outletId or outletName is required",
+        message: "outletId is required",
       });
     }
 
-    const filter = {};
-
-    if (outletId) {
-      filter.outletId = outletId;
-    } else {
-      filter.outletName = outletName; // fallback
-    }
+    const filter = { outletId };
 
     if (status) {
       filter.status = status;
@@ -38,26 +32,26 @@ router.get("/", async (req, res) => {
 
 /* ================================
    CREATE order
-   ================================ */
+================================ */
 router.post("/", async (req, res) => {
   try {
     const {
       outletId,
-      outletName,
+      outletName = "",
       sauce,
       quantity,
       deliveryDate,
       status = "pending",
     } = req.body;
 
-    if (!outletId && !outletName) {
+    if (!outletId) {
       return res.status(400).json({
-        message: "Outlet is required",
+        message: "outletId is required",
       });
     }
 
     const order = new Order({
-      outletId: outletId || undefined,
+      outletId,
       outletName,
       sauce,
       quantity,
@@ -73,27 +67,22 @@ router.post("/", async (req, res) => {
 });
 
 /* ================================
-   UPDATE order (SAFE)
-   ================================ */
+   UPDATE order
+================================ */
 router.put("/:id", async (req, res) => {
   try {
-    const { outletId, outletName } = req.body;
+    const { outletId } = req.body;
 
-    if (!outletId && !outletName) {
+    if (!outletId) {
       return res.status(400).json({
-        message: "Outlet verification required",
+        message: "outletId is required for update",
       });
     }
 
-    const filter = { _id: req.params.id };
-
-    if (outletId) {
-      filter.outletId = outletId;
-    } else {
-      filter.outletName = outletName;
-    }
-
-    const order = await Order.findOne(filter);
+    const order = await Order.findOne({
+      _id: req.params.id,
+      outletId,
+    });
 
     if (!order) {
       return res.status(403).json({
@@ -103,7 +92,6 @@ router.put("/:id", async (req, res) => {
 
     Object.assign(order, req.body);
     const updated = await order.save();
-
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -111,9 +99,8 @@ router.put("/:id", async (req, res) => {
 });
 
 /* ================================
-   DELETE order (SAFE)
-   ================================ */
-// ✅ Delete an order by ID
+   DELETE order
+================================ */
 router.delete("/:id", async (req, res) => {
   try {
     const deleted = await Order.findByIdAndDelete(req.params.id);
