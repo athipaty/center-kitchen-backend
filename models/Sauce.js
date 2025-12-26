@@ -1,16 +1,26 @@
-// models/Sauce.js
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const sauceSchema = new mongoose.Schema(// models/Sauce.js
-{
+const SauceSchema = new mongoose.Schema({
+  sauceName: {
+    type: String,
+    required: true,
+  },
+  standardWeightKg: {
+    type: Number,
+    required: true,
+  },
+
+  // ✅ NEW (correct way)
   outletId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Outlet",
-    required: true
+    required: true,
   },
-  sauceName: String,
-  standardWeightKg: Number
-}
-);
 
-module.exports = mongoose.model('Sauce', sauceSchema);
+  // ⚠️ KEEP FOR NOW (do NOT delete yet)
+  outletName: {
+    type: String,
+  },
+});
+
+module.exports = mongoose.model("Sauce", SauceSchema);
