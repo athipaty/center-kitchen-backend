@@ -15,24 +15,26 @@ router.get("/", async (req, res) => {
 
     const filter = {};
 
-    // 🔥 Only filter outletId if NOT Center Kitchen
-    if (outletId && outletId !== "ALL") {
+    // Outlet-scoped (used by OrderPage)
+    if (outletId) {
       filter.outletId = outletId;
     }
 
+    // Optional status filter
     if (status) {
       filter.status = status;
     }
 
-    const orders = await Order.find(filter)
-      .sort({ deliveryDate: 1, createdAt: -1 });
+    const orders = await Order.find(filter).sort({
+      deliveryDate: 1,
+      createdAt: -1,
+    });
 
     res.json(orders);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
-
 
 /* ================================
    CREATE order
@@ -148,20 +150,6 @@ router.patch("/:id/deliver", async (req, res) => {
   }
 });
 
-// Move delivered order back to pending
-router.patch("/:id/undo-deliver", async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ message: "Order not found" });
-
-    order.status = "pending";
-    await order.save();
-
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
 
 
 module.exports = router;
