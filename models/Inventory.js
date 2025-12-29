@@ -9,6 +9,12 @@ const inventorySchema = new mongoose.Schema(
       index: true,
     },
 
+    outletName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
     name: {
       type: String,
       required: true,
@@ -19,6 +25,13 @@ const inventorySchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
+    },
+
+    unit: {
+      type: String,
+      required: true,
+      trim: true,
+      default: "kg",
     },
   },
   {
