@@ -28,18 +28,20 @@ router.get("/", async (req, res) => {
 ================================ */
 router.post("/", async (req, res) => {
   try {
-    const { outletId, name, quantity } = req.body;
+    const { outletId, outletName, name, quantity, unit } = req.body;
 
-    if (!outletId || !name) {
-      return res
-        .status(400)
-        .json({ message: "outletId and name are required" });
+    if (!outletId || !outletName || !name) {
+      return res.status(400).json({
+        message: "outletId, outletName and name are required",
+      });
     }
 
     const item = new Inventory({
       outletId,
+      outletName,
       name,
       quantity: Number(quantity) || 0,
+      unit: unit || "kg",
     });
 
     const saved = await item.save();
@@ -49,17 +51,18 @@ router.post("/", async (req, res) => {
   }
 });
 
+
 /* ================================
    UPDATE inventory item
 ================================ */
 router.put("/:id", async (req, res) => {
   try {
-    const { outletId, name, quantity } = req.body;
+    const { outletId, name, quantity, unit } = req.body;
 
     if (!outletId) {
-      return res
-        .status(400)
-        .json({ message: "outletId is required" });
+      return res.status(400).json({
+        message: "outletId is required",
+      });
     }
 
     const item = await Inventory.findOne({
@@ -68,13 +71,14 @@ router.put("/:id", async (req, res) => {
     });
 
     if (!item) {
-      return res
-        .status(403)
-        .json({ message: "Unauthorized or item not found" });
+      return res.status(403).json({
+        message: "Unauthorized or item not found",
+      });
     }
 
     if (name !== undefined) item.name = name;
     if (quantity !== undefined) item.quantity = Number(quantity);
+    if (unit !== undefined) item.unit = unit;
 
     const updated = await item.save();
     res.json(updated);
@@ -82,6 +86,7 @@ router.put("/:id", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
+
 
 /* ================================
    DELETE inventory item
