@@ -10,7 +10,9 @@ router.get("/", async (req, res) => {
     const { outletId } = req.query;
 
     if (!outletId) {
-      return res.status(400).json({ message: "outletId is required" });
+      return res.status(400).json({
+        message: "outletId is required",
+      });
     }
 
     const items = await Inventory.find({ outletId }).sort({
@@ -28,11 +30,17 @@ router.get("/", async (req, res) => {
 ================================ */
 router.post("/", async (req, res) => {
   try {
-    const { outletId, outletName, name, quantity, unit } = req.body;
+    const {
+      outletId,
+      outletName = "",
+      name,
+      quantity = 0,
+      unit = "kg",
+    } = req.body;
 
-    if (!outletId || !outletName || !name) {
+    if (!outletId || !name) {
       return res.status(400).json({
-        message: "outletId, outletName and name are required",
+        message: "outletId and name are required",
       });
     }
 
@@ -40,8 +48,8 @@ router.post("/", async (req, res) => {
       outletId,
       outletName,
       name,
-      quantity: Number(quantity) || 0,
-      unit: unit || "kg",
+      quantity,
+      unit,
     });
 
     const saved = await item.save();
@@ -51,17 +59,16 @@ router.post("/", async (req, res) => {
   }
 });
 
-
 /* ================================
    UPDATE inventory item
 ================================ */
 router.put("/:id", async (req, res) => {
   try {
-    const { outletId, name, quantity, unit } = req.body;
+    const { outletId } = req.body;
 
     if (!outletId) {
       return res.status(400).json({
-        message: "outletId is required",
+        message: "outletId is required for update",
       });
     }
 
@@ -76,17 +83,14 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    if (name !== undefined) item.name = name;
-    if (quantity !== undefined) item.quantity = Number(quantity);
-    if (unit !== undefined) item.unit = unit;
-
+    Object.assign(item, req.body);
     const updated = await item.save();
+
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
-
 
 /* ================================
    DELETE inventory item
@@ -96,7 +100,9 @@ router.delete("/:id", async (req, res) => {
     const deleted = await Inventory.findByIdAndDelete(req.params.id);
 
     if (!deleted) {
-      return res.status(404).json({ message: "Item not found" });
+      return res.status(404).json({
+        message: "Inventory item not found",
+      });
     }
 
     res.json({ message: "Inventory item deleted" });
