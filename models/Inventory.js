@@ -1,42 +1,30 @@
 const mongoose = require("mongoose");
 
-const inventorySchema = new mongoose.Schema(
+const InventorySchema = new mongoose.Schema(
   {
     outletId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Outlet",
       required: true,
       index: true,
     },
-
     outletName: {
       type: String,
-      required: true,
-      trim: true,
+      default: "",
     },
-
     name: {
       type: String,
       required: true,
-      trim: true,
     },
-
     quantity: {
       type: Number,
-      required: true,
-      min: 0,
+      default: 0,
     },
-
     unit: {
       type: String,
-      required: true,
-      trim: true,
       default: "kg",
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-module.exports = mongoose.model("Inventory", inventorySchema);
+module.exports = mongoose.model("Inventory", InventorySchema);
