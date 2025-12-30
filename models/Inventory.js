@@ -8,7 +8,7 @@ const InventorySchema = new mongoose.Schema(
     },
     outletName: {
       type: String,
-      required: true,
+      default: "",
     },
     name: {
       type: String,

@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const Inventory = require("../models/Inventory");
+const Outlet = require("../models/Outlet");
+
 
 /* ================= GET ================= */
 router.get("/", async (req, res) => {
@@ -20,17 +22,21 @@ router.get("/", async (req, res) => {
 /* ================= CREATE ================= */
 router.post("/", async (req, res) => {
   try {
-    const { outletId, outletName, name, quantity, unit } = req.body;
+    const { outletId, name, quantity, unit } = req.body;
 
-    if (!outletId || !outletName) {
-      return res
-        .status(400)
-        .json({ message: "outletId and outletName are required" });
+    if (!outletId) {
+      return res.status(400).json({ message: "outletId required" });
+    }
+
+    // ✅ Fetch outlet name safely
+    const outlet = await Outlet.findById(outletId);
+    if (!outlet) {
+      return res.status(404).json({ message: "Outlet not found" });
     }
 
     const item = new Inventory({
       outletId,
-      outletName,
+      outletName: outlet.name, // ✅ guaranteed
       name,
       quantity,
       unit,
@@ -42,6 +48,7 @@ router.post("/", async (req, res) => {
     res.status(400).json({ message: err.message });
   }
 });
+
 
 /* ================= UPDATE ================= */
 router.put("/:id", async (req, res) => {
