@@ -3,24 +3,26 @@ const mongoose = require("mongoose");
 const InventorySchema = new mongoose.Schema(
   {
     outletId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       required: true,
-      index: true,
     },
     outletName: {
       type: String,
-      default: "",
+      required: true,
     },
     name: {
       type: String,
       required: true,
+      trim: true,
     },
     quantity: {
       type: Number,
-      default: 0,
+      required: true,
+      min: 0,
     },
     unit: {
       type: String,
+      enum: ["kg", "g", "bottle", "bag", "pcs"],
       default: "kg",
     },
   },

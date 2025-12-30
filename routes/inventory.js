@@ -2,46 +2,30 @@ const express = require("express");
 const router = express.Router();
 const Inventory = require("../models/Inventory");
 
-/* ================================
-   GET inventory (OUTLET SCOPED)
-================================ */
+/* ================= GET ================= */
 router.get("/", async (req, res) => {
   try {
     const { outletId } = req.query;
-
     if (!outletId) {
-      return res.status(400).json({
-        message: "outletId is required",
-      });
+      return res.status(400).json({ message: "outletId is required" });
     }
 
-    const items = await Inventory.find({ outletId }).sort({
-      createdAt: -1,
-    });
-
+    const items = await Inventory.find({ outletId }).sort({ createdAt: -1 });
     res.json(items);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-/* ================================
-   CREATE inventory item
-================================ */
+/* ================= CREATE ================= */
 router.post("/", async (req, res) => {
   try {
-    const {
-      outletId,
-      outletName = "",
-      name,
-      quantity = 0,
-      unit = "kg",
-    } = req.body;
+    const { outletId, outletName, name, quantity, unit } = req.body;
 
-    if (!outletId || !name) {
-      return res.status(400).json({
-        message: "outletId and name are required",
-      });
+    if (!outletId || !outletName) {
+      return res
+        .status(400)
+        .json({ message: "outletId and outletName are required" });
     }
 
     const item = new Inventory({
@@ -59,53 +43,38 @@ router.post("/", async (req, res) => {
   }
 });
 
-/* ================================
-   UPDATE inventory item
-================================ */
+/* ================= UPDATE ================= */
 router.put("/:id", async (req, res) => {
   try {
     const { outletId } = req.body;
-
     if (!outletId) {
-      return res.status(400).json({
-        message: "outletId is required for update",
-      });
+      return res.status(400).json({ message: "outletId required" });
     }
 
-    const item = await Inventory.findOne({
-      _id: req.params.id,
-      outletId,
-    });
+    const item = await Inventory.findOneAndUpdate(
+      { _id: req.params.id, outletId },
+      req.body,
+      { new: true }
+    );
 
     if (!item) {
-      return res.status(403).json({
-        message: "Unauthorized or item not found",
-      });
+      return res.status(404).json({ message: "Item not found" });
     }
 
-    Object.assign(item, req.body);
-    const updated = await item.save();
-
-    res.json(updated);
+    res.json(item);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-/* ================================
-   DELETE inventory item
-================================ */
+/* ================= DELETE ================= */
 router.delete("/:id", async (req, res) => {
   try {
     const deleted = await Inventory.findByIdAndDelete(req.params.id);
-
     if (!deleted) {
-      return res.status(404).json({
-        message: "Inventory item not found",
-      });
+      return res.status(404).json({ message: "Item not found" });
     }
-
-    res.json({ message: "Inventory item deleted" });
+    res.json({ message: "Deleted" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
