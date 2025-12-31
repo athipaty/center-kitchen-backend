@@ -10,6 +10,22 @@ router.get("/", async (req, res) => {
   res.json(outlets);
 });
 
+// GET outlet by ID
+router.get("/:id", async (req, res) => {
+  try {
+    const outlet = await Outlet.findById(req.params.id);
+
+    if (!outlet) {
+      return res.status(404).json({ message: "Outlet not found" });
+    }
+
+    res.json(outlet);
+  } catch (error) {
+    res.status(400).json({ message: "Invalid outlet ID" });
+  }
+});
+
+
 // CREATE outlet
 router.post("/", async (req, res) => {
   if (!req.body.name?.trim()) {
