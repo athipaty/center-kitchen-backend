@@ -3,16 +3,25 @@ const mongoose = require("mongoose");
 
 const MessageSchema = new mongoose.Schema(
   {
-    roomId: { type: String, required: true },
+    roomId: { type: String, required: true, index: true },
 
-    senderType: { type: String, required: true }, // "center" | "outlet"
-    senderName: { type: String, required: true }, // display name
-    senderId: { type: String, required: true },   // stable identity (e.g. "center" or "outlet:<id>")
+    senderType: { type: String, enum: ["center", "outlet"], required: true },
+    senderName: { type: String, required: true },
+    senderId: { type: String, required: true, index: true },
 
-    text: { type: String, required: true },
+    text: { type: String, default: "" },
 
-    // ✅ Read receipts: map of userId -> Date
-    readBy: { type: Object, default: {} },
+    // ✅ read receipts (you already use readBy)
+    readBy: { type: Object, default: {} }, // { userId: ISODateString }
+
+    // ✅ WhatsApp-style
+    editedAt: { type: Date, default: null },
+
+    // delete for everyone
+    deletedForAll: { type: Boolean, default: false },
+
+    // delete for me (list of userIds)
+    deletedFor: { type: [String], default: [] },
   },
   { timestamps: true }
 );
