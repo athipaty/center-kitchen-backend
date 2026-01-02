@@ -25,7 +25,6 @@ app.use("/inventory", inventoryRoutes);
 
 app.use("/chat", require("./routes/chat"));
 
-
 // MongoDB connect
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {

@@ -5,45 +5,92 @@ const Message = require("../models/Message");
 
 const router = express.Router();
 
-/* Get or create room */
+/* =========================
+   GET or CREATE CHAT ROOM
+========================= */
 router.get("/room/:outletId", async (req, res) => {
-  const { outletId } = req.params;
-  const { outletName } = req.query;
+  try {
+    const { outletId } = req.params;
+    const { outletName = "Unknown Outlet" } = req.query;
 
-  let room = await ChatRoom.findOne({ outletId });
+    if (!outletId) {
+      return res.status(400).json({ message: "outletId is required" });
+    }
 
-  if (!room) {
-    room = await ChatRoom.create({
-      outletId,
-      outletName,
-    });
+    let room = await ChatRoom.findOne({ outletId });
+
+    if (!room) {
+      room = await ChatRoom.create({
+        outletId,
+        outletName,
+      });
+    }
+
+    res.json(room);
+  } catch (err) {
+    console.error("Chat room error:", err);
+    res.status(500).json({ message: "Failed to get chat room" });
   }
-
-  res.json(room);
 });
 
+/* =========================
+   GET MESSAGES
+========================= */
 router.get("/messages/:roomId", async (req, res) => {
-  const messages = await Message.find({ roomId })
-    .sort({ createdAt: 1 })
-    .limit(200);
+  try {
+    const { roomId } = req.params;
 
-  res.json(messages);
+    if (!roomId) {
+      return res.status(400).json({ message: "roomId is required" });
+    }
+
+    const messages = await Message.find({ roomId })
+      .sort({ createdAt: 1 })
+      .limit(200);
+
+    res.json(messages);
+  } catch (err) {
+    console.error("Get messages error:", err);
+    res.status(500).json({ message: "Failed to load messages" });
+  }
 });
 
+/* =========================
+   SEND MESSAGE
+========================= */
 router.post("/messages", async (req, res) => {
-  const { roomId, senderType, senderName, text } = req.body;
+  try {
+    const { roomId, senderType, senderName, text } = req.body;
 
-  const message = await Message.create({
-    roomId,
-    senderType,
-    senderName,
-    text,
-  });
+    if (!roomId || !senderType || !text) {
+      return res.status(400).json({
+        message: "roomId, senderType and text are required",
+      });
+    }
 
-  await ChatRoom.findByIdAndUpdate(roomId, {
-    lastMessage: text,
-    lastMessageAt: new Date(),
-  });
+    if (!["outlet", "center"].includes(senderType)) {
+      return res.status(400).json({
+        message: "Invalid senderType",
+      });
+    }
 
-  res.json(message);
+    const message = await Message.create({
+      roomId,
+      senderType,
+      senderName,
+      text,
+    });
+
+    await ChatRoom.findByIdAndUpdate(roomId, {
+      lastMessage: text,
+      lastMessageAt: new Date(),
+    });
+
+    res.json(message);
+  } catch (err) {
+    console.error("Send message error:", err);
+    res.status(500).json({ message: "Failed to send message" });
+  }
 });
+
+module.exports = router;
