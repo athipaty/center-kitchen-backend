@@ -23,7 +23,7 @@ router.get("/room/:outletId", async (req, res) => {
 });
 
 router.get("/messages/:roomId", async (req, res) => {
-  const { roomId } = req.params; // ✅ FIX: you forgot this before
+  const { roomId } = req.params;
 
   const messages = await Message.find({ roomId })
     .sort({ createdAt: 1 })
@@ -34,6 +34,7 @@ router.get("/messages/:roomId", async (req, res) => {
 
 router.post("/messages", async (req, res) => {
   const { roomId, senderType, senderName, text } = req.body;
+  if (!roomId || !text) return res.status(400).end();
 
   const message = await Message.create({
     roomId,
@@ -47,11 +48,8 @@ router.post("/messages", async (req, res) => {
     lastMessageAt: new Date(),
   });
 
-  // ✅ SOCKET BROADCAST
   const io = req.app.get("io");
-  if (io) {
-    io.to(roomId).emit("newMessage", message);
-  }
+  io?.to(roomId).emit("newMessage", message);
 
   res.json(message);
 });
