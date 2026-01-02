@@ -23,6 +23,9 @@ app.use('/products', productRoutes);
 const inventoryRoutes = require("./routes/inventory");
 app.use("/inventory", inventoryRoutes);
 
+app.use("/chat", require("./routes/chat"));
+
+
 // MongoDB connect
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
