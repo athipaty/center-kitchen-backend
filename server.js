@@ -1,34 +1,101 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-require('dotenv').config();
+// server.js
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const http = require("http");
+const { Server } = require("socket.io");
+require("dotenv").config();
 
 const app = express();
-app.use(cors());
+
+/* =====================
+   MIDDLEWARE
+===================== */
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "https://athipaty-center-kitchen-frontend.vercel.app/", //
+    ],
+    credentials: true,
+  })
+);
 app.use(express.json());
 
-// Routes
-const orderRoutes = require('./routes/orders');
-app.use('/orders', orderRoutes);
+/* =====================
+   ROUTES (UNCHANGED)
+===================== */
+app.use("/orders", require("./routes/orders"));
+app.use("/outlets", require("./routes/outlets"));
+app.use("/sauces", require("./routes/sauces"));
+app.use("/products", require("./routes/products"));
+app.use("/inventory", require("./routes/inventory"));
+app.use("/chat", require("./routes/chat")); // ✅ chat routes
 
-const outletRoutes = require('./routes/outlets');
-app.use('/outlets', outletRoutes);
+/* =====================
+   DATABASE
+===================== */
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ Connected to MongoDB"))
+  .catch((err) => console.error("❌ MongoDB connection error:", err));
 
-const sauceRoutes = require('./routes/sauces');
-app.use('/sauces', sauceRoutes);
+/* =====================
+   HTTP + SOCKET SERVER
+===================== */
+const server = http.createServer(app);
 
-const productRoutes = require('./routes/products');
-app.use('/products', productRoutes);
+const io = new Server(server, {
+  cors: {
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "https://YOUR-FRONTEND-DOMAIN.vercel.app", // 🔴 replace
+    ],
+    credentials: true,
+  },
+  transports: ["websocket"],
+});
 
-const inventoryRoutes = require("./routes/inventory");
-app.use("/inventory", inventoryRoutes);
+/* 🔑 expose io to routes */
+app.set("io", io);
 
-app.use("/chat", require("./routes/chat"));
+/* =====================
+   SOCKET EVENTS
+===================== */
+io.on("connection", (socket) => {
+  console.log("🔌 Socket connected:", socket.id);
 
-// MongoDB connect
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log('✅ Connected to MongoDB');
-    app.listen(5000, () => console.log('🚀 Server running on https://center-kitchen-backend.onrender.com/orders'));
-  })
-  .catch((err) => console.error('❌ MongoDB connection error:', err));
+  socket.on("joinRoom", ({ roomId }) => {
+    if (!roomId) return;
+    socket.join(roomId);
+    console.log(`📥 ${socket.id} joined room ${roomId}`);
+  });
+
+  socket.on("leaveRoom", ({ roomId }) => {
+    if (!roomId) return;
+    socket.leave(roomId);
+    console.log(`📤 ${socket.id} left room ${roomId}`);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("❌ Socket disconnected:", socket.id);
+  });
+});
+
+/* =====================
+   HEALTH CHECK
+===================== */
+app.get("/", (req, res) => {
+  res.send("Center Kitchen API running 🚀");
+});
+
+/* =====================
+   START SERVER
+===================== */
+const PORT = process.env.PORT || 5000;
+
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});

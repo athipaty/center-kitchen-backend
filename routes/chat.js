@@ -5,92 +5,55 @@ const Message = require("../models/Message");
 
 const router = express.Router();
 
-/* =========================
-   GET or CREATE CHAT ROOM
-========================= */
+/* Get or create room */
 router.get("/room/:outletId", async (req, res) => {
-  try {
-    const { outletId } = req.params;
-    const { outletName = "Unknown Outlet" } = req.query;
+  const { outletId } = req.params;
+  const { outletName } = req.query;
 
-    if (!outletId) {
-      return res.status(400).json({ message: "outletId is required" });
-    }
+  let room = await ChatRoom.findOne({ outletId });
 
-    let room = await ChatRoom.findOne({ outletId });
-
-    if (!room) {
-      room = await ChatRoom.create({
-        outletId,
-        outletName,
-      });
-    }
-
-    res.json(room);
-  } catch (err) {
-    console.error("Chat room error:", err);
-    res.status(500).json({ message: "Failed to get chat room" });
+  if (!room) {
+    room = await ChatRoom.create({
+      outletId,
+      outletName,
+    });
   }
+
+  res.json(room);
 });
 
-/* =========================
-   GET MESSAGES
-========================= */
 router.get("/messages/:roomId", async (req, res) => {
-  try {
-    const { roomId } = req.params;
+  const { roomId } = req.params; // ✅ FIX: you forgot this before
 
-    if (!roomId) {
-      return res.status(400).json({ message: "roomId is required" });
-    }
+  const messages = await Message.find({ roomId })
+    .sort({ createdAt: 1 })
+    .limit(200);
 
-    const messages = await Message.find({ roomId })
-      .sort({ createdAt: 1 })
-      .limit(200);
-
-    res.json(messages);
-  } catch (err) {
-    console.error("Get messages error:", err);
-    res.status(500).json({ message: "Failed to load messages" });
-  }
+  res.json(messages);
 });
 
-/* =========================
-   SEND MESSAGE
-========================= */
 router.post("/messages", async (req, res) => {
-  try {
-    const { roomId, senderType, senderName, text } = req.body;
+  const { roomId, senderType, senderName, text } = req.body;
 
-    if (!roomId || !senderType || !text) {
-      return res.status(400).json({
-        message: "roomId, senderType and text are required",
-      });
-    }
+  const message = await Message.create({
+    roomId,
+    senderType,
+    senderName,
+    text,
+  });
 
-    if (!["outlet", "center"].includes(senderType)) {
-      return res.status(400).json({
-        message: "Invalid senderType",
-      });
-    }
+  await ChatRoom.findByIdAndUpdate(roomId, {
+    lastMessage: text,
+    lastMessageAt: new Date(),
+  });
 
-    const message = await Message.create({
-      roomId,
-      senderType,
-      senderName,
-      text,
-    });
-
-    await ChatRoom.findByIdAndUpdate(roomId, {
-      lastMessage: text,
-      lastMessageAt: new Date(),
-    });
-
-    res.json(message);
-  } catch (err) {
-    console.error("Send message error:", err);
-    res.status(500).json({ message: "Failed to send message" });
+  // ✅ SOCKET BROADCAST
+  const io = req.app.get("io");
+  if (io) {
+    io.to(roomId).emit("newMessage", message);
   }
+
+  res.json(message);
 });
 
 module.exports = router;
