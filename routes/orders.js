@@ -13,7 +13,6 @@ router.get("/", async (req, res) => {
     const { outletId, status } = req.query;
     const filter = {};
 
-    // Outlet-scoped only when valid outletId is provided
     if (outletId && outletId !== "ALL") {
       filter.outletId = outletId;
     }
@@ -57,7 +56,6 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "outletId is required" });
     }
 
-    // 🔒 Resolve outlet name from DB (source of truth)
     const outlet = await Outlet.findById(outletId);
     if (!outlet) {
       return res.status(400).json({ message: "Invalid outletId" });
@@ -65,7 +63,7 @@ router.post("/", async (req, res) => {
 
     const order = new Order({
       outletId,
-      outletName: outlet.name, // ✅ ALWAYS SET HERE
+      outletName: outlet.name,
       sauce,
       quantity,
       deliveryDate,
@@ -81,27 +79,19 @@ router.post("/", async (req, res) => {
 });
 
 /* ================================
-   UPDATE order (outlet-protected)
+   UPDATE order (CenterKitchen FIXED)
 ================================ */
 router.put("/:id", async (req, res) => {
   try {
-    const { outletId } = req.body;
-
-    if (!outletId) {
-      return res
-        .status(400)
-        .json({ message: "outletId is required for update" });
-    }
-
-    const order = await Order.findOne({
-      _id: req.params.id,
-      outletId,
-    });
+    /**
+     * ✅ FIX:
+     * CenterKitchen must be allowed to update ANY order.
+     * We update by _id ONLY.
+     */
+    const order = await Order.findById(req.params.id);
 
     if (!order) {
-      return res
-        .status(403)
-        .json({ message: "Unauthorized or order not found" });
+      return res.status(404).json({ message: "Order not found" });
     }
 
     // 🔒 Only allow safe fields to change
@@ -112,9 +102,8 @@ router.put("/:id", async (req, res) => {
     if (sauce) order.sauce = sauce;
     if (status) order.status = status;
 
-    const updatedOrder = await order.save(); // ✅ FIXED
-
-    res.json(updatedOrder); // ✅ FIXED
+    const updatedOrder = await order.save();
+    res.json(updatedOrder);
   } catch (err) {
     console.error("PUT /orders error:", err);
     res.status(500).json({ message: err.message });
