@@ -2,10 +2,14 @@ const mongoose = require("mongoose");
 
 const sauceSchema = new mongoose.Schema(
   {
-    name: {
+    sauceName: {
       type: String,
-      required: true, // 👈 REQUIRED
+      required: true,
       trim: true,
+    },
+    outletName: {
+      type: String,
+      required: true,
     },
     outletId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -19,5 +23,6 @@ const sauceSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
 
 module.exports = mongoose.model("Sauce", sauceSchema);

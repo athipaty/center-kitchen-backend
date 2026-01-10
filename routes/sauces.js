@@ -15,18 +15,24 @@ router.get("/", async (req, res) => {
   res.json(sauces);
 });
 
-// CREATE sauce
 router.post("/", async (req, res) => {
-  const { name, outletId, standardWeightKg } = req.body;
+  const { sauceName, outletId, outletName, standardWeightKg } = req.body;
 
-  if (!name || !outletId || !standardWeightKg) {
+  if (!sauceName || !outletId || !outletName || !standardWeightKg) {
     return res.status(400).json({ message: "Missing fields" });
   }
 
-  const sauce = new Sauce({ name, outletId, standardWeightKg });
+  const sauce = new Sauce({
+    sauceName,
+    outletId,
+    outletName,
+    standardWeightKg,
+  });
+
   await sauce.save();
   res.status(201).json(sauce);
 });
+
 
 // UPDATE sauce
 router.put("/:id", async (req, res) => {
