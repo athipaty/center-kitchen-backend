@@ -17,6 +17,7 @@ app.use(
       "http://localhost:3000",
       "http://localhost:5173",
       "https://athipaty-center-kitchen-frontend.vercel.app",
+      "https://supplier-nine.vercel.app",
     ],
     credentials: true,
   })
@@ -33,6 +34,9 @@ app.use("/products", require("./routes/products"));
 app.use("/inventory", require("./routes/inventory"));
 app.use("/chat", require("./routes/chat"));
 app.use("/push", require("./routes/push")); // ✅ NEW
+app.use("/api/suppliers", require("./routes/suppliers"));
+app.use("/api/products", require("./routes/products"));
+
 
 /* =====================
    DATABASE
