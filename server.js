@@ -18,6 +18,7 @@ app.use(
       "http://localhost:5173",
       "https://athipaty-center-kitchen-frontend.vercel.app",
       "https://supplier-nine.vercel.app",
+      "https://inventory-ten-omega.vercel.app",
     ],
     credentials: true,
   })
