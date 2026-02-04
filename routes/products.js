@@ -21,9 +21,21 @@ router.put("/:id", async (req, res) => {
 });
 
 // DELETE
+// DELETE /suppliers/:id
 router.delete("/:id", async (req, res) => {
-  await Product.findByIdAndDelete(req.params.id);
+  const count = await Product.countDocuments({
+    supplier: req.params.id,
+  });
+
+  if (count > 0) {
+    return res.status(400).json({
+      message: "Cannot delete supplier with existing products",
+    });
+  }
+
+  await Supplier.findByIdAndDelete(req.params.id);
   res.json({ success: true });
 });
+
 
 module.exports = router;
