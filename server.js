@@ -19,6 +19,8 @@ app.use(
       "https://athipaty-center-kitchen-frontend.vercel.app",
       "https://supplier-nine.vercel.app",
       "https://inventory-ten-omega.vercel.app",
+      "https://milk-tracker-rho-topaz.vercel.app",
+
     ],
     credentials: true,
   })
