@@ -39,6 +39,7 @@ app.use("/chat", require("./routes/chat"));
 app.use("/push", require("./routes/push")); // ✅ NEW
 app.use("/suppliers", require("./routes/suppliers"));
 app.use("/products", require("./routes/products"));
+app.use("/api/milk", require("./routes/milkRoutes"));
 
 
 /* =====================
