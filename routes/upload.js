@@ -99,4 +99,25 @@ router.get("/status", async (req, res) => {
   }
 });
 
+/* =====================
+   PART NO SEARCH
+===================== */
+router.get("/parts/search", async (req, res) => {
+  const { q } = req.query;
+
+  if (!q) return res.json([]);
+
+  try {
+    const parts = await SystemStock.find({
+      partNo: { $regex: q, $options: "i" },
+    })
+      .limit(5)
+      .select("partNo");
+
+    res.json(parts.map((p) => p.partNo));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to search parts" });
+  }
+});
+
 module.exports = router;
