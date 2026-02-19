@@ -79,4 +79,24 @@ router.post("/tags", upload.single("file"), async (req, res) => {
   }
 });
 
+router.get("/status", async (req, res) => {
+  try {
+    const systemCount = await SystemStock.countDocuments();
+    const tagCount = await Tag.countDocuments();
+
+    res.json({
+      systemStock: {
+        uploaded: systemCount > 0,
+        count: systemCount,
+      },
+      tagList: {
+        uploaded: tagCount > 0,
+        count: tagCount,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch upload status" });
+  }
+});
+
 module.exports = router;
