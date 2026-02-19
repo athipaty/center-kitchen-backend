@@ -35,6 +35,8 @@ app.use("/products", require("./routes/products"));
 app.use("/inventory", require("./routes/inventory"));
 app.use("/suppliers", require("./routes/suppliers"));
 app.use("/api/milk", require("./routes/milkRoutes"));
+app.use("/upload", require("./routes/upload"));
+app.use("/count", require("./routes/count"));
 
 /* =====================
    DATABASE
