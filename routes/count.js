@@ -4,6 +4,10 @@ const PhysicalCount = require("../models/PhysicalCount");
 
 const router = express.Router();
 
+router.get('/', (req, res) => {
+  res.json({message: "return from / routes"})
+})
+
 router.post("/", async (req, res) => {
   const { partNo, actualQty, location, tagNo } = req.body;
 
