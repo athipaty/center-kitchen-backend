@@ -19,6 +19,7 @@ app.use(
       "https://inventory-ten-omega.vercel.app",
       "https://milk-tracker-rho-topaz.vercel.app",
       "https://wc7fr.csb.app",
+      "https://frtstock.vercel.app/"
     ],
     credentials: true,
   })
