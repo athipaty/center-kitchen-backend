@@ -142,6 +142,7 @@ router.get("/status", async (req, res) => {
   try {
     const systemCount = await SystemStock.countDocuments();
     const tagCount = await Tag.countDocuments();
+    const locationCount = await Location.countDocuments();
 
     res.json({
       systemStock: {
@@ -151,6 +152,10 @@ router.get("/status", async (req, res) => {
       tagList: {
         uploaded: tagCount > 0,
         count: tagCount,
+      },
+      locationList: {
+        uploaded: locationCount > 0,
+        count: locationCount,
       },
     });
   } catch (err) {
