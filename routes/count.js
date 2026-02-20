@@ -39,4 +39,47 @@ router.get("/status", async (req, res) => {
   }
 });
 
+/* =====================
+   DASHBOARD STATUS
+===================== */
+router.get("/dashboard-status", async (req, res) => {
+  try {
+    // ---------- SYSTEM ----------
+    const systemParts = await SystemStock.distinct("partNo");
+    const systemTotalQtyAgg = await SystemStock.aggregate([
+      { $group: { _id: null, total: { $sum: "$systemQty" } } },
+    ]);
+    const systemTotalQty = systemTotalQtyAgg[0]?.total || 0;
+
+    // ---------- ACTUAL ----------
+    const countedParts = await PhysicalCount.distinct("partNo");
+    const countedLocations = await PhysicalCount.distinct("location");
+    const actualQtyAgg = await PhysicalCount.aggregate([
+      { $group: { _id: null, total: { $sum: "$actualQty" } } },
+    ]);
+    const actualTotalQty = actualQtyAgg[0]?.total || 0;
+
+    // ---------- LOCATION ----------
+    const totalLocations = await Location.countDocuments();
+
+    res.json({
+      qty: {
+        actual: actualTotalQty,
+        system: systemTotalQty,
+      },
+      partNo: {
+        actual: countedParts.length,
+        system: systemParts.length,
+      },
+      location: {
+        actual: countedLocations.length,
+        system: totalLocations,
+      },
+    });
+  } catch (err) {
+    console.error("DASHBOARD STATUS ERROR:", err);
+    res.status(500).json({ error: "Failed to load dashboard status" });
+  }
+});
+
 module.exports = router;
