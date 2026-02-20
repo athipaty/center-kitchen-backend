@@ -46,16 +46,28 @@ router.get("/dashboard-status", async (req, res) => {
   try {
     // ---------- SYSTEM ----------
     const systemParts = await SystemStock.distinct("partNo");
+
     const systemTotalQtyAgg = await SystemStock.aggregate([
-      { $group: { _id: null, total: { $sum: "$systemQty" } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $toDouble: "$systemQty" } },
+        },
+      },
     ]);
     const systemTotalQty = systemTotalQtyAgg[0]?.total || 0;
 
     // ---------- ACTUAL ----------
     const countedParts = await PhysicalCount.distinct("partNo");
     const countedLocations = await PhysicalCount.distinct("location");
+
     const actualQtyAgg = await PhysicalCount.aggregate([
-      { $group: { _id: null, total: { $sum: "$actualQty" } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $toDouble: "$actualQty" } },
+        },
+      },
     ]);
     const actualTotalQty = actualQtyAgg[0]?.total || 0;
 
