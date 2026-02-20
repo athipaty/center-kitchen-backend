@@ -1,8 +1,10 @@
 const express = require("express");
-const Tag = require("../models/Tag");
-const PhysicalCount = require("../models/PhysicalCount");
-
 const router = express.Router();
+
+const PhysicalCount = require("../models/PhysicalCount");
+const Tag = require("../models/Tag");
+const SystemStock = require("../models/SystemStock");
+const Location = require("../models/Location");
 
 router.get("/", (req, res) => {
   res.json({ message: "return from / routes" });
