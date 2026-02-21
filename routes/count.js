@@ -15,15 +15,20 @@ router.post("/count", async (req, res) => {
     const { tagNo, partNo, location, qtyPerBox, boxes, openBoxQty } = req.body;
 
     if (!tagNo || !partNo || !location) {
-      return res.status(400).json({ error: "tagNo, partNo, location are required" });
+      return res
+        .status(400)
+        .json({ error: "tagNo, partNo, location are required" });
     }
 
     const qpb = Number(qtyPerBox);
     const bx = Number(boxes);
-    const open = openBoxQty === undefined || openBoxQty === "" ? 0 : Number(openBoxQty);
+    const open =
+      openBoxQty === undefined || openBoxQty === "" ? 0 : Number(openBoxQty);
 
     if ([qpb, bx, open].some((n) => Number.isNaN(n))) {
-      return res.status(400).json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
+      return res
+        .status(400)
+        .json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
     }
 
     if (qpb < 0 || bx < 0 || open < 0) {
@@ -97,7 +102,7 @@ router.get("/dashboard-status", async (req, res) => {
       {
         $group: {
           _id: null,
-          total: { $sum: { $toDouble: "$actualQty" } },
+          total: { $sum: "$totalQty" }, // ✅ use totalQty
         },
       },
     ]);
