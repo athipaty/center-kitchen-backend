@@ -155,23 +155,34 @@ router.get("/variance", async (req, res) => {
 
     // ---------- ACTUAL + LOCATION ----------
     const actualAgg = await PhysicalCount.aggregate([
+      // group by part + location
       {
         $group: {
           _id: {
             partNo: "$partNo",
             location: "$location",
           },
-          qty: { $sum: "$totalQty" }, // ✅ use totalQty
+          totalQty: { $sum: "$totalQty" },
+
+          // preserve box info (assumes consistent packing per location)
+          qtyPerBox: { $first: "$qtyPerBox" },
+          boxes: { $sum: "$boxes" },
+          openBoxQty: { $sum: "$openBoxQty" },
         },
       },
+
+      // group by part
       {
         $group: {
           _id: "$_id.partNo",
-          totalActual: { $sum: "$qty" },
+          totalActual: { $sum: "$totalQty" },
           locations: {
             $push: {
               location: "$_id.location",
-              qty: "$qty",
+              totalQty: "$totalQty",
+              qtyPerBox: "$qtyPerBox",
+              boxes: "$boxes",
+              openBoxQty: "$openBoxQty",
             },
           },
         },
