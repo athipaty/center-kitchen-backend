@@ -212,4 +212,66 @@ router.get("/variance", async (req, res) => {
   }
 });
 
+// GET latest count record for a partNo + location
+router.get("/latest", async (req, res) => {
+  try {
+    const { partNo, location } = req.query;
+
+    if (!partNo || !location) {
+      return res.status(400).json({ error: "partNo and location are required" });
+    }
+
+    const doc = await PhysicalCount.findOne({
+      partNo: String(partNo).trim(),
+      location: String(location).trim(),
+    }).sort({ createdAt: -1 });
+
+    if (!doc) {
+      return res.status(404).json({ error: "No record found for this part/location" });
+    }
+
+    res.json(doc);
+  } catch (err) {
+    console.error("LATEST ERROR:", err);
+    res.status(500).json({ error: "Failed to load latest record" });
+  }
+});
+
+// UPDATE a specific count record
+router.put("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { qtyPerBox, boxes, openBoxQty } = req.body;
+
+    const qpb = Number(qtyPerBox);
+    const bx = Number(boxes);
+    const open = openBoxQty === undefined || openBoxQty === "" ? 0 : Number(openBoxQty);
+
+    if ([qpb, bx, open].some((n) => Number.isNaN(n))) {
+      return res.status(400).json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
+    }
+    if (qpb < 0 || bx < 0 || open < 0) {
+      return res.status(400).json({ error: "Values cannot be negative" });
+    }
+    if (!Number.isInteger(bx)) {
+      return res.status(400).json({ error: "Boxes must be an integer" });
+    }
+
+    const totalQty = qpb * bx + open;
+
+    const updated = await PhysicalCount.findByIdAndUpdate(
+      id,
+      { qtyPerBox: qpb, boxes: bx, openBoxQty: open, totalQty },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ error: "Record not found" });
+
+    res.json({ ok: true, record: updated });
+  } catch (err) {
+    console.error("UPDATE COUNT ERROR:", err);
+    res.status(500).json({ error: "Failed to update count" });
+  }
+});
+
 module.exports = router;
