@@ -4,39 +4,74 @@ const PhysicalCount = require("../models/PhysicalCount");
 
 const router = express.Router();
 
-router.get("/", async (req, res) => {
+/* =====================
+   VARIANCE (WITH LOCATION)
+===================== */
+router.get("/variance", async (req, res) => {
   try {
-    // Sum actual qty by partNo
-    const actuals = await PhysicalCount.aggregate([
+    // ---------- SYSTEM ----------
+    const systemAgg = await SystemStock.aggregate([
       {
         $group: {
           _id: "$partNo",
-          actualQty: { $sum: "$actualQty" },
+          systemQty: {
+            $sum: { $toDouble: "$systemQty" },
+          },
         },
       },
     ]);
 
-    // Get system stock
-    const systemStocks = await SystemStock.find();
-
-    const systemMap = {};
-    systemStocks.forEach((s) => {
-      systemMap[s.partNo] = s.systemQty;
+    const systemMap = new Map();
+    systemAgg.forEach((s) => {
+      systemMap.set(s._id, s.systemQty);
     });
 
-    const result = actuals.map((a) => {
-      const systemQty = systemMap[a._id] || 0;
-      return {
-        partNo: a._id,
-        systemQty,
-        actualQty: a.actualQty,
-        difference: a.actualQty - systemQty,
-      };
+    // ---------- ACTUAL + LOCATION ----------
+    const actualAgg = await PhysicalCount.aggregate([
+      {
+        $group: {
+          _id: {
+            partNo: "$partNo",
+            location: "$location",
+          },
+          qty: {
+            $sum: { $toDouble: "$actualQty" },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$_id.partNo",
+          totalActual: { $sum: "$qty" },
+          locations: {
+            $push: {
+              location: "$_id.location",
+              qty: "$qty",
+            },
+          },
+        },
+      },
+    ]);
+
+    // ---------- COMPARE ----------
+    const variances = [];
+
+    actualAgg.forEach((a) => {
+      const systemQty = systemMap.get(a._id) || 0;
+
+      if (a.totalActual !== systemQty) {
+        variances.push({
+          partNo: a._id,
+          actual: a.totalActual,
+          system: systemQty,
+          locations: a.locations, // ✅ THIS IS THE FIX
+        });
+      }
     });
 
-    res.json(result);
+    res.json(variances);
   } catch (err) {
-    console.error(err);
+    console.error("VARIANCE ERROR:", err);
     res.status(500).json({ error: "Failed to calculate variance" });
   }
 });
