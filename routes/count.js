@@ -97,11 +97,11 @@ router.get("/dashboard-status", async (req, res) => {
 });
 
 /* =====================
-   VARIANCE
+   VARIANCE (WITH LOCATION)
 ===================== */
 router.get("/variance", async (req, res) => {
   try {
-    // ---------- SYSTEM DATA ----------
+    // ---------- SYSTEM ----------
     const systemAgg = await SystemStock.aggregate([
       {
         $group: {
@@ -113,19 +113,33 @@ router.get("/variance", async (req, res) => {
       },
     ]);
 
-    // Convert system data to map
     const systemMap = new Map();
     systemAgg.forEach((s) => {
       systemMap.set(s._id, s.systemQty);
     });
 
-    // ---------- ACTUAL DATA ----------
+    // ---------- ACTUAL + LOCATION ----------
     const actualAgg = await PhysicalCount.aggregate([
       {
         $group: {
-          _id: "$partNo",
-          actualQty: {
+          _id: {
+            partNo: "$partNo",
+            location: "$location",
+          },
+          qty: {
             $sum: { $toDouble: "$actualQty" },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$_id.partNo",
+          totalActual: { $sum: "$qty" },
+          locations: {
+            $push: {
+              location: "$_id.location",
+              qty: "$qty",
+            },
           },
         },
       },
@@ -137,11 +151,12 @@ router.get("/variance", async (req, res) => {
     actualAgg.forEach((a) => {
       const systemQty = systemMap.get(a._id) || 0;
 
-      if (a.actualQty !== systemQty) {
+      if (a.totalActual !== systemQty) {
         variances.push({
           partNo: a._id,
-          actual: a.actualQty,
+          actual: a.totalActual,
           system: systemQty,
+          locations: a.locations, // ✅ THIS IS THE FIX
         });
       }
     });
