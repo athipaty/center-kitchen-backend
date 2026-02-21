@@ -10,17 +10,54 @@ router.get("/", (req, res) => {
   res.json({ message: "return from / routes" });
 });
 
-router.post("/", async (req, res) => {
-  const { partNo, actualQty, location, tagNo } = req.body;
+router.post("/count", async (req, res) => {
+  try {
+    const { tagNo, partNo, location, qtyPerBox, boxes, openBoxQty } = req.body;
 
-  const record = await PhysicalCount.create({
-    partNo,
-    actualQty,
-    location,
-    tagNo,
-  });
+    if (!tagNo || !partNo || !location) {
+      return res
+        .status(400)
+        .json({ error: "tagNo, partNo, location are required" });
+    }
 
-  res.json(record);
+    const qpb = Number(qtyPerBox);
+    const bx = Number(boxes);
+    const open = Number(openBoxQty);
+
+    if ([qpb, bx, open].some((n) => Number.isNaN(n))) {
+      return res
+        .status(400)
+        .json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
+    }
+
+    if (qpb < 0 || bx < 0 || open < 0) {
+      return res.status(400).json({ error: "Values cannot be negative" });
+    }
+
+    // if you want boxes to be integer only:
+    if (!Number.isInteger(bx)) {
+      return res.status(400).json({ error: "Boxes must be an integer" });
+    }
+
+    const subtotalQty = qpb * bx;
+    const totalQty = subtotalQty + open;
+
+    const doc = await PhysicalCount.create({
+      tagNo: String(tagNo).trim(),
+      partNo: String(partNo).trim(),
+      location: String(location).trim(),
+      qtyPerBox: qpb,
+      boxes: bx,
+      openBoxQty: open,
+      subtotalQty,
+      totalQty,
+    });
+
+    res.json({ ok: true, record: doc });
+  } catch (err) {
+    console.error("COUNT SAVE ERROR:", err);
+    res.status(500).json({ error: "Failed to save count" });
+  }
 });
 
 /* =====================
@@ -126,9 +163,7 @@ router.get("/variance", async (req, res) => {
             partNo: "$partNo",
             location: "$location",
           },
-          qty: {
-            $sum: { $toDouble: "$actualQty" },
-          },
+          qty: { $sum: "$totalQty" }, // ✅ use totalQty
         },
       },
       {
