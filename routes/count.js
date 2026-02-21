@@ -96,4 +96,61 @@ router.get("/dashboard-status", async (req, res) => {
   }
 });
 
+/* =====================
+   VARIANCE
+===================== */
+router.get("/variance", async (req, res) => {
+  try {
+    // ---------- SYSTEM DATA ----------
+    const systemAgg = await SystemStock.aggregate([
+      {
+        $group: {
+          _id: "$partNo",
+          systemQty: {
+            $sum: { $toDouble: "$systemQty" },
+          },
+        },
+      },
+    ]);
+
+    // Convert system data to map
+    const systemMap = new Map();
+    systemAgg.forEach((s) => {
+      systemMap.set(s._id, s.systemQty);
+    });
+
+    // ---------- ACTUAL DATA ----------
+    const actualAgg = await PhysicalCount.aggregate([
+      {
+        $group: {
+          _id: "$partNo",
+          actualQty: {
+            $sum: { $toDouble: "$actualQty" },
+          },
+        },
+      },
+    ]);
+
+    // ---------- COMPARE ----------
+    const variances = [];
+
+    actualAgg.forEach((a) => {
+      const systemQty = systemMap.get(a._id) || 0;
+
+      if (a.actualQty !== systemQty) {
+        variances.push({
+          partNo: a._id,
+          actual: a.actualQty,
+          system: systemQty,
+        });
+      }
+    });
+
+    res.json(variances);
+  } catch (err) {
+    console.error("VARIANCE ERROR:", err);
+    res.status(500).json({ error: "Failed to calculate variance" });
+  }
+});
+
 module.exports = router;
