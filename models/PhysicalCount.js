@@ -7,16 +7,14 @@ const PhysicalCountSchema = new mongoose.Schema(
     location: { type: String, required: true, trim: true },
 
     qtyPerBox: { type: Number, required: true, min: 0 },
-    boxes: { type: Number, required: true, min: 0 }, // allow 0 (if only open box)
-    openBoxQty: { type: Number, required: true, min: 0 },
+    boxes: { type: Number, required: true, min: 0 },
+    openBoxQty: { type: Number, default: 0, min: 0 }, // ✅ default 0
 
-    subtotalQty: { type: Number, required: true, min: 0 },
-    totalQty: { type: Number, required: true, min: 0 },
+    totalQty: { type: Number, required: true, min: 0 }, // ✅ only total
   },
   { timestamps: true }
 );
 
-// Optional: index if you query/group often
 PhysicalCountSchema.index({ partNo: 1, location: 1 });
 PhysicalCountSchema.index({ tagNo: 1 });
 

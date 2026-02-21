@@ -15,32 +15,26 @@ router.post("/count", async (req, res) => {
     const { tagNo, partNo, location, qtyPerBox, boxes, openBoxQty } = req.body;
 
     if (!tagNo || !partNo || !location) {
-      return res
-        .status(400)
-        .json({ error: "tagNo, partNo, location are required" });
+      return res.status(400).json({ error: "tagNo, partNo, location are required" });
     }
 
     const qpb = Number(qtyPerBox);
     const bx = Number(boxes);
-    const open = Number(openBoxQty);
+    const open = openBoxQty === undefined || openBoxQty === "" ? 0 : Number(openBoxQty);
 
     if ([qpb, bx, open].some((n) => Number.isNaN(n))) {
-      return res
-        .status(400)
-        .json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
+      return res.status(400).json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
     }
 
     if (qpb < 0 || bx < 0 || open < 0) {
       return res.status(400).json({ error: "Values cannot be negative" });
     }
 
-    // if you want boxes to be integer only:
     if (!Number.isInteger(bx)) {
       return res.status(400).json({ error: "Boxes must be an integer" });
     }
 
-    const subtotalQty = qpb * bx;
-    const totalQty = subtotalQty + open;
+    const totalQty = qpb * bx + open;
 
     const doc = await PhysicalCount.create({
       tagNo: String(tagNo).trim(),
@@ -48,8 +42,7 @@ router.post("/count", async (req, res) => {
       location: String(location).trim(),
       qtyPerBox: qpb,
       boxes: bx,
-      openBoxQty: open,
-      subtotalQty,
+      openBoxQty: open, // ✅ saved as 0 if not given
       totalQty,
     });
 
