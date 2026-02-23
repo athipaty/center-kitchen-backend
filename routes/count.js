@@ -241,8 +241,26 @@ router.get("/latest", async (req, res) => {
 router.put("/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { qtyPerBox, boxes, openBoxQty } = req.body;
 
+    const {
+      tagNo,
+      partNo,
+      location,
+      qtyPerBox,
+      boxes,
+      openBoxQty,
+    } = req.body;
+
+    // --- validate required identity fields ---
+    const nextTagNo = String(tagNo ?? "").trim();
+    const nextPartNo = String(partNo ?? "").trim();
+    const nextLocation = String(location ?? "").trim();
+
+    if (!nextTagNo || !nextPartNo || !nextLocation) {
+      return res.status(400).json({ error: "tagNo, partNo, location are required" });
+    }
+
+    // --- validate numbers ---
     const qpb = Number(qtyPerBox);
     const bx = Number(boxes);
     const open = openBoxQty === undefined || openBoxQty === "" ? 0 : Number(openBoxQty);
@@ -259,18 +277,43 @@ router.put("/:id", async (req, res) => {
 
     const totalQty = qpb * bx + open;
 
-    const updated = await PhysicalCount.findByIdAndUpdate(
-      id,
-      { qtyPerBox: qpb, boxes: bx, openBoxQty: open, totalQty },
-      { new: true }
-    );
+    // --- load current doc ---
+    const current = await PhysicalCount.findById(id);
+    if (!current) return res.status(404).json({ error: "Record not found" });
 
-    if (!updated) return res.status(404).json({ error: "Record not found" });
+    // --- prevent duplicates if partNo/location changes ---
+    const changingKey =
+      current.partNo !== nextPartNo || current.location !== nextLocation;
 
-    res.json({ ok: true, record: updated });
+    if (changingKey) {
+      const exists = await PhysicalCount.findOne({
+        _id: { $ne: id },
+        partNo: nextPartNo,
+        location: nextLocation,
+      });
+
+      if (exists) {
+        return res.status(409).json({
+          error: "Another record already exists with the same Part No + Location",
+        });
+      }
+    }
+
+    // --- update ---
+    current.tagNo = nextTagNo;
+    current.partNo = nextPartNo;
+    current.location = nextLocation;
+    current.qtyPerBox = qpb;
+    current.boxes = bx;
+    current.openBoxQty = open;
+    current.totalQty = totalQty;
+
+    await current.save();
+
+    res.json({ ok: true, record: current });
   } catch (err) {
-    console.error("UPDATE COUNT ERROR:", err);
-    res.status(500).json({ error: "Failed to update count" });
+    console.error("UPDATE ERROR:", err);
+    res.status(500).json({ error: "Failed to update record" });
   }
 });
 
