@@ -6,6 +6,10 @@ const Tag = require("../models/Tag");
 const SystemStock = require("../models/SystemStock");
 const Location = require("../models/Location");
 
+const multer = require("multer");
+const XLSX = require("xlsx");
+const upload = multer({ storage: multer.memoryStorage() });
+
 router.get("/", (req, res) => {
   res.json({ message: "return from / routes" });
 });
@@ -218,7 +222,9 @@ router.get("/latest", async (req, res) => {
     const { partNo, location } = req.query;
 
     if (!partNo || !location) {
-      return res.status(400).json({ error: "partNo and location are required" });
+      return res
+        .status(400)
+        .json({ error: "partNo and location are required" });
     }
 
     const doc = await PhysicalCount.findOne({
@@ -227,7 +233,9 @@ router.get("/latest", async (req, res) => {
     }).sort({ createdAt: -1 });
 
     if (!doc) {
-      return res.status(404).json({ error: "No record found for this part/location" });
+      return res
+        .status(404)
+        .json({ error: "No record found for this part/location" });
     }
 
     res.json(doc);
@@ -242,14 +250,7 @@ router.put("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const {
-      tagNo,
-      partNo,
-      location,
-      qtyPerBox,
-      boxes,
-      openBoxQty,
-    } = req.body;
+    const { tagNo, partNo, location, qtyPerBox, boxes, openBoxQty } = req.body;
 
     // --- validate required identity fields ---
     const nextTagNo = String(tagNo ?? "").trim();
@@ -257,16 +258,21 @@ router.put("/:id", async (req, res) => {
     const nextLocation = String(location ?? "").trim();
 
     if (!nextTagNo || !nextPartNo || !nextLocation) {
-      return res.status(400).json({ error: "tagNo, partNo, location are required" });
+      return res
+        .status(400)
+        .json({ error: "tagNo, partNo, location are required" });
     }
 
     // --- validate numbers ---
     const qpb = Number(qtyPerBox);
     const bx = Number(boxes);
-    const open = openBoxQty === undefined || openBoxQty === "" ? 0 : Number(openBoxQty);
+    const open =
+      openBoxQty === undefined || openBoxQty === "" ? 0 : Number(openBoxQty);
 
     if ([qpb, bx, open].some((n) => Number.isNaN(n))) {
-      return res.status(400).json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
+      return res
+        .status(400)
+        .json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
     }
     if (qpb < 0 || bx < 0 || open < 0) {
       return res.status(400).json({ error: "Values cannot be negative" });
@@ -294,7 +300,8 @@ router.put("/:id", async (req, res) => {
 
       if (exists) {
         return res.status(409).json({
-          error: "Another record already exists with the same Part No + Location",
+          error:
+            "Another record already exists with the same Part No + Location",
         });
       }
     }
@@ -314,6 +321,105 @@ router.put("/:id", async (req, res) => {
   } catch (err) {
     console.error("UPDATE ERROR:", err);
     res.status(500).json({ error: "Failed to update record" });
+  }
+});
+
+/* =====================
+   UPLOAD STOCK TAKE (STRICT)
+===================== */
+router.post("/upload-stocktake", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // ---- read excel ----
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+    if (!rows.length) {
+      return res.status(400).json({ error: "Excel file is empty" });
+    }
+
+    const cleanedRows = [];
+    const errors = [];
+
+    rows.forEach((r, index) => {
+      const rowNum = index + 2; // header = row 1
+
+      const tagNo = String(r.tagNo || "").trim();
+      const partNo = String(r.partNo || "")
+        .trim()
+        .toUpperCase();
+      const location = String(r.location || "")
+        .trim()
+        .toUpperCase();
+
+      const qtyPerBox = Number(r.qtyPerBox);
+      const boxes = Number(r.boxes);
+      const openBoxQty = Number(r.openBoxQty || 0);
+
+      // ---- validation ----
+      if (!tagNo || !partNo || !location) {
+        errors.push(`Row ${rowNum}: tagNo, partNo, location are required`);
+        return;
+      }
+
+      if ([qtyPerBox, boxes, openBoxQty].some((n) => Number.isNaN(n))) {
+        errors.push(
+          `Row ${rowNum}: qtyPerBox, boxes, openBoxQty must be numbers`,
+        );
+        return;
+      }
+
+      if (qtyPerBox < 0 || boxes < 0 || openBoxQty < 0) {
+        errors.push(`Row ${rowNum}: values cannot be negative`);
+        return;
+      }
+
+      if (!Number.isInteger(boxes)) {
+        errors.push(`Row ${rowNum}: boxes must be an integer`);
+        return;
+      }
+
+      const totalQty = qtyPerBox * boxes + openBoxQty;
+
+      cleanedRows.push({
+        tagNo,
+        partNo,
+        location,
+        qtyPerBox,
+        boxes,
+        openBoxQty,
+        totalQty,
+      });
+    });
+
+    // ---- reject entire upload if ANY error ----
+    if (errors.length > 0) {
+      return res.status(400).json({
+        error: "Validation failed",
+        details: errors,
+      });
+    }
+
+    // ---- STRICT stock take ----
+    const deleted = await PhysicalCount.countDocuments();
+    await PhysicalCount.deleteMany({});
+
+    const insertedDocs = await PhysicalCount.insertMany(cleanedRows);
+
+    res.json({
+      ok: true,
+      inserted: insertedDocs.length,
+      deleted,
+    });
+  } catch (err) {
+    console.error("UPLOAD STOCKTAKE ERROR:", err);
+    res.status(500).json({ error: "Failed to upload stock take" });
   }
 });
 
