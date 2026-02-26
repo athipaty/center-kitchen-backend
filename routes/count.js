@@ -564,4 +564,34 @@ router.get("/uncounted", async (req, res) => {
   }
 });
 
+router.get("/unrecognized", async (req, res) => {
+  try {
+    // all system part nos
+    const systemPartNos = await SystemStock.distinct("partNo");
+    const systemSet = new Set(systemPartNos);
+
+    // all counted part nos
+    const countedAgg = await PhysicalCount.aggregate([
+      { $group: { _id: "$partNo", totalActual: { $sum: "$totalQty" },
+        locations: { $push: { location: "$location", totalQty: "$totalQty", qtyPerBox: "$qtyPerBox", boxes: "$boxes", openBoxQty: "$openBoxQty" } }
+      }}
+    ]);
+
+    // return counted parts that don't exist in system
+    const unrecognized = countedAgg
+      .filter((c) => !systemSet.has(c._id))
+      .map((c) => ({
+        partNo: c._id,
+        actual: c.totalActual,
+        system: 0,
+        locations: c.locations,
+      }));
+
+    res.json(unrecognized);
+  } catch (err) {
+    console.error("UNRECOGNIZED ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch unrecognized parts" });
+  }
+});
+
 module.exports = router;
