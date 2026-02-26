@@ -18,31 +18,57 @@ router.post("/count", async (req, res) => {
   try {
     const { tagNo, partNo, location, qtyPerBox, boxes, openBoxQty } = req.body;
 
+    // ---------- REQUIRED ----------
     if (!tagNo || !partNo || !location) {
       return res
         .status(400)
         .json({ error: "tagNo, partNo, location are required" });
     }
 
-    const qpb = Number(qtyPerBox);
-    const bx = Number(boxes);
-    const open =
-      openBoxQty === undefined || openBoxQty === "" ? 0 : Number(openBoxQty);
-
-    if ([qpb, bx, open].some((n) => Number.isNaN(n))) {
+    // ---------- OPEN BOX (REQUIRED) ----------
+    if (openBoxQty === undefined || openBoxQty === "") {
       return res
         .status(400)
-        .json({ error: "qtyPerBox, boxes, openBoxQty must be numbers" });
+        .json({ error: "openBoxQty is required" });
     }
 
-    if (qpb < 0 || bx < 0 || open < 0) {
-      return res.status(400).json({ error: "Values cannot be negative" });
+    const open = Number(openBoxQty);
+    if (Number.isNaN(open) || open < 0) {
+      return res
+        .status(400)
+        .json({ error: "openBoxQty must be a non-negative number" });
     }
 
-    if (!Number.isInteger(bx)) {
-      return res.status(400).json({ error: "Boxes must be an integer" });
+    // ---------- OPTIONAL FIELDS ----------
+    const qpb =
+      qtyPerBox === undefined || qtyPerBox === ""
+        ? 0
+        : Number(qtyPerBox);
+
+    const bx =
+      boxes === undefined || boxes === ""
+        ? 0
+        : Number(boxes);
+
+    if ([qpb, bx].some((n) => Number.isNaN(n))) {
+      return res
+        .status(400)
+        .json({ error: "qtyPerBox and boxes must be numbers if provided" });
     }
 
+    if (qpb < 0 || bx < 0) {
+      return res
+        .status(400)
+        .json({ error: "qtyPerBox and boxes cannot be negative" });
+    }
+
+    if (bx > 0 && !Number.isInteger(bx)) {
+      return res
+        .status(400)
+        .json({ error: "boxes must be an integer" });
+    }
+
+    // ---------- TOTAL ----------
     const totalQty = qpb * bx + open;
 
     const doc = await PhysicalCount.create({
@@ -51,7 +77,7 @@ router.post("/count", async (req, res) => {
       location: String(location).trim(),
       qtyPerBox: qpb,
       boxes: bx,
-      openBoxQty: open, // ✅ saved as 0 if not given
+      openBoxQty: open,
       totalQty,
     });
 
