@@ -14,6 +14,5 @@ const PhysicalCountSchema = new mongoose.Schema(
 );
 
 PhysicalCountSchema.index({ partNo: 1, location: 1 }, { unique: true });
-PhysicalCountSchema.index({ tagNo: 1 });
 
 module.exports = mongoose.model("PhysicalCount", PhysicalCountSchema);
