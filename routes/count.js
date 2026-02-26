@@ -468,11 +468,13 @@ router.post("/upload-stocktake", upload.single("file"), async (req, res) => {
       inserted: insertedDocs.length,
       deleted,
     });
-  } } catch (err) {
-  console.error("UPLOAD STOCKTAKE ERROR:", err.message);
-  console.error("FULL ERROR:", err);
-  res.status(500).json({ error: err.message || "Failed to upload stock take" });
-}
+  } catch (err) {
+    console.error("UPLOAD STOCKTAKE ERROR:", err.message);
+    console.error("FULL ERROR:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to upload stock take" });
+  }
 });
 
 module.exports = router;
