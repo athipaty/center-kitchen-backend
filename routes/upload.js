@@ -59,9 +59,9 @@ router.post("/tags", upload.single("file"), async (req, res) => {
 
     console.log("TAG ROW SAMPLE:", rows[0]);
 
-    if (!rows.length || !("TagNo" in rows[0])) {
+    if (!rows.length || !("tagNo" in rows[0])) {
       return res.status(400).json({
-        error: "Excel must have column: TagNo",
+        error: "Excel must have column: tagNo",
       });
     }
 
@@ -69,7 +69,7 @@ router.post("/tags", upload.single("file"), async (req, res) => {
 
     await Tag.insertMany(
       rows.map((r) => ({
-        tagNo: String(r.TagNo).trim(),
+        tagNo: String(r.tagNo).trim(),
       })),
     );
 
