@@ -25,18 +25,17 @@ router.post("/system-stock", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "Excel is empty" });
     }
 
-    if (!("PartNo" in rows[0]) || !("Qty" in rows[0])) {
+    if (!("partNo" in rows[0]) || !("qty" in rows[0])) {
       return res.status(400).json({
-        error: "Excel must have columns: PartNo, Qty",
+        error: "Excel must have columns: partNo, qty",
       });
     }
-
     await SystemStock.deleteMany({});
 
     await SystemStock.insertMany(
       rows.map((r) => ({
-        partNo: String(r.PartNo).trim(),
-        systemQty: Number(r.Qty),
+        partNo: String(r.partNo).trim(),
+        systemQty: Number(r.qty),
       })),
     );
 
