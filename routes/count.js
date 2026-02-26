@@ -468,13 +468,67 @@ router.post("/upload-stocktake", upload.single("file"), async (req, res) => {
       inserted: insertedDocs.length,
       deleted,
     });
-    
   } catch (err) {
     console.error("UPLOAD STOCKTAKE ERROR:", err.message);
     console.error("FULL ERROR:", err);
     res
       .status(500)
       .json({ error: err.message || "Failed to upload stock take" });
+  }
+});
+
+router.get("/matched", async (req, res) => {
+  try {
+    const systemAgg = await SystemStock.aggregate([
+      {
+        $group: {
+          _id: "$partNo",
+          systemQty: { $sum: { $toDouble: "$systemQty" } },
+        },
+      },
+    ]);
+    const systemMap = new Map(systemAgg.map((s) => [s._id, s.systemQty]));
+
+    const actualAgg = await PhysicalCount.aggregate([
+      {
+        $group: {
+          _id: { partNo: "$partNo", location: "$location" },
+          totalQty: { $sum: "$totalQty" },
+          qtyPerBox: { $first: "$qtyPerBox" },
+          boxes: { $sum: "$boxes" },
+          openBoxQty: { $sum: "$openBoxQty" },
+        },
+      },
+      {
+        $group: {
+          _id: "$_id.partNo",
+          totalActual: { $sum: "$totalQty" },
+          locations: {
+            $push: {
+              location: "$_id.location",
+              totalQty: "$totalQty",
+              qtyPerBox: "$qtyPerBox",
+              boxes: "$boxes",
+              openBoxQty: "$openBoxQty",
+            },
+          },
+        },
+      },
+    ]);
+
+    const matched = actualAgg
+      .filter((a) => (systemMap.get(a._id) || 0) === a.totalActual)
+      .map((a) => ({
+        partNo: a._id,
+        actual: a.totalActual,
+        system: systemMap.get(a._id) || 0,
+        locations: a.locations,
+      }));
+
+    res.json(matched);
+  } catch (err) {
+    console.error("MATCHED ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch matched parts" });
   }
 });
 
