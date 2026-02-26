@@ -29,7 +29,7 @@ router.post("/count", async (req, res) => {
     if (openBoxQty === undefined || openBoxQty === null || openBoxQty === "") {
       return res.status(400).json({ error: "openBoxQty is required" });
     }
-    
+
     const open = Number(openBoxQty);
     if (Number.isNaN(open) || open < 0) {
       return res
@@ -75,6 +75,12 @@ router.post("/count", async (req, res) => {
     res.json({ ok: true, record: doc });
   } catch (err) {
     console.error("COUNT SAVE ERROR:", err);
+    if (err.code === 11000) {
+      return res.status(409).json({
+        error:
+          "A count for this Part No + Location already exists. Use edit to update it.",
+      });
+    }
     res.status(500).json({ error: "Failed to save count" });
   }
 });
