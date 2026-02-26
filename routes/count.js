@@ -26,12 +26,10 @@ router.post("/count", async (req, res) => {
     }
 
     // ---------- OPEN BOX (REQUIRED) ----------
-    if (openBoxQty === undefined || openBoxQty === "") {
-      return res
-        .status(400)
-        .json({ error: "openBoxQty is required" });
+    if (openBoxQty === undefined || openBoxQty === null || openBoxQty === "") {
+      return res.status(400).json({ error: "openBoxQty is required" });
     }
-
+    
     const open = Number(openBoxQty);
     if (Number.isNaN(open) || open < 0) {
       return res
@@ -41,14 +39,9 @@ router.post("/count", async (req, res) => {
 
     // ---------- OPTIONAL FIELDS ----------
     const qpb =
-      qtyPerBox === undefined || qtyPerBox === ""
-        ? 0
-        : Number(qtyPerBox);
+      qtyPerBox === undefined || qtyPerBox === "" ? 0 : Number(qtyPerBox);
 
-    const bx =
-      boxes === undefined || boxes === ""
-        ? 0
-        : Number(boxes);
+    const bx = boxes === undefined || boxes === "" ? 0 : Number(boxes);
 
     if ([qpb, bx].some((n) => Number.isNaN(n))) {
       return res
@@ -63,9 +56,7 @@ router.post("/count", async (req, res) => {
     }
 
     if (bx > 0 && !Number.isInteger(bx)) {
-      return res
-        .status(400)
-        .json({ error: "boxes must be an integer" });
+      return res.status(400).json({ error: "boxes must be an integer" });
     }
 
     // ---------- TOTAL ----------
