@@ -63,9 +63,9 @@ router.post("/count", async (req, res) => {
     const totalQty = qpb * bx + open;
 
     const doc = await PhysicalCount.findOneAndUpdate(
-      { 
-        partNo: String(partNo).trim(), 
-        location: String(location).trim() 
+      {
+        partNo: String(partNo).trim(),
+        location: String(location).trim(),
       },
       {
         tagNo: String(tagNo).trim(),
@@ -76,11 +76,11 @@ router.post("/count", async (req, res) => {
         openBoxQty: open,
         totalQty,
       },
-      { 
-        upsert: true,      // create if not found
-        new: true,         // return updated doc
-        runValidators: true 
-      }
+      {
+        upsert: true, // create if not found
+        new: true, // return updated doc
+        runValidators: true,
+      },
     );
 
     res.json({ ok: true, record: doc });
@@ -439,6 +439,23 @@ router.post("/upload-stocktake", upload.single("file"), async (req, res) => {
         details: errors,
       });
     }
+
+    // ---- merge duplicate partNo + location within Excel rows ----
+    const mergeMap = new Map();
+
+    cleanedRows.forEach((r) => {
+      const key = `${r.partNo}||${r.location}`;
+      if (mergeMap.has(key)) {
+        const existing = mergeMap.get(key);
+        existing.boxes += r.boxes;
+        existing.openBoxQty += r.openBoxQty;
+        existing.totalQty += r.totalQty;
+      } else {
+        mergeMap.set(key, { ...r });
+      }
+    });
+
+    const mergedRows = Array.from(mergeMap.values());
 
     // ---- STRICT stock take ----
     const deleted = await PhysicalCount.countDocuments();
