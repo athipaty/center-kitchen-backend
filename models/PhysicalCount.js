@@ -15,4 +15,14 @@ const PhysicalCountSchema = new mongoose.Schema(
 
 PhysicalCountSchema.index({ partNo: 1, location: 1 }, { unique: true });
 
-module.exports = mongoose.model("PhysicalCount", PhysicalCountSchema);
+// ✅ add this temporarily to sync indexes
+PhysicalCountSchema.set('autoIndex', true);
+
+const PhysicalCount = mongoose.model("PhysicalCount", PhysicalCountSchema);
+
+// ✅ drop the old tagNo index on startup
+PhysicalCount.collection.dropIndex('tagNo_1').catch(() => {
+  // ignore if index doesn't exist
+});
+
+module.exports = PhysicalCount;
