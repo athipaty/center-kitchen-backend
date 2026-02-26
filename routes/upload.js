@@ -93,9 +93,9 @@ router.post("/locations", upload.single("file"), async (req, res) => {
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet);
 
-    if (!rows.length || !("Location" in rows[0])) {
+    if (!rows.length || !("location" in rows[0])) {
       return res.status(400).json({
-        error: "Excel must have column: Location",
+        error: "Excel must have column: location",
       });
     }
 
@@ -104,7 +104,7 @@ router.post("/locations", upload.single("file"), async (req, res) => {
 
     await Location.insertMany(
       rows.map((r) => ({
-        location: String(r.Location).trim(),
+        location: String(r.location).trim(),
       })),
     );
 
