@@ -532,4 +532,36 @@ router.get("/matched", async (req, res) => {
   }
 });
 
+router.get("/uncounted", async (req, res) => {
+  try {
+    // all parts in system
+    const systemAgg = await SystemStock.aggregate([
+      {
+        $group: {
+          _id: "$partNo",
+          systemQty: { $sum: { $toDouble: "$systemQty" } },
+        },
+      },
+    ]);
+
+    // all parts that have been counted
+    const countedPartNos = await PhysicalCount.distinct("partNo");
+    const countedSet = new Set(countedPartNos);
+
+    // return system parts that have NO physical count at all
+    const uncounted = systemAgg
+      .filter((s) => !countedSet.has(s._id))
+      .map((s) => ({
+        partNo: s._id,
+        system: s.systemQty,
+        actual: 0,
+      }));
+
+    res.json(uncounted);
+  } catch (err) {
+    console.error("UNCOUNTED ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch uncounted parts" });
+  }
+});
+
 module.exports = router;
