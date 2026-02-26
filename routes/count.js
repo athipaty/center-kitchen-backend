@@ -62,15 +62,26 @@ router.post("/count", async (req, res) => {
     // ---------- TOTAL ----------
     const totalQty = qpb * bx + open;
 
-    const doc = await PhysicalCount.create({
-      tagNo: String(tagNo).trim(),
-      partNo: String(partNo).trim(),
-      location: String(location).trim(),
-      qtyPerBox: qpb,
-      boxes: bx,
-      openBoxQty: open,
-      totalQty,
-    });
+    const doc = await PhysicalCount.findOneAndUpdate(
+      { 
+        partNo: String(partNo).trim(), 
+        location: String(location).trim() 
+      },
+      {
+        tagNo: String(tagNo).trim(),
+        partNo: String(partNo).trim(),
+        location: String(location).trim(),
+        qtyPerBox: qpb,
+        boxes: bx,
+        openBoxQty: open,
+        totalQty,
+      },
+      { 
+        upsert: true,      // create if not found
+        new: true,         // return updated doc
+        runValidators: true 
+      }
+    );
 
     res.json({ ok: true, record: doc });
   } catch (err) {
