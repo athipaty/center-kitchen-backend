@@ -163,7 +163,7 @@ router.get("/status", async (req, res) => {
       }, // ✅
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch upload status" });
+    res.status(500).json({ error: err.message || "Failed to get upload status" });
     console.log("UPLOAD STATUS ERROR:", err.message);
   }
 });
