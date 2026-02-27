@@ -13,8 +13,12 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // production list...
 const getProductionSet = async () => {
-  const parts = await ProductionPart.distinct("partNo");
-  return new Set(parts);
+  try {
+    const parts = await ProductionPart.distinct("partNo");
+    return new Set(parts);
+  } catch {
+    return new Set(); // ✅ return empty set if anything fails
+  }
 };
 
 router.get("/", (req, res) => {
