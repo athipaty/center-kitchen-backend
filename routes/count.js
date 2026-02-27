@@ -684,4 +684,43 @@ router.post("/production-parts", upload.single("file"), async (req, res) => {
   }
 });
 
+router.get("/production-counted", async (req, res) => {
+  try {
+    const productionSet = await getProductionSet();
+
+    // get all counted parts that ARE in production list
+    const countedAgg = await PhysicalCount.aggregate([
+      {
+        $group: {
+          _id: "$partNo",
+          totalActual: { $sum: "$totalQty" },
+          locations: {
+            $push: {
+              location: "$location",
+              totalQty: "$totalQty",
+              qtyPerBox: "$qtyPerBox",
+              boxes: "$boxes",
+              openBoxQty: "$openBoxQty",
+            },
+          },
+        },
+      },
+    ]);
+
+    // ✅ only keep parts that ARE in production list
+    const productionCounted = countedAgg
+      .filter((c) => productionSet.has(c._id))
+      .map((c) => ({
+        partNo: c._id,
+        actual: c.totalActual,
+        locations: c.locations,
+      }));
+
+    res.json(productionCounted);
+  } catch (err) {
+    console.error("PRODUCTION COUNTED ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch production counted parts" });
+  }
+});
+
 module.exports = router;
