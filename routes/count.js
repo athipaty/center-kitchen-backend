@@ -809,4 +809,15 @@ router.post("/previous-diff", upload.single("file"), async (req, res) => {
   }
 });
 
+router.delete("/:id", async (req, res) => {
+  try {
+    const doc = await PhysicalCount.findByIdAndDelete(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Record not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("DELETE ERROR:", err);
+    res.status(500).json({ error: "Failed to delete record" });
+  }
+});
+
 module.exports = router;
