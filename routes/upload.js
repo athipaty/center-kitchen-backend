@@ -5,6 +5,7 @@ const XLSX = require("xlsx");
 const SystemStock = require("../models/SystemStock");
 const Tag = require("../models/Tag");
 const Location = require("../models/Location");
+const ProductionPart = require("../models/ProductionPart");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
