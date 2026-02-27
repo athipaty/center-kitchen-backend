@@ -26,6 +26,16 @@ router.get("/", (req, res) => {
   res.json({ message: "return from / routes" });
 });
 
+router.get("/all", async (req, res) => {
+  try {
+    const counts = await PhysicalCount.find({}).sort({ updatedAt: -1 }).lean();
+    res.json(counts);
+  } catch (err) {
+    console.error("ALL COUNTS ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch all counts" });
+  }
+});
+
 router.post("/count", async (req, res) => {
   try {
     const { tagNo, partNo, location, qtyPerBox, boxes, openBoxQty } = req.body;
