@@ -216,6 +216,17 @@ router.get("/variance", async (req, res) => {
         systemMap.set(s._id, s.systemQty);
     });
 
+    // ✅ fetch previous diff data
+    const prevDiffs = await PreviousDiff.find({});
+    const prevDiffMap = new Map();
+    prevDiffs.forEach((p) => {
+      prevDiffMap.set(p.partNo, {
+        price: p.price,
+        diffN1: p.diffN1,
+        diffN2: p.diffN2,
+      });
+    });
+
     // ---------- ACTUAL + LOCATION ----------
     const actualAgg = await PhysicalCount.aggregate([
       // group by part + location
@@ -265,6 +276,9 @@ router.get("/variance", async (req, res) => {
           actual: a.totalActual,
           system: systemQty,
           locations: a.locations, // ✅ THIS IS THE FIX
+          price: prev?.price ?? null, // ✅ null if no data
+          diffN1: prev?.diffN1 ?? null, // ✅ null if no data
+          diffN2: prev?.diffN2 ?? null, // ✅ null if no data
         });
       }
     });
