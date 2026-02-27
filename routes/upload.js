@@ -142,6 +142,7 @@ router.get("/status", async (req, res) => {
     const systemCount = await SystemStock.countDocuments();
     const tagCount = await Tag.countDocuments();
     const locationCount = await Location.countDocuments();
+    const productionCount = await ProductionPart.countDocuments();
 
     res.json({
       systemStock: {
@@ -156,6 +157,10 @@ router.get("/status", async (req, res) => {
         uploaded: locationCount > 0,
         count: locationCount,
       },
+      productionParts: {
+        uploaded: productionCount > 0,
+        count: productionCount,
+      }, // ✅
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch upload status" });
