@@ -128,9 +128,9 @@ router.get("/dashboard-status", async (req, res) => {
   try {
     // ---------- SYSTEM ----------
     const productionSet = await getProductionSet(); // ✅
-    const systemParts = await SystemStock.distinct("partNo").filter(
+    const systemParts = (await SystemStock.distinct("partNo")).filter(
       (p) => !productionSet.has(p),
-    ); // ✅
+    );
 
     const systemTotalQtyAgg = await SystemStock.aggregate([
       {
@@ -143,9 +143,9 @@ router.get("/dashboard-status", async (req, res) => {
     const systemTotalQty = systemTotalQtyAgg[0]?.total || 0;
 
     // ---------- ACTUAL ----------
-    const countedParts = await PhysicalCount.distinct("partNo").filter(
+    const countedParts = (await PhysicalCount.distinct("partNo")).filter(
       (p) => !productionSet.has(p),
-    ); // ✅
+    );
 
     const countedLocations = await PhysicalCount.distinct("location");
 
@@ -177,8 +177,10 @@ router.get("/dashboard-status", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("DASHBOARD STATUS ERROR:", err);
-    res.status(500).json({ error: "Failed to load dashboard status" });
+    console.error("DASHBOARD STATUS ERROR:", err.message, err.stack);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to load dashboard status" });
   }
 });
 
