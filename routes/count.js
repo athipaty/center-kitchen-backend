@@ -271,6 +271,8 @@ router.get("/variance", async (req, res) => {
       const systemQty = systemMap.get(a._id) || 0;
 
       if (a.totalActual !== systemQty) {
+        const prev = prevDiffMap.get(a._id); // ✅ move inside the if block
+
         variances.push({
           partNo: a._id,
           actual: a.totalActual,
