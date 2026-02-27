@@ -5,10 +5,17 @@ const PhysicalCount = require("../models/PhysicalCount");
 const Tag = require("../models/Tag");
 const SystemStock = require("../models/SystemStock");
 const Location = require("../models/Location");
+const ProductionPart = require("../models/ProductionPart");
 
 const multer = require("multer");
 const XLSX = require("xlsx");
 const upload = multer({ storage: multer.memoryStorage() });
+
+// production list...
+const getProductionSet = async () => {
+  const parts = await ProductionPart.distinct("partNo");
+  return new Set(parts);
+};
 
 router.get("/", (req, res) => {
   res.json({ message: "return from / routes" });
@@ -120,7 +127,10 @@ router.get("/status", async (req, res) => {
 router.get("/dashboard-status", async (req, res) => {
   try {
     // ---------- SYSTEM ----------
-    const systemParts = await SystemStock.distinct("partNo");
+    const productionSet = await getProductionSet(); // ✅
+    const systemParts = await SystemStock.distinct("partNo").filter(
+      (p) => !productionSet.has(p),
+    ); // ✅
 
     const systemTotalQtyAgg = await SystemStock.aggregate([
       {
@@ -133,7 +143,10 @@ router.get("/dashboard-status", async (req, res) => {
     const systemTotalQty = systemTotalQtyAgg[0]?.total || 0;
 
     // ---------- ACTUAL ----------
-    const countedParts = await PhysicalCount.distinct("partNo");
+    const countedParts = await PhysicalCount.distinct("partNo").filter(
+      (p) => !productionSet.has(p),
+    ); // ✅
+
     const countedLocations = await PhysicalCount.distinct("location");
 
     const actualQtyAgg = await PhysicalCount.aggregate([
@@ -174,6 +187,8 @@ router.get("/dashboard-status", async (req, res) => {
 ===================== */
 router.get("/variance", async (req, res) => {
   try {
+    const productionSet = await getProductionSet(); // ✅
+
     // ---------- SYSTEM ----------
     const systemAgg = await SystemStock.aggregate([
       {
@@ -188,7 +203,10 @@ router.get("/variance", async (req, res) => {
 
     const systemMap = new Map();
     systemAgg.forEach((s) => {
-      systemMap.set(s._id, s.systemQty);
+      if (!productionSet.has(s._id))
+        // ✅ exclude production
+
+        systemMap.set(s._id, s.systemQty);
     });
 
     // ---------- ACTUAL + LOCATION ----------
@@ -231,6 +249,7 @@ router.get("/variance", async (req, res) => {
     const variances = [];
 
     actualAgg.forEach((a) => {
+      if (productionSet.has(a._id)) return; // ✅ exclude production
       const systemQty = systemMap.get(a._id) || 0;
 
       if (a.totalActual !== systemQty) {
@@ -479,6 +498,7 @@ router.post("/upload-stocktake", upload.single("file"), async (req, res) => {
 
 router.get("/matched", async (req, res) => {
   try {
+    const productionSet = await getProductionSet(); // ✅
     const systemAgg = await SystemStock.aggregate([
       {
         $group: {
@@ -517,6 +537,7 @@ router.get("/matched", async (req, res) => {
     ]);
 
     const matched = actualAgg
+      .filter((a) => !productionSet.has(a._id)) // ✅ exclude production
       .filter((a) => (systemMap.get(a._id) || 0) === a.totalActual)
       .map((a) => ({
         partNo: a._id,
@@ -534,6 +555,7 @@ router.get("/matched", async (req, res) => {
 
 router.get("/uncounted", async (req, res) => {
   try {
+    const productionSet = await getProductionSet(); // ✅
     // all parts in system
     const systemAgg = await SystemStock.aggregate([
       {
@@ -551,6 +573,7 @@ router.get("/uncounted", async (req, res) => {
     // return system parts that have NO physical count at all
     const uncounted = systemAgg
       .filter((s) => !countedSet.has(s._id))
+      .filter((s) => !productionSet.has(s._id)) // ✅ exclude production
       .map((s) => ({
         partNo: s._id,
         system: s.systemQty,
@@ -566,6 +589,8 @@ router.get("/uncounted", async (req, res) => {
 
 router.get("/unrecognized", async (req, res) => {
   try {
+    const productionSet = await getProductionSet(); // ✅
+
     // all system part nos
     const systemPartNos = await SystemStock.distinct("partNo");
     const systemSet = new Set(systemPartNos);
@@ -592,6 +617,8 @@ router.get("/unrecognized", async (req, res) => {
     // return counted parts that don't exist in system
     const unrecognized = countedAgg
       .filter((c) => !systemSet.has(c._id))
+      .filter((c) => !productionSet.has(c._id)) // ✅ exclude production
+
       .map((c) => ({
         partNo: c._id,
         actual: c.totalActual,
@@ -605,8 +632,6 @@ router.get("/unrecognized", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch unrecognized parts" });
   }
 });
-
-const ProductionPart = require("../models/ProductionPart");
 
 router.post("/production-parts", upload.single("file"), async (req, res) => {
   try {
