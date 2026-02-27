@@ -6,6 +6,7 @@ const SystemStock = require("../models/SystemStock");
 const Tag = require("../models/Tag");
 const Location = require("../models/Location");
 const ProductionPart = require("../models/ProductionPart");
+const PreviousDiff = require("../models/PreviousDiff");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -144,6 +145,7 @@ router.get("/status", async (req, res) => {
     const tagCount = await Tag.countDocuments();
     const locationCount = await Location.countDocuments();
     const productionCount = await ProductionPart.countDocuments();
+    const prevDiffCount = await PreviousDiff.countDocuments();
 
     res.json({
       systemStock: {
@@ -162,9 +164,15 @@ router.get("/status", async (req, res) => {
         uploaded: productionCount > 0,
         count: productionCount,
       }, // ✅
+      previousDiff: { 
+        uploaded: prevDiffCount > 0, 
+        count: prevDiffCount 
+      }, // ✅
     });
   } catch (err) {
-    res.status(500).json({ error: err.message || "Failed to get upload status" });
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to get upload status" });
     console.log("UPLOAD STATUS ERROR:", err.message);
   }
 });
