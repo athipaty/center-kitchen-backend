@@ -531,7 +531,19 @@ router.post("/upload-stocktake", upload.single("file"), async (req, res) => {
 
 router.get("/matched", async (req, res) => {
   try {
-    const productionSet = await getProductionSet(); // ✅
+    const productionSet = await getProductionSet();
+
+    // ✅ fetch previous diff map
+    const prevDiffs = await PreviousDiff.find({});
+    const prevDiffMap = new Map();
+    prevDiffs.forEach((p) => {
+      prevDiffMap.set(p.partNo, {
+        price: p.price,
+        diffN1: p.diffN1,
+        diffN2: p.diffN2,
+      });
+    });
+
     const systemAgg = await SystemStock.aggregate([
       {
         $group: {
@@ -540,7 +552,11 @@ router.get("/matched", async (req, res) => {
         },
       },
     ]);
-    const systemMap = new Map(systemAgg.map((s) => [s._id, s.systemQty]));
+
+    const systemMap = new Map();
+    systemAgg.forEach((s) => {
+      if (!productionSet.has(s._id)) systemMap.set(s._id, s.systemQty);
+    });
 
     const actualAgg = await PhysicalCount.aggregate([
       {
@@ -569,15 +585,23 @@ router.get("/matched", async (req, res) => {
       },
     ]);
 
-    const matched = actualAgg
-      .filter((a) => !productionSet.has(a._id)) // ✅ exclude production
-      .filter((a) => (systemMap.get(a._id) || 0) === a.totalActual)
-      .map((a) => ({
-        partNo: a._id,
-        actual: a.totalActual,
-        system: systemMap.get(a._id) || 0,
-        locations: a.locations,
-      }));
+    const matched = [];
+    actualAgg.forEach((a) => {
+      if (productionSet.has(a._id)) return;
+      const systemQty = systemMap.get(a._id);
+      if (systemQty !== undefined && a.totalActual === systemQty) {
+        const prev = prevDiffMap.get(a._id);
+        matched.push({
+          partNo: a._id,
+          actual: a.totalActual,
+          system: systemQty,
+          locations: a.locations,
+          price: prev?.price ?? null, // ✅
+          diffN1: prev?.diffN1 ?? null, // ✅
+          diffN2: prev?.diffN2 ?? null, // ✅
+        });
+      }
+    });
 
     res.json(matched);
   } catch (err) {
