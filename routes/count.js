@@ -612,8 +612,18 @@ router.get("/matched", async (req, res) => {
 
 router.get("/uncounted", async (req, res) => {
   try {
-    const productionSet = await getProductionSet(); // ✅
-    // all parts in system
+    const productionSet = await getProductionSet();
+
+    const prevDiffs = await PreviousDiff.find({});
+    const prevDiffMap = new Map();
+    prevDiffs.forEach((p) => {
+      prevDiffMap.set(p.partNo, {
+        price: p.price,
+        diffN1: p.diffN1,
+        diffN2: p.diffN2,
+      });
+    });
+
     const systemAgg = await SystemStock.aggregate([
       {
         $group: {
@@ -623,19 +633,22 @@ router.get("/uncounted", async (req, res) => {
       },
     ]);
 
-    // all parts that have been counted
     const countedPartNos = await PhysicalCount.distinct("partNo");
     const countedSet = new Set(countedPartNos);
 
-    // return system parts that have NO physical count at all
-    const uncounted = systemAgg
-      .filter((s) => !countedSet.has(s._id))
-      .filter((s) => !productionSet.has(s._id)) // ✅ exclude production
-      .map((s) => ({
+    const uncounted = [];
+    systemAgg.forEach((s) => {
+      if (productionSet.has(s._id)) return;
+      if (countedSet.has(s._id)) return;
+      const prev = prevDiffMap.get(s._id);
+      uncounted.push({
         partNo: s._id,
         system: s.systemQty,
-        actual: 0,
-      }));
+        price: prev?.price ?? null,
+        diffN1: prev?.diffN1 ?? null,
+        diffN2: prev?.diffN2 ?? null,
+      });
+    });
 
     res.json(uncounted);
   } catch (err) {
