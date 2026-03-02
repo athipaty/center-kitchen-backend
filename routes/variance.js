@@ -90,6 +90,19 @@ router.get("/variance", async (req, res) => {
       }
     });
 
+    // add temporarily before res.json(variances)
+    const zeroSystemParts = [];
+    actualAgg.forEach((a) => {
+      const systemQty = systemMap.get(a._id);
+      if (systemQty === undefined || systemQty === 0) {
+        zeroSystemParts.push({ partNo: a._id, systemQty });
+      }
+    });
+    console.log(
+      "Parts with 0 or undefined system:",
+      zeroSystemParts.slice(0, 10),
+    );
+
     res.json(variances);
   } catch (err) {
     console.error("VARIANCE ERROR:", err);
