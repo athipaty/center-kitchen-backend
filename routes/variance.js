@@ -74,6 +74,7 @@ router.get("/variance", async (req, res) => {
 
       const systemQty = systemMap.get(a._id);
       if (systemQty === undefined) return; // ✅ skip parts not in system — they belong in Unrecognized
+      if (systemQty === 0) return; // ✅ system qty is 0 → also treat as Unrecognized
 
       if (a.totalActual !== systemQty) {
         const prev = prevDiffMap.get(a._id);
