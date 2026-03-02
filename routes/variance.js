@@ -70,8 +70,10 @@ router.get("/variance", async (req, res) => {
     const variances = [];
 
     actualAgg.forEach((a) => {
-      if (productionSet.has(a._id)) return; // ✅ exclude production
-      const systemQty = systemMap.get(a._id) || 0;
+      if (productionSet.has(a._id)) return; // exclude production
+
+      const systemQty = systemMap.get(a._id);
+      if (systemQty === undefined) return; // ✅ skip parts not in system — they belong in Unrecognized
 
       if (a.totalActual !== systemQty) {
         const prev = prevDiffMap.get(a._id);
@@ -80,9 +82,9 @@ router.get("/variance", async (req, res) => {
           actual: a.totalActual,
           system: systemQty,
           locations: a.locations,
-          price: prev?.price ?? null, // ✅
-          diffN1: prev?.diffN1 ?? null, // ✅
-          diffN2: prev?.diffN2 ?? null, // ✅
+          price: prev?.price ?? null,
+          diffN1: prev?.diffN1 ?? null,
+          diffN2: prev?.diffN2 ?? null,
         });
       }
     });
