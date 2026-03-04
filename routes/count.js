@@ -277,20 +277,29 @@ router.get("/variance", async (req, res) => {
     const variances = [];
 
     actualAgg.forEach((a) => {
-      if (productionSet.has(a._id)) return; // ✅ exclude production
-      const systemQty = systemMap.get(a._id) || 0;
+      if (productionSet.has(a._id)) return;
+
+      const systemQty = systemMap.get(a._id);
+      console.log(
+        "MA024012-0370 in systemMap:",
+        systemMap.get("MA024012-0370"),
+      );
+      console.log("systemMap size:", systemMap.size);
+
+      // ✅ these must be BEFORE the comparison check
+      if (systemQty === undefined) return;
+      if (Number(systemQty) === 0) return;
 
       if (a.totalActual !== systemQty) {
-        const prev = prevDiffMap.get(a._id); // ✅ move inside the if block
-
+        const prev = prevDiffMap.get(a._id);
         variances.push({
           partNo: a._id,
           actual: a.totalActual,
           system: systemQty,
-          locations: a.locations, // ✅ THIS IS THE FIX
-          price: prev?.price ?? null, // ✅ null if no data
-          diffN1: prev?.diffN1 ?? null, // ✅ null if no data
-          diffN2: prev?.diffN2 ?? null, // ✅ null if no data
+          locations: a.locations,
+          price: prev?.price ?? null,
+          diffN1: prev?.diffN1 ?? null,
+          diffN2: prev?.diffN2 ?? null,
         });
       }
     });

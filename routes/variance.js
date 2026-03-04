@@ -66,8 +66,6 @@ router.get("/variance", async (req, res) => {
       },
     ]);
 
-    console.log("ACTUAL AGG SAMPLE:", actualAgg.slice(0, 5));
-
     // ---------- COMPARE ----------
     const variances = [];
 
@@ -75,6 +73,11 @@ router.get("/variance", async (req, res) => {
       if (productionSet.has(a._id)) return;
 
       const systemQty = systemMap.get(a._id);
+      console.log(
+        "MA024012-0370 in systemMap:",
+        systemMap.get("MA024012-0370"),
+      );
+      console.log("systemMap size:", systemMap.size);
 
       // ✅ these must be BEFORE the comparison check
       if (systemQty === undefined) return;
