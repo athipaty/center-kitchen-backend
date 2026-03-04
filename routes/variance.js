@@ -68,6 +68,7 @@ router.get("/variance", async (req, res) => {
 
     // ---------- COMPARE ----------
     const variances = [];
+    const unknownParts = [];
 
     actualAgg.forEach((a) => {
       if (productionSet.has(a._id)) return;
@@ -75,6 +76,13 @@ router.get("/variance", async (req, res) => {
       const systemQty = systemMap.get(a._id);
 
       const isUnknown = systemQty === undefined || systemQty === 0;
+      unknownParts.push({
+        partNo: a._id,
+        actualQty: a.totalActual,
+        locations: a.locations,
+      });
+      console.log("UNCOUNTED PARTS:", unknownParts.slice(0, 10));
+
       if (isUnknown) return;
 
       const isVariance = a.totalActual !== systemQty;
@@ -92,19 +100,6 @@ router.get("/variance", async (req, res) => {
         diffN2: prev?.diffN2 ?? null,
       });
     });
-
-    // add temporarily before res.json(variances)
-    const zeroSystemParts = [];
-    actualAgg.forEach((a) => {
-      const systemQty = systemMap.get(a._id);
-      if (systemQty === undefined || systemQty === 0) {
-        zeroSystemParts.push({ partNo: a._id, systemQty });
-      }
-    });
-    console.log(
-      "Parts with 0 or undefined system:",
-      zeroSystemParts.slice(0, 10),
-    );
 
     res.json(variances);
   } catch (err) {
