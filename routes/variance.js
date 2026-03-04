@@ -76,10 +76,11 @@ router.get("/variance", async (req, res) => {
 
       const systemQty = systemMap.get(a._id);
 
+      // ✅ these must be BEFORE the comparison check
+      if (systemQty === undefined) return;
+      if (Number(systemQty) === 0) return;
+
       if (a.totalActual !== systemQty) {
-        if (systemQty === undefined) return;
-        if (systemQty === 0) return;
-        if (Number(systemQty) === 0) return; // ✅ extra check in case it's stored as string "0"
         const prev = prevDiffMap.get(a._id);
         variances.push({
           partNo: a._id,
