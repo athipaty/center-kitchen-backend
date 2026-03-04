@@ -70,24 +70,27 @@ router.get("/variance", async (req, res) => {
     const variances = [];
 
     actualAgg.forEach((a) => {
-      if (productionSet.has(a._id)) return; // exclude production
+      if (productionSet.has(a._id)) return;
 
       const systemQty = systemMap.get(a._id);
-      if (systemQty === undefined) return; // ✅ skip parts not in system — they belong in Unrecognized
-      if (systemQty === 0) return; // ✅ system qty is 0 → also treat as Unrecognized
 
-      if (a.totalActual !== systemQty) {
-        const prev = prevDiffMap.get(a._id);
-        variances.push({
-          partNo: a._id,
-          actual: a.totalActual,
-          system: systemQty,
-          locations: a.locations,
-          price: prev?.price ?? null,
-          diffN1: prev?.diffN1 ?? null,
-          diffN2: prev?.diffN2 ?? null,
-        });
-      }
+      const isUnknown = systemQty === undefined || systemQty === 0;
+      if (isUnknown) return;
+
+      const isVariance = a.totalActual !== systemQty;
+      if (!isVariance) return;
+
+      const prev = prevDiffMap.get(a._id);
+
+      variances.push({
+        partNo: a._id,
+        actual: a.totalActual,
+        system: systemQty,
+        locations: a.locations,
+        price: prev?.price ?? null,
+        diffN1: prev?.diffN1 ?? null,
+        diffN2: prev?.diffN2 ?? null,
+      });
     });
 
     // add temporarily before res.json(variances)
