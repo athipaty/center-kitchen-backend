@@ -66,39 +66,31 @@ router.get("/variance", async (req, res) => {
       },
     ]);
 
+    console.log("ACTUAL AGG SAMPLE:", actualAgg.slice(0, 5));
+
     // ---------- COMPARE ----------
     const variances = [];
-    const unknownParts = [];
 
     actualAgg.forEach((a) => {
       if (productionSet.has(a._id)) return;
 
       const systemQty = systemMap.get(a._id);
 
-      const isUnknown = systemQty === undefined || systemQty === 0;
-      unknownParts.push({
-        partNo: a._id,
-        actualQty: a.totalActual,
-        locations: a.locations,
-      });
-      console.log("UNCOUNTED PARTS:", unknownParts.slice(0, 10));
-
-      if (isUnknown) return;
-
-      const isVariance = a.totalActual !== systemQty;
-      if (!isVariance) return;
-
-      const prev = prevDiffMap.get(a._id);
-
-      variances.push({
-        partNo: a._id,
-        actual: a.totalActual,
-        system: systemQty,
-        locations: a.locations,
-        price: prev?.price ?? null,
-        diffN1: prev?.diffN1 ?? null,
-        diffN2: prev?.diffN2 ?? null,
-      });
+      if (a.totalActual !== systemQty) {
+        if (systemQty === undefined) return;
+        if (systemQty === 0) return;
+        if (Number(systemQty) === 0) return; // ✅ extra check in case it's stored as string "0"
+        const prev = prevDiffMap.get(a._id);
+        variances.push({
+          partNo: a._id,
+          actual: a.totalActual,
+          system: systemQty,
+          locations: a.locations,
+          price: prev?.price ?? null,
+          diffN1: prev?.diffN1 ?? null,
+          diffN2: prev?.diffN2 ?? null,
+        });
+      }
     });
 
     res.json(variances);
