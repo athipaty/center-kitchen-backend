@@ -22,8 +22,13 @@ const getProductionSet = async () => {
   }
 };
 
-router.get("/", (req, res) => {
-  res.json({ message: "return from / routes" });
+router.get("/", async (req, res) => {
+  try {
+    const test = await SystemStock.find({});
+    res.json(test);
+  } catch (err) {
+    console.error("COUNT TEST ERROR:", err);
+    res.status(500).json({ error: "Failed to load count test" });
 });
 
 router.get("/all", async (req, res) => {
