@@ -38,7 +38,6 @@ app.use("/suppliers", require("./routes/suppliers"));
 app.use("/api/milk", require("./routes/milkRoutes"));
 app.use("/upload", require("./routes/upload"));
 app.use("/count", require("./routes/count"));
-app.use("/variance", require("./routes/variance"));
 
 
 /* =====================
