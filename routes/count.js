@@ -22,7 +22,14 @@ const getProductionSet = async () => {
   }
 };
 
-router.get("/", (req, res) => {
+router.get("/", async(req, res) => {
+  try{
+    const test = await SystemStock.find({})
+    res.json(test);
+  } catch(err){
+    console.error("TEST ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch test data" });
+  }
   res.json({ message: "return from / routes" });
 });
 
