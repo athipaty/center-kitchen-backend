@@ -25,18 +25,22 @@ const getProductionSet = async () => {
 router.get("/", async (req, res) => {
   try {
     const test = await SystemStock.aggregate([
-        {
-          $group: { _id: "$partNo", total: { $sum: { $toDouble: "$systemQty" } } },
+      {
+        $group: {
+          _id: "$partNo",
+          total: { $sum: { $toDouble: "$systemQty" } },
         },
-        { 
-          $group: { _id: null, countTotal: { $sum: 1 } }
-        }
-      ]);
+      },
+      {
+        $group: { _id: null, countTotal: { $sum: 1 } },
+      },
+    ]);
     res.json(test);
   } catch (err) {
-    console.error("COUNT TEST ERROR:", err)};
-    res.status(500).json({ error: "Failed to load count test" });
+    console.error("COUNT TEST ERROR:", err);
   }
+  
+  res.status(500).json({ error: "Failed to load count test" });
 });
 
 router.get("/all", async (req, res) => {
@@ -293,7 +297,7 @@ router.get("/variance", async (req, res) => {
       if (productionSet.has(a._id)) return;
 
       const systemQty = systemMap.get(a._id);
-      
+
       // ✅ these must be BEFORE the comparison check
       if (systemQty === undefined) return;
       if (Number(systemQty) === 0) return;
