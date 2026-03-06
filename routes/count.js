@@ -24,23 +24,29 @@ const getProductionSet = async () => {
 
 router.get("/", async (req, res) => {
   try {
-    const test = await SystemStock.aggregate([
-      {
-        $group: {
-          _id: "$partNo",
-          total: { $sum: { $toDouble: "$systemQty" } },
-        },
-      },
-      {
-        $group: { _id: null, countTotal: { $sum: 1 } },
-      },
+    const [actualResult, systemResult] = await Promise.all([
+      PhysicalCount.aggregate([
+        {
+          $group: {
+            _id: null,
+            total: { $sum: "$totalQty" }
+          }
+        }
+      ]),
+      SystemStock.aggregate([
+        {
+          $group: {
+            _id: null,
+            total: { $sum: "$systemQty" }
+          }
+        }
+      ])
     ]);
-    res.json(test);
+    res.json({ actual: actualResult[0]?.total || 0, system: systemResult[0]?.total || 0 });
   } catch (err) {
     console.error("COUNT TEST ERROR:", err);
+    res.status(500).json({ error: "Failed to load count test" });
   }
-  
-  res.status(500).json({ error: "Failed to load count test" });
 });
 
 router.get("/all", async (req, res) => {
