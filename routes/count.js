@@ -27,7 +27,7 @@ router.get("/", async (req, res) => {
     const test = await SystemStock.find({});
     res.json(test);
   } catch (err) {
-    console.error("COUNT TEST ERROR:", err);
+    console.error("COUNT TEST ERROR:", err)};
     res.status(500).json({ error: "Failed to load count test" });
 });
 
