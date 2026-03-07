@@ -7,6 +7,7 @@ const Tag = require("../models/Tag");
 const Location = require("../models/Location");
 const ProductionPart = require("../models/ProductionPart");
 const PreviousDiff = require("../models/PreviousDiff");
+const PhysicalCount = require("../models/PhysicalCount");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
