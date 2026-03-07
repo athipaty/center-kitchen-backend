@@ -458,6 +458,15 @@ router.post("/upload-stocktake", upload.single("file"), async (req, res) => {
   }
 });
 
+router.delete("/upload-stocktake", async (req, res) => {
+  try {
+    const result = await PhysicalCount.deleteMany({});
+    res.json({ deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to clear count data" });
+  }
+});s
+
 /* =====================
    PART NO SEARCH
 ===================== */
