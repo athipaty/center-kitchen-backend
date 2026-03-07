@@ -11,6 +11,10 @@ const PreviousDiff = require("../models/PreviousDiff");
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
+/* =====================
+   SYSTEM STOCK UPLOAD
+===================== */
+
 router.post("/system-stock", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
@@ -332,6 +336,125 @@ router.get("/status", async (req, res) => {
       .status(500)
       .json({ error: err.message || "Failed to get upload status" });
     console.log("UPLOAD STATUS ERROR:", err.message);
+  }
+});
+
+/* =====================
+   UPLOAD STOCK TAKE (STRICT)
+===================== */
+router.post("/upload-stocktake", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // ---- read excel ----
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+    if (!rows.length) {
+      return res.status(400).json({ error: "Excel file is empty" });
+    }
+
+    const cleanedRows = [];
+    const errors = [];
+
+    rows.forEach((r, index) => {
+      const rowNum = index + 2; // header = row 1
+
+      const tagNo = String(r.tagNo || "").trim();
+      const partNo = String(r.partNo || "")
+        .trim()
+        .toUpperCase();
+      const location = String(r.location || "")
+        .trim()
+        .toUpperCase();
+
+      const qtyPerBox = Number(r.qtyPerBox);
+      const boxes = Number(r.boxes);
+      const openBoxQty = Number(r.openBoxQty || 0);
+
+      // ---- validation ----
+      if (!tagNo || !partNo || !location) {
+        errors.push(`Row ${rowNum}: tagNo, partNo, location are required`);
+        return;
+      }
+
+      if ([qtyPerBox, boxes, openBoxQty].some((n) => Number.isNaN(n))) {
+        errors.push(
+          `Row ${rowNum}: qtyPerBox, boxes, openBoxQty must be numbers`,
+        );
+        return;
+      }
+
+      if (qtyPerBox < 0 || boxes < 0 || openBoxQty < 0) {
+        errors.push(`Row ${rowNum}: values cannot be negative`);
+        return;
+      }
+
+      if (!Number.isInteger(boxes)) {
+        errors.push(`Row ${rowNum}: boxes must be an integer`);
+        return;
+      }
+
+      const totalQty = qtyPerBox * boxes + openBoxQty;
+
+      cleanedRows.push({
+        tagNo,
+        partNo,
+        location,
+        qtyPerBox,
+        boxes,
+        openBoxQty,
+        totalQty,
+      });
+    });
+
+    // ---- reject entire upload if ANY error ----
+    if (errors.length > 0) {
+      return res.status(400).json({
+        error: "Validation failed",
+        details: errors,
+      });
+    }
+
+    // ---- merge duplicate partNo + location within Excel rows ----
+    const mergeMap = new Map();
+
+    cleanedRows.forEach((r) => {
+      const key = `${r.partNo}||${r.location}`;
+      if (mergeMap.has(key)) {
+        const existing = mergeMap.get(key);
+        existing.boxes += r.boxes;
+        existing.openBoxQty += r.openBoxQty;
+        existing.totalQty += r.totalQty;
+      } else {
+        mergeMap.set(key, { ...r });
+      }
+    });
+
+    const mergedRows = Array.from(mergeMap.values());
+
+    // ---- STRICT stock take ----
+    const deleted = await PhysicalCount.countDocuments();
+    await PhysicalCount.deleteMany({});
+
+    const insertedDocs = await PhysicalCount.insertMany(cleanedRows);
+
+    res.json({
+      ok: true,
+      inserted: insertedDocs.length,
+      deleted,
+    });
+  } catch (err) {
+    console.error("UPLOAD STOCKTAKE ERROR:", err.message);
+    console.error("FULL ERROR:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to upload stock take" });
   }
 });
 
