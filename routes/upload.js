@@ -48,6 +48,10 @@ router.post("/system-stock", upload.single("file"), async (req, res) => {
   }
 });
 
+/* =====================
+   TAG UPLOAD
+===================== */
+
 router.post("/tags", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
@@ -78,6 +82,15 @@ router.post("/tags", upload.single("file"), async (req, res) => {
   } catch (err) {
     console.error("TAG UPLOAD ERROR:", err);
     res.status(500).json({ error: "Failed to import tag list" });
+  }
+});
+
+router.delete("/tags", async (req, res) => {
+  try {
+    const result = await Tag.deleteMany({});
+    res.json({ deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to clear tags" });
   }
 });
 
