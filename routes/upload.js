@@ -465,7 +465,7 @@ router.delete("/upload-stocktake", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "Failed to clear count data" });
   }
-});s
+});
 
 /* =====================
    PART NO SEARCH
