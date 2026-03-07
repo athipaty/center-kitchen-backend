@@ -145,7 +145,6 @@ router.delete("/locations", async (req, res) => {
   }
 });
 
-
 /* =====================
   PREVIOUS DIFF UPLOAD
 ===================== */
@@ -215,6 +214,64 @@ router.delete("/previous-diff", async (req, res) => {
     res.json({ deleted: result.deletedCount });
   } catch (err) {
     res.status(500).json({ error: "Failed to clear previous diff data" });
+  }
+});
+
+/* =====================
+  PRODUCTION PARTS UPLOAD
+===================== */
+
+router.post("/production-parts", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+    if (!rows.length)
+      return res.status(400).json({ error: "Excel file is empty" });
+
+    const errors = [];
+    const cleanedRows = [];
+
+    rows.forEach((r, index) => {
+      const row = Object.fromEntries(
+        Object.entries(r).map(([k, v]) => [k.trim().toLowerCase(), v]),
+      );
+      const partNo = String(row.partno || "")
+        .trim()
+        .toUpperCase();
+      if (!partNo) {
+        errors.push(`Row ${index + 2}: partNo is required`);
+        return;
+      }
+      cleanedRows.push({ partNo });
+    });
+
+    if (errors.length > 0) {
+      return res
+        .status(400)
+        .json({ error: "Validation failed", details: errors });
+    }
+
+    // replace all existing production parts
+    await ProductionPart.deleteMany({});
+    const inserted = await ProductionPart.insertMany(cleanedRows);
+
+    res.json({ ok: true, count: inserted.length });
+  } catch (err) {
+    console.error("UPLOAD PRODUCTION PARTS ERROR:", err);
+    res.status(500).json({ error: "Failed to upload production parts" });
+  }
+});
+
+router.delete("/production-parts", async (req, res) => {
+  try {
+    const result = await ProductionPart.deleteMany({});
+    res.json({ deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to clear production parts" });
   }
 });
 
