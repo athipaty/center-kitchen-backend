@@ -139,6 +139,15 @@ router.get("/locations/search", async (req, res) => {
   }
 });
 
+router.delete("/locations", async (req, res) => {
+  try {
+    const result = await Location.deleteMany({});
+    res.json({ deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to clear locations" });
+  }
+});
+
 router.get("/status", async (req, res) => {
   try {
     const systemCount = await SystemStock.countDocuments();
@@ -164,9 +173,9 @@ router.get("/status", async (req, res) => {
         uploaded: productionCount > 0,
         count: productionCount,
       }, // ✅
-      previousDiff: { 
-        uploaded: prevDiffCount > 0, 
-        count: prevDiffCount 
+      previousDiff: {
+        uploaded: prevDiffCount > 0,
+        count: prevDiffCount,
       }, // ✅
     });
   } catch (err) {
