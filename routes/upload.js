@@ -48,6 +48,15 @@ router.post("/system-stock", upload.single("file"), async (req, res) => {
   }
 });
 
+router.delete("/system-stock", async (req, res) => {
+  try {
+    const result = await SystemStock.deleteMany({});
+    res.json({ deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to clear system stock" });
+  }
+});
+
 /* =====================
    TAG UPLOAD
 ===================== */
