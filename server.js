@@ -39,7 +39,7 @@ app.use("/suppliers", require("./routes/suppliers"));
 app.use("/api/milk", require("./routes/milkRoutes"));
 app.use("/upload", require("./routes/upload"));
 app.use("/count", require("./routes/count"));
-app.use("/products/api", require("./routes/productsRoutes"));
+app.use("/catalog", require("./routes/productsRoutes"));
 
 /* =====================
    DATABASE
