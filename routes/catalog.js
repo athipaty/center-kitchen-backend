@@ -7,20 +7,24 @@ const router = express.Router();
 // ===============================
 router.get("/", async (req, res) => {
   try {
-    const { q } = req.query;
+    const { q, category } = req.query;
+    const filter = {};
 
-    const filter = q ? {
-      $or: [
-        { partNo:   { $regex: q, $options: "i" } },
-        { name:     { $regex: q, $options: "i" } },
+    if (category && category !== "All") {
+      filter.category = category;
+    }
+
+    if (q) {
+      filter.$or = [
+        { partNo: { $regex: q, $options: "i" } },
+        { name: { $regex: q, $options: "i" } },
         { customer: { $regex: q, $options: "i" } },
         { supplier: { $regex: q, $options: "i" } },
-        { category: { $regex: q, $options: "i" } },
-        { type:     { $regex: q, $options: "i" } },
-        { "spec.material":   { $regex: q, $options: "i" } },
+        { type: { $regex: q, $options: "i" } },
+        { "spec.material": { $regex: q, $options: "i" } },
         { "spec.threadSize": { $regex: q, $options: "i" } },
-      ]
-    } : {};
+      ];
+    }
 
     const products = await Catalog.find(filter);
     res.json(products);
@@ -80,12 +84,14 @@ router.post("/", async (req, res) => {
 // ===============================
 router.put("/:id", async (req, res) => {
   try {
-    const updatedProduct = await Catalog.findByIdAndUpdate( // ✅ was Products
+    const updatedProduct = await Catalog.findByIdAndUpdate(
+      // ✅ was Products
       req.params.id,
       req.body,
-      { new: true }
+      { new: true },
     );
-    if (!updatedProduct) return res.status(404).json({ message: "Product not found" });
+    if (!updatedProduct)
+      return res.status(404).json({ message: "Product not found" });
     res.json(updatedProduct);
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -98,7 +104,8 @@ router.put("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const deletedProduct = await Catalog.findByIdAndDelete(req.params.id); // ✅ was Products
-    if (!deletedProduct) return res.status(404).json({ message: "Product not found" });
+    if (!deletedProduct)
+      return res.status(404).json({ message: "Product not found" });
     res.json({ message: "Product deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
