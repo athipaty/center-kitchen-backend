@@ -20,6 +20,7 @@ app.use(
       "https://milk-tracker-rho-topaz.vercel.app",
       "https://wc7fr.csb.app",
       "https://frtstock.vercel.app",
+      "https://productportal-jade.vercel.app/",
     ],
     credentials: true,
   })
@@ -32,12 +33,13 @@ app.use(express.json());
 app.use("/orders", require("./routes/orders"));
 app.use("/outlets", require("./routes/outlets"));
 app.use("/sauces", require("./routes/sauces"));
-app.use("/products", require("./routes/products"));
+app.use("/product", require("./routes/product"));
 app.use("/inventory", require("./routes/inventory"));
 app.use("/suppliers", require("./routes/suppliers"));
 app.use("/api/milk", require("./routes/milkRoutes"));
 app.use("/upload", require("./routes/upload"));
 app.use("/count", require("./routes/count"));
+app.use("/products", require("./routes/productsRoutes"));
 
 
 /* =====================
