@@ -9,10 +9,13 @@ const CatalogSchema = new mongoose.Schema(
     },
 
     name: String,
-
     category: String,
-
     type: String,
+
+    customer: String,   // ✅ add this
+    supplier: String,   // ✅ add this
+    volumePerMonth: Number,  // ✅ add
+
 
     spec: {
       standard: String,
