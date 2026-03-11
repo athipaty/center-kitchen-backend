@@ -20,7 +20,7 @@ app.use(
       "https://milk-tracker-rho-topaz.vercel.app",
       "https://wc7fr.csb.app",
       "https://frtstock.vercel.app",
-      "https://productportal-jade.vercel.app/",
+      "https://productportal-jade.vercel.app",
     ],
     credentials: true,
   })
