@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const ProductsSchema = new mongoose.Schema(
+const CatalogSchema = new mongoose.Schema(
   {
     partNo: {
       type: String,
@@ -32,4 +32,4 @@ const ProductsSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-module.exports = mongoose.model("Products", ProductsSchema);
+module.exports = mongoose.model("Catalog", CatalogSchema);
