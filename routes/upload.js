@@ -8,6 +8,7 @@ const Location = require("../models/Location");
 const ProductionPart = require("../models/ProductionPart");
 const PreviousDiff = require("../models/PreviousDiff");
 const PhysicalCount = require("../models/PhysicalCount");
+const Catalog = require("../models/Catalog");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -486,6 +487,77 @@ router.get("/parts/search", async (req, res) => {
     res.json(parts.map((p) => p.partNo));
   } catch (err) {
     res.status(500).json({ error: "Failed to search parts" });
+  }
+});
+
+/* =====================
+   Product Catalog Upload
+===================== */
+
+router.post("/", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+    // Parse Excel
+    const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet, { defval: "" });
+
+    if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+    const results = { inserted: 0, updated: 0, skipped: 0, errors: [] };
+
+    for (const row of rows) {
+      const partNo = String(row["partNo"] || "").trim();
+      if (!partNo) { results.skipped++; continue; }
+
+      const doc = {
+        partNo,
+        name:           String(row["name"] || "").trim(),
+        customer:       String(row["customer"] || "").trim(),
+        supplier:       String(row["supplier"] || "").trim(),
+        category:       String(row["category"] || "").trim(),
+        type:           String(row["type"] || "").trim(),
+        volumePerMonth: row["volumePerMonth"] ? Number(row["volumePerMonth"]) : undefined,
+        spec: {
+          material:         String(row["material"] || "").trim(),
+          heatTreatment:    String(row["heatTreatment"] || "").trim(),
+          surfaceTreatment: String(row["surfaceTreatment"] || "").trim(),
+          headType:         String(row["headType"] || "").trim(),
+          driveType:        String(row["driveType"] || "").trim(),
+          threadSize:       String(row["threadSize"] || "").trim(),
+          length:           row["length"] ? Number(row["length"]) : undefined,
+          outerDiameter:    String(row["outerDiameter"] || "").trim(),
+          innerDiameter:    String(row["innerDiameter"] || "").trim(),
+          thickness:        row["thickness"] ? Number(row["thickness"]) : undefined,
+          standard:         String(row["standard"] || "").trim(),
+          grade:            String(row["grade"] || "").trim(),
+          note:             String(row["note"] || "").trim(),
+        },
+      };
+
+      try {
+        const existing = await Catalog.findOne({ partNo });
+        if (existing) {
+          await Catalog.updateOne({ partNo }, { $set: doc });
+          results.updated++;
+        } else {
+          await Catalog.create(doc);
+          results.inserted++;
+        }
+      } catch (err) {
+        results.errors.push({ partNo, error: err.message });
+      }
+    }
+
+    res.json({
+      message: "Upload complete",
+      total: rows.length,
+      ...results,
+    });
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
