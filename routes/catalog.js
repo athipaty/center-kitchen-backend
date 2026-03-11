@@ -7,21 +7,20 @@ const router = express.Router();
 // ===============================
 router.get("/", async (req, res) => {
   try {
-    const { q, category } = req.query;
+    const { q, category, type } = req.query;
     const filter = {};
 
-    if (category && category !== "All") {
-      filter.category = category;
-    }
+    if (category && category !== "All") filter.category = category;
+    if (type && type !== "All") filter.type = type;
 
     if (q) {
       filter.$or = [
-        { partNo: { $regex: q, $options: "i" } },
-        { name: { $regex: q, $options: "i" } },
-        { customer: { $regex: q, $options: "i" } },
-        { supplier: { $regex: q, $options: "i" } },
-        { type: { $regex: q, $options: "i" } },
-        { "spec.material": { $regex: q, $options: "i" } },
+        { partNo:            { $regex: q, $options: "i" } },
+        { name:              { $regex: q, $options: "i" } },
+        { customer:          { $regex: q, $options: "i" } },
+        { supplier:          { $regex: q, $options: "i" } },
+        { type:              { $regex: q, $options: "i" } },
+        { "spec.material":   { $regex: q, $options: "i" } },
         { "spec.threadSize": { $regex: q, $options: "i" } },
       ];
     }
