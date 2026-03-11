@@ -15,17 +15,18 @@ router.get("/", async (req, res) => {
 
     if (q) {
       filter.$or = [
-        { partNo:            { $regex: q, $options: "i" } },
-        { name:              { $regex: q, $options: "i" } },
-        { customer:          { $regex: q, $options: "i" } },
-        { supplier:          { $regex: q, $options: "i" } },
-        { type:              { $regex: q, $options: "i" } },
-        { "spec.material":   { $regex: q, $options: "i" } },
+        { partNo: { $regex: q, $options: "i" } },
+        { name: { $regex: q, $options: "i" } },
+        { customer: { $regex: q, $options: "i" } },
+        { supplier: { $regex: q, $options: "i" } },
+        { type: { $regex: q, $options: "i" } },
+        { "spec.material": { $regex: q, $options: "i" } },
         { "spec.threadSize": { $regex: q, $options: "i" } },
       ];
     }
 
-    const products = await Catalog.find(filter);
+    const products = await Catalog.find(filter).sort({ volumePerMonth: -1 });
+
     res.json(products);
   } catch (error) {
     res.status(500).json({ message: error.message });
