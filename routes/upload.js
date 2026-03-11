@@ -498,10 +498,9 @@ router.post("/catalog", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
-    // Parse Excel
-    const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });  // ← XLSX not xlsx
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = xlsx.utils.sheet_to_json(sheet, { defval: "" });
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });     // ← XLSX not xlsx
 
     if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
