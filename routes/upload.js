@@ -494,7 +494,7 @@ router.get("/parts/search", async (req, res) => {
    Product Catalog Upload
 ===================== */
 
-router.post("/", upload.single("file"), async (req, res) => {
+router.post("/catalog", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
