@@ -29,7 +29,7 @@ const ProductsSchema = new mongoose.Schema(
       thumbnail: String,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("Products", ProductsSchema);

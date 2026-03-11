@@ -39,8 +39,7 @@ app.use("/suppliers", require("./routes/suppliers"));
 app.use("/api/milk", require("./routes/milkRoutes"));
 app.use("/upload", require("./routes/upload"));
 app.use("/count", require("./routes/count"));
-app.use("/products", require("./routes/productsRoutes"));
-
+app.use("/api/products", require("./routes/productsRoutes"));
 
 /* =====================
    DATABASE
@@ -54,7 +53,7 @@ mongoose
    HEALTH CHECK
 ===================== */
 app.get("/", (req, res) => {
-  res.send("Center Kitchen API running 🚀");
+  res.send("API is running 🚀");
 });
 
 /* =====================

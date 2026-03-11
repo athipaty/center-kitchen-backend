@@ -1,6 +1,6 @@
 const express = require("express");
-const router = express.Router();
 const Products = require("../models/Products");
+const router = express.Router();
 
 
 // ===============================
@@ -9,12 +9,11 @@ const Products = require("../models/Products");
 router.get("/", async (req, res) => {
   try {
     const products = await Products.find();
-    res.json(products);
+    res.json({message: "Products retrieved successfully"});
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
-
 
 // ===============================
 // SEARCH PRODUCTS
