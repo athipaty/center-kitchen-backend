@@ -34,6 +34,35 @@ router.get("/", async (req, res) => {
 });
 
 // ===============================
+// GET CATEGORIES + TYPES
+// ===============================
+router.get("/categories", async (req, res) => {
+  try {
+    const result = await Catalog.aggregate([
+      {
+        $group: {
+          _id: "$category",
+          types: { $addToSet: "$type" },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    // Clean up — remove empty/null values
+    const categories = result
+      .filter((r) => r._id)
+      .map((r) => ({
+        category: r._id,
+        types: r.types.filter((t) => t && t !== "").sort(),
+      }));
+
+    res.json(categories);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// ===============================
 // SEARCH
 // ===============================
 router.get("/search", async (req, res) => {
@@ -107,35 +136,6 @@ router.delete("/:id", async (req, res) => {
     if (!deletedProduct)
       return res.status(404).json({ message: "Product not found" });
     res.json({ message: "Product deleted successfully" });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// ===============================
-// GET CATEGORIES + TYPES
-// ===============================
-router.get("/categories", async (req, res) => {
-  try {
-    const result = await Catalog.aggregate([
-      {
-        $group: {
-          _id: "$category",
-          types: { $addToSet: "$type" },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]);
-
-    // Clean up — remove empty/null values
-    const categories = result
-      .filter((r) => r._id)
-      .map((r) => ({
-        category: r._id,
-        types: r.types.filter((t) => t && t !== "").sort(),
-      }));
-
-    res.json(categories);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
