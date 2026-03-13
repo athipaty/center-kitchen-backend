@@ -19,25 +19,27 @@ const CatalogSchema = new mongoose.Schema(
     },
 
     volumePerMonth: Number,
+    qtyPerBox:      Number,   // ← new
+    location:       String,   // ← new (e.g. "A1-02", "Shelf B3")
 
     // Specifications
     spec: {
-      material:         String,   // SWCH12A, SCM435, SUS304
-      heatTreatment:    String,   // QT (HRC44-53), Carburizing
-      surfaceTreatment: String,   // Zinc Plating, Trivalent Chromate
+      material:         String,
+      heatTreatment:    String,
+      surfaceTreatment: String,
 
-      headType:   String,         // Hex, Button, Flat, Pan, Truss, Flange
-      driveType:  String,         // Phillips, Torx, Allen, Slotted
-      threadSize: String,         // M6 x 1.0, M4 x 0.7
+      headType:   String,
+      driveType:  String,
+      threadSize: String,
 
-      length:        Number,      // mm
-      outerDiameter: String,      // Ø12, Ø8.2
-      innerDiameter: String,      // Ø6, Ø3.1
-      thickness:     Number,      // mm
+      length:        Number,
+      outerDiameter: String,
+      innerDiameter: String,
+      thickness:     Number,
 
-      standard: String,           // ISO, DIN, JIS, ASTM
-      grade:    String,           // 8.8, A2-70
-      note:     String,           // any extra info
+      standard: String,
+      grade:    String,
+      note:     String,
     },
 
     photo: {
