@@ -1,6 +1,10 @@
 const express = require("express");
 const Catalog = require("../models/Catalog");
 const router = express.Router();
+const multer = require("multer");
+const XLSX   = require("xlsx");
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 // ===============================
 // GET ALL + SEARCH
@@ -135,6 +139,45 @@ router.delete("/:id", async (req, res) => {
     if (!deletedProduct)
       return res.status(404).json({ message: "Product not found" });
     res.json({ message: "Product deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// ===============================
+// BULK UPLOAD LOCATION
+// ===============================
+router.post("/upload-location", upload.single("file"), async (req, res) => {
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    const rows = rawRows.map(row =>
+      Object.fromEntries(Object.entries(row).map(([k, v]) => [k.trim(), v]))
+    );
+
+    const results = { updated: 0, notFound: 0, errors: [] };
+
+    for (const row of rows) {
+      const partNo   = String(row["Part no."] || row["Part No"] || row["partNo"] || "").trim();
+      const location = String(row["Location"] || row["location"] || "").trim();
+
+      if (!partNo) continue;
+
+      try {
+        const result = await Catalog.findOneAndUpdate(
+          { partNo },
+          { $set: { location } },
+          { new: true }
+        );
+        if (result) results.updated++;
+        else results.notFound++;
+      } catch (err) {
+        results.errors.push(`${partNo}: ${err.message}`);
+      }
+    }
+
+    res.json(results);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
