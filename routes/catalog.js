@@ -2,7 +2,7 @@ const express = require("express");
 const Catalog = require("../models/Catalog");
 const router = express.Router();
 const multer = require("multer");
-const XLSX   = require("xlsx");
+const XLSX = require("xlsx");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -152,23 +152,31 @@ router.post("/upload-location", upload.single("file"), async (req, res) => {
     const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-    const rows = rawRows.map(row =>
-      Object.fromEntries(Object.entries(row).map(([k, v]) => [k.trim(), v]))
+    const rows = rawRows.map((row) =>
+      Object.fromEntries(Object.entries(row).map(([k, v]) => [k.trim(), v])),
     );
+
+    // Group locations by partNo
+    const grouped = {};
+    for (const row of rows) {
+      const partNo = String(
+        row["Part no."] || row["Part No"] || row["partNo"] || "",
+      ).trim();
+      const location = String(row["Location"] || row["location"] || "").trim();
+      if (!partNo || !location) continue;
+
+      if (!grouped[partNo]) grouped[partNo] = [];
+      grouped[partNo].push(location);
+    }
 
     const results = { updated: 0, notFound: 0, errors: [] };
 
-    for (const row of rows) {
-      const partNo   = String(row["Part no."] || row["Part No"] || row["partNo"] || "").trim();
-      const location = String(row["Location"] || row["location"] || "").trim();
-
-      if (!partNo) continue;
-
+    for (const [partNo, locations] of Object.entries(grouped)) {
       try {
         const result = await Catalog.findOneAndUpdate(
           { partNo },
-          { $set: { location: [location] } },
-          { new: true }
+          { $set: { location: locations } }, // e.g. ["A1-10", "A1-11", "A1-12", "Over Flow"]
+          { new: true },
         );
         if (result) results.updated++;
         else results.notFound++;
