@@ -167,7 +167,7 @@ router.post("/upload-location", upload.single("file"), async (req, res) => {
       try {
         const result = await Catalog.findOneAndUpdate(
           { partNo },
-          { $set: { location } },
+          { $set: { location: [location] } },
           { new: true }
         );
         if (result) results.updated++;

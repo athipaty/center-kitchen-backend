@@ -20,7 +20,7 @@ const CatalogSchema = new mongoose.Schema(
 
     volumePerMonth: Number,
     qtyPerBox:      Number,   // ← new
-    location:       String,   // ← new (e.g. "A1-02", "Shelf B3")
+    location: [String],
 
     // Specifications
     spec: {
