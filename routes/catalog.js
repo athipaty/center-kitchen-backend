@@ -45,16 +45,15 @@ router.get("/categories", async (req, res) => {
           types: { $addToSet: "$type" },
         },
       },
-      { $sort: { _id: 1 } },
     ]);
 
-    // Clean up — remove empty/null values
     const categories = result
       .filter((r) => r._id)
       .map((r) => ({
         category: r._id,
         types: r.types.filter((t) => t && t !== "").sort(),
-      }));
+      }))
+      .sort((a, b) => b.types.length - a.types.length); // ← most types first
 
     res.json(categories);
   } catch (error) {
