@@ -33,26 +33,22 @@ function parseQty(v) {
 
 // Normalise raw rows into our schema shape
 function normaliseRows(rawRows) {
-  const skip = new Set([
+  const sample = rawRows[0] || {};
+  const skipPatterns = [
     "customer",
-    "Customer",
-    "CUSTOMER",
     "part no",
-    "Part No",
-    "PART NO",
     "partno",
     "part_no",
-    "PartNo",
     "upload date",
-    "Upload Date",
-    "UPLOAD DATE",
     "uploaddate",
     "upload_date",
-  ]);
-  const sample = rawRows[0] || {};
+  ];
+
   const monthKeys = Object.keys(sample).filter(
-    (k) => !skip.has(k.toLowerCase().replace(/\s/g, "")),
+    (k) => !skipPatterns.includes(k.toLowerCase().replace(/\s+/g, "")),
   );
+
+  console.log("Month keys detected:", monthKeys);
 
   return rawRows.map((r) => {
     const customer = r["customer"] || r["Customer"] || r["CUSTOMER"] || "";
