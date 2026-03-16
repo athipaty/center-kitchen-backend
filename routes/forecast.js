@@ -42,13 +42,12 @@ function normaliseRows(rawRows) {
     "upload date",
     "uploaddate",
     "upload_date",
+    "upload",
   ];
 
   const monthKeys = Object.keys(sample).filter(
     (k) => !skipPatterns.includes(k.toLowerCase().replace(/\s+/g, "")),
   );
-
-  console.log("Month keys detected:", monthKeys);
 
   return rawRows.map((r) => {
     const customer = r["customer"] || r["Customer"] || r["CUSTOMER"] || "";
