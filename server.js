@@ -23,6 +23,7 @@ app.use(
       "https://frtstock.vercel.app",
       "https://productportal-jade.vercel.app",
       "https://frtforecast.vercel.app",
+      "https://sgostock.vercel.app",
     ],
     credentials: true,
   }),
