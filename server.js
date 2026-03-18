@@ -35,7 +35,7 @@ app.use(express.json());
 app.use("/orders", require("./routes/orders"));
 app.use("/outlets", require("./routes/outlets"));
 app.use("/sauces", require("./routes/sauces"));
-app.use("/product", require("./routes/product"));
+app.use("/api/products", require("./routes/product"));
 app.use("/inventory", require("./routes/inventory"));
 app.use("/suppliers", require("./routes/suppliers"));
 app.use("/api/milk", require("./routes/milkRoutes"));
