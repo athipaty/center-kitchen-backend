@@ -1,46 +1,54 @@
-require('dotenv').config();
-const mongoose = require('mongoose');
+// migrate.js
+// Run with: node migrate.js
+require("dotenv").config();
+const mongoose = require("mongoose");
 
-const SOURCE_DB = 'test';
-const TARGET_DB = 'centerkitchen';
+mongoose.connect(process.env.MONGO_URI).then(async () => {
+  console.log("✅ Connected to MongoDB");
 
-async function migrate() {
-  // Connect to source
-  const sourceConn = await mongoose.createConnection(
-    process.env.MONGO_URI.replace('/centerkitchen', `/${SOURCE_DB}`)
-  ).asPromise();
+  const db = mongoose.connection.db;
+  const collection = db.collection("products");
 
-  // Connect to target
-  const targetConn = await mongoose.createConnection(
-    process.env.MONGO_URI.replace('/centerkitchen', `/${TARGET_DB}`)
-  ).asPromise();
+  const products = await collection.find({}).toArray();
+  console.log(`Found ${products.length} products`);
 
-  // Get all collections from source
-  const collections = await sourceConn.db.listCollections().toArray();
-  console.log(`Found ${collections.length} collections in ${SOURCE_DB}:`, collections.map(c => c.name));
+  let updated = 0;
 
-  for (const col of collections) {
-    const name = col.name;
-    console.log(`\nMigrating: ${name}...`);
+  for (const product of products) {
+    const changes = {};
 
-    const docs = await sourceConn.db.collection(name).find({}).toArray();
-    console.log(`  Found ${docs.length} documents`);
+    // Fix suppliers: was a single ObjectId, now should be array of strings
+    if (!Array.isArray(product.suppliers)) {
+      changes.suppliers = [];
+    }
 
-    if (docs.length > 0) {
-      await targetConn.db.collection(name).insertMany(docs);
-      console.log(`  ✅ Inserted ${docs.length} documents into ${TARGET_DB}.${name}`);
-    } else {
-      console.log(`  ⚠ Skipped — empty collection`);
+    // Fix price: was missing, default to 0
+    if (product.price === undefined || product.price === null) {
+      changes.price = 0;
+    }
+
+    // Fix imageUrl: was missing, default to ""
+    if (product.imageUrl === undefined) {
+      changes.imageUrl = "";
+    }
+
+    // Remove old supplier field (single ObjectId)
+    const unsetFields = {};
+    if (product.supplier !== undefined) {
+      unsetFields.supplier = "";
+    }
+
+    if (Object.keys(changes).length > 0 || Object.keys(unsetFields).length > 0) {
+      const update = {};
+      if (Object.keys(changes).length > 0) update.$set = changes;
+      if (Object.keys(unsetFields).length > 0) update.$unset = unsetFields;
+
+      await collection.updateOne({ _id: product._id }, update);
+      console.log(`✅ Updated: ${product.name}`);
+      updated++;
     }
   }
 
-  console.log('\n✅ Migration complete!');
-  await sourceConn.close();
-  await targetConn.close();
-  process.exit(0);
-}
-
-migrate().catch(err => {
-  console.error('❌ Migration failed:', err);
-  process.exit(1);
+  console.log(`\nDone! Updated ${updated} / ${products.length} products`);
+  mongoose.disconnect();
 });

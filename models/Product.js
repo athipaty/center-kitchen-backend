@@ -23,6 +23,7 @@ const productSchema = new mongoose.Schema(
       required: [true, "Price is required"],
       min: [0, "Price cannot be negative"],
     },
+    locations: [{ type: String, trim: true }],
     suppliers: [{ type: String, trim: true }],
     imageUrl: {
       type: String,
@@ -30,7 +31,7 @@ const productSchema = new mongoose.Schema(
       default: "",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("Product", productSchema);
