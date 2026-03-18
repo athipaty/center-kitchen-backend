@@ -3,6 +3,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 require("dotenv").config();
+const { startPriceChecker } = require("./jobs/priceChecker");
 
 const app = express();
 
@@ -42,18 +43,21 @@ app.use("/upload", require("./routes/upload"));
 app.use("/count", require("./routes/count"));
 app.use("/catalog", require("./routes/catalog"));
 app.use("/auth", require("./routes/auth"));
-app.use('/api/forecast', require('./routes/forecast'));
+app.use("/api/forecast", require("./routes/forecast"));
+app.use("/api/search", require("./routes/arb_search"));
+app.use("/api/watchlist", require("./routes/arb_watchlist"));
+app.use("/api/monitor", require("./routes/arb_monitor"));
+app.use("/api/compare", require("./routes/arb_ebay_scrape"));
 
 /* =====================
    DATABASE
 ===================== */
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(
-    () => {
-      console.log("✅ Connected to MongoDB");
-    },
-  )
+  .then(() => {
+    console.log("✅ Connected to MongoDB");
+    startPriceChecker(); // 👈 add this line
+  })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 /* =====================
