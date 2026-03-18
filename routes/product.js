@@ -1,42 +1,75 @@
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+const express = require("express");
+const router = express.Router();
+const Product = require("../models/Product");
 
-export const getProducts = async () => {
-  const res = await fetch(`${BASE_URL}/products`);
-  return res.json();
-};
+// GET /api/products
+router.get("/", async (req, res) => {
+  try {
+    const products = await Product.find();
+    res.json(products);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 
-export const createProduct = async (data) => {
-  const res = await fetch(`${BASE_URL}/products`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.message || "Failed to create product");
-  return json;
-};
+// GET /api/products/:id
+router.get("/:id", async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+    res.json(product);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 
-export const updateProduct = async (id, data) => {
-  const res = await fetch(`${BASE_URL}/products/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  return res.json();
-};
+// POST /api/products
+router.post("/", async (req, res) => {
+  try {
+    const product = await Product.create(req.body);
+    res.status(201).json(product);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
 
-export const deleteProduct = async (id) => {
-  const res = await fetch(`${BASE_URL}/products/${id}`, {
-    method: "DELETE",
-  });
-  return res.json();
-};
+// PUT /api/products/:id
+router.put("/:id", async (req, res) => {
+  try {
+    const product = await Product.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true,
+    });
+    if (!product) return res.status(404).json({ message: "Product not found" });
+    res.json(product);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
 
-export const adjustStock = async (id, adjustment) => {
-  const res = await fetch(`${BASE_URL}/products/${id}/stock`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ adjustment }),
-  });
-  return res.json();
-};
+// DELETE /api/products/:id
+router.delete("/:id", async (req, res) => {
+  try {
+    const product = await Product.findByIdAndDelete(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+    res.json({ message: "Product deleted" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// PATCH /api/products/:id/stock
+router.patch("/:id/stock", async (req, res) => {
+  try {
+    const { adjustment } = req.body;
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+    product.stock = Math.max(0, product.stock + adjustment);
+    await product.save();
+    res.json(product);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+module.exports = router;
