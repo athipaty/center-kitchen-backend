@@ -1,5 +1,5 @@
-// migrate-suppliers.js
-// Run with: node migrate-suppliers.js
+// migrate-stock-unit.js
+// Run with: node migrate-stock-unit.js
 require("dotenv").config();
 const mongoose = require("mongoose");
 
@@ -14,32 +14,45 @@ mongoose.connect(process.env.MONGO_URI).then(async () => {
   let updated = 0;
 
   for (const product of products) {
-    const changes = {};
+    const topStock = product.stock ?? 0;
+    const topUnit = product.unit ?? "";
 
-    // Convert suppliers from strings to { name, price } objects
-    if (Array.isArray(product.suppliers)) {
-      const converted = product.suppliers.map((s) => {
-        if (typeof s === "string") return { name: s, price: 0 };
-        if (s.name !== undefined) return s; // already correct shape
-        return { name: String(s), price: 0 };
-      });
-      changes.suppliers = converted;
+    let suppliers = Array.isArray(product.suppliers) ? [...product.suppliers] : [];
+
+    if (suppliers.length === 0) {
+      // No suppliers — create one named "A"
+      suppliers = [{
+        name: "A",
+        price: 0,
+        stock: topStock,
+        unit: topUnit,
+      }];
     } else {
-      changes.suppliers = [];
+      // Move stock + unit into first supplier
+      suppliers[0] = {
+        ...suppliers[0],
+        stock: suppliers[0].stock ?? topStock,
+        unit: suppliers[0].unit ?? topUnit,
+      };
+
+      // Fill remaining suppliers with unit if missing
+      for (let i = 1; i < suppliers.length; i++) {
+        suppliers[i] = {
+          ...suppliers[i],
+          stock: suppliers[i].stock ?? 0,
+          unit: suppliers[i].unit ?? topUnit,
+        };
+      }
     }
 
-    // Move top-level price into first supplier if exists
-    if (product.price !== undefined && changes.suppliers.length > 0) {
-      changes.suppliers[0].price = product.price;
-    }
+    await collection.updateOne(
+      { _id: product._id },
+      {
+        $set: { suppliers },
+        $unset: { stock: "", unit: "" },
+      }
+    );
 
-    // Remove top-level price field
-    const update = {
-      $set: changes,
-      $unset: { price: "" },
-    };
-
-    await collection.updateOne({ _id: product._id }, update);
     console.log(`✅ Updated: ${product.name}`);
     updated++;
   }

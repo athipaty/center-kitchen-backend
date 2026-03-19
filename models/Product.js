@@ -7,21 +7,12 @@ const productSchema = new mongoose.Schema(
       required: [true, "Product name is required"],
       trim: true,
     },
-    stock: {
-      type: Number,
-      required: [true, "Stock quantity is required"],
-      min: [0, "Stock cannot be negative"],
-      default: 0,
-    },
-    unit: {
-      type: String,
-      required: [true, "Unit is required"],
-      trim: true,
-    },
     suppliers: [
       {
-        name: { type: String, trim: true },
+        name: { type: String, trim: true, default: "A" },
         price: { type: Number, default: 0 },
+        stock: { type: Number, default: 0 },
+        unit: { type: String, trim: true, default: "" },
       },
     ],
     locations: [{ type: String, trim: true }],
