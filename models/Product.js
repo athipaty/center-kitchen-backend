@@ -18,20 +18,20 @@ const productSchema = new mongoose.Schema(
       required: [true, "Unit is required"],
       trim: true,
     },
-    price: {
-      type: Number,
-      required: [true, "Price is required"],
-      min: [0, "Price cannot be negative"],
-    },
+    suppliers: [
+      {
+        name: { type: String, trim: true },
+        price: { type: Number, default: 0 },
+      },
+    ],
     locations: [{ type: String, trim: true }],
-    suppliers: [{ type: String, trim: true }],
     imageUrl: {
       type: String,
       trim: true,
       default: "",
     },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
 module.exports = mongoose.model("Product", productSchema);
