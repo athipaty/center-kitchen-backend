@@ -48,7 +48,10 @@ app.use("/api/forecast", require("./routes/forecast"));
 app.use("/api/search", require("./routes/arb_search"));
 app.use("/api/watchlist", require("./routes/arb_watchlist"));
 app.use("/api/monitor", require("./routes/arb_monitor"));
+app.use("/api/scrape", require("./routes/arb_scrape"));
 app.use("/api/compare", require("./routes/arb_ebay_scrape"));
+app.use("/api/ebay-search", require("./routes/arb_ebay_api").router);
+app.use('/api/stock', require('./routes/stock'));
 
 /* =====================
    DATABASE
