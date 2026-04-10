@@ -226,6 +226,7 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
 
       console.log("PO mapped sample:", JSON.stringify(mapped.slice(0, 3)));
       console.log("PO before filter:", mapped.length);
+      console.log('PO all column keys:', Object.keys(rows[0]));
 
       const filtered = mapped.filter((r) => r.partNo && r.qty > 0 && r.date);
       console.log("PO after filter:", filtered.length);
