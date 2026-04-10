@@ -362,15 +362,32 @@ router.get("/calculate", async (req, res) => {
         });
 
       // Calculate running balance week by week
-      let balance = currentQty;
-      let shortageWeek = null;
+      // Find last PO week for this part
+      const poWeeks = Object.keys(poByWeek).sort();
+      const lastPoWeek =
+        poWeeks.length > 0 ? poWeeks[poWeeks.length - 1] : null;
+
       const weeks = weekKeys.map((wk) => {
         const incoming = incomingByWeek[wk] || 0;
         const incomingDetail = incomingDetailByWeek[wk] || [];
-        // Use PO if exists, else forecast
         const hasPO = poByWeek[wk] !== undefined;
-        const demand = hasPO ? poByWeek[wk] || 0 : forecastByWeek[wk] || 0;
-        const demandType = hasPO ? "po" : "forecast";
+
+        let demand = 0;
+        let demandType = "none";
+
+        if (hasPO) {
+          // Always use PO if exists for this week
+          demand = poByWeek[wk] || 0;
+          demandType = "po";
+        } else if (lastPoWeek && wk <= lastPoWeek) {
+          // Forecast is on or before last PO week — cut it off
+          demand = 0;
+          demandType = "none";
+        } else {
+          // Forecast is after last PO week — use it
+          demand = forecastByWeek[wk] || 0;
+          demandType = demand > 0 ? "forecast" : "none";
+        }
 
         balance = balance + incoming - demand;
 
