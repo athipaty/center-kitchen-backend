@@ -9,19 +9,22 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // Parse file helper
 function parseFile(buffer, originalname) {
-  const ext = originalname.split('.').pop().toLowerCase();
+  const ext = originalname.split(".").pop().toLowerCase();
   let rows = [];
-  if (ext === 'csv') {
-    const text = buffer.toString('utf8');
+  if (ext === "csv") {
+    const text = buffer.toString("utf8");
     rows = Papa.parse(text, { header: true, skipEmptyLines: true }).data;
   } else {
-    const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '', raw: false });
+    const wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {
+      defval: "",
+      raw: false,
+    });
   }
   // Trim all column key names
-  return rows.map(row => {
+  return rows.map((row) => {
     const cleaned = {};
-    Object.keys(row).forEach(k => {
+    Object.keys(row).forEach((k) => {
       cleaned[k.trim()] = row[k];
     });
     return cleaned;
@@ -233,7 +236,7 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
 
       console.log("PO mapped sample:", JSON.stringify(mapped.slice(0, 3)));
       console.log("PO before filter:", mapped.length);
-      console.log('PO all column keys:', Object.keys(rows[0]));
+      console.log("PO all column keys:", Object.keys(rows[0]));
 
       const filtered = mapped.filter((r) => r.partNo && r.qty > 0 && r.date);
       console.log("PO after filter:", filtered.length);
@@ -247,9 +250,20 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
       stockData.forecast = rows
         .filter((r) => r && typeof r === "object")
         .map((r) => ({
+          customer: (r["customer"] || r["Customer"] || r["CUSTOMER"] || "")
+            .toString()
+            .trim(),
           partNo: getPartNo(r),
           qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || ""),
-          date: parseDate(r["date"] || r["Date"] || r["DATE"] || ""),
+          date: parseDate(
+            r["delivery_date"] ||
+              r["Delivery Date"] ||
+              r["delivery date"] ||
+              r["date"] ||
+              r["Date"] ||
+              r["DATE"] ||
+              "",
+          ),
         }))
         .filter((r) => r.partNo && r.qty > 0 && r.date);
       console.log("Forecast saved:", stockData.forecast.length);

@@ -43,6 +43,7 @@ const StockDataSchema = new mongoose.Schema({
   // Forecast (soft demand)
   forecast: [
     {
+      customer: String,
       partNo: String,
       qty: Number,
       date: Date,
