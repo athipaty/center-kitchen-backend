@@ -33,6 +33,7 @@ const StockDataSchema = new mongoose.Schema({
   // PO confirmed (firm demand)
   poConfirmed: [
     {
+      customer: String,
       partNo: String,
       qty: Number,
       date: Date,

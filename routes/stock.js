@@ -29,29 +29,48 @@ function parseQty(v) {
 function parseDate(v) {
   if (!v) return null;
   const str = String(v).trim();
+  console.log("parseDate input:", str);
 
-  // Handle YY-MM-DD or YY/MM/DD format (e.g. 26-03-30)
-  const yymmdd = str.match(/^(\d{2})[-/](\d{2})[-/](\d{2})$/);
+  // Handle YY-MM-DD format e.g. 26-03-30
+  const yymmdd = str.match(/^(\d{2})-(\d{2})-(\d{2})$/);
   if (yymmdd) {
     const [, yy, mm, dd] = yymmdd;
-    return new Date(`20${yy}-${mm}-${dd}`);
+    const result = new Date(`20${yy}-${mm}-${dd}`);
+    console.log("parseDate YY-MM-DD result:", result);
+    return isNaN(result) ? null : result;
   }
 
-  // Handle DD-MM-YYYY or DD/MM/YYYY format
-  const ddmmyyyy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  // Handle YY/MM/DD format
+  const yymmddSlash = str.match(/^(\d{2})\/(\d{2})\/(\d{2})$/);
+  if (yymmddSlash) {
+    const [, yy, mm, dd] = yymmddSlash;
+    const result = new Date(`20${yy}-${mm}-${dd}`);
+    console.log("parseDate YY/MM/DD result:", result);
+    return isNaN(result) ? null : result;
+  }
+
+  // Handle DD/MM/YYYY
+  const ddmmyyyy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (ddmmyyyy) {
     const [, dd, mm, yyyy] = ddmmyyyy;
-    return new Date(`${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`);
+    const result = new Date(
+      `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`,
+    );
+    console.log("parseDate DD/MM/YYYY result:", result);
+    return isNaN(result) ? null : result;
   }
 
-  // Handle Excel serial number
-  if (!isNaN(str)) {
+  // Excel serial number
+  if (!isNaN(str) && str.length > 3) {
     const excelDate = new Date((parseInt(str) - 25569) * 86400 * 1000);
-    if (!isNaN(excelDate)) return excelDate;
+    if (!isNaN(excelDate)) {
+      console.log("parseDate Excel serial result:", excelDate);
+      return excelDate;
+    }
   }
 
-  // Default
   const d = new Date(str);
+  console.log("parseDate fallback result:", d);
   return isNaN(d) ? null : d;
 }
 
@@ -216,23 +235,39 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
 
       stockData.incomingStock = filtered;
     } else if (type === "po") {
+      console.log("PO sample row:", JSON.stringify(rows[0]));
       stockData.poConfirmed = rows
         .map((r) => {
           const rawPart = (
             r["part_no"] ||
             r["part no"] ||
             r["Part No"] ||
-            Object.values(r)[0] ||
+            r["PART NO"] ||
+            r["partno"] ||
             ""
           )
             .toString()
             .trim();
           const partNo = mapLookup[rawPart.toLowerCase()] || rawPart;
-          return {
-            partNo,
-            qty: parseQty(r["qty"] || r["Qty"] || Object.values(r)[1]),
-            date: parseDate(r["date"] || r["Date"] || Object.values(r)[2]),
-          };
+          const customer = (
+            r["customer"] ||
+            r["Customer"] ||
+            r["CUSTOMER"] ||
+            ""
+          )
+            .toString()
+            .trim();
+          const qty = parseQty(r["qty"] || r["Qty"] || r["QTY"] || "");
+          const date = parseDate(
+            r["delivery_date"] ||
+              r["Delivery Date"] ||
+              r["delivery date"] ||
+              r["date"] ||
+              r["Date"] ||
+              r["DATE"] ||
+              "",
+          );
+          return { customer, partNo, qty, date };
         })
         .filter((r) => r.partNo && r.qty > 0 && r.date);
     } else if (type === "forecast") {
@@ -316,11 +351,18 @@ router.get("/calculate", async (req, res) => {
 
       // PO by week
       const poByWeek = {};
+      const poDetailByWeek = {};
       stockData.poConfirmed
         .filter((r) => r.partNo === partNo)
         .forEach((r) => {
           const wk = weekKey(r.date);
           poByWeek[wk] = (poByWeek[wk] || 0) + r.qty;
+          if (!poDetailByWeek[wk]) poDetailByWeek[wk] = [];
+          poDetailByWeek[wk].push({
+            customer: r.customer,
+            qty: r.qty,
+            date: r.date,
+          });
         });
 
       // Forecast by week
@@ -353,6 +395,7 @@ router.get("/calculate", async (req, res) => {
           incomingDetail,
           demand,
           demandType,
+          poDetail: poDetailByWeek[wk] || [],
           balance: Math.round(balance),
           shortage: balance < 0,
         };
