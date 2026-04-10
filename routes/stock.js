@@ -128,6 +128,7 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
         })
         .filter((r) => r.partNo && r.qty > 0);
     } else if (type === "incoming") {
+      console.log("Incoming sample row:", JSON.stringify(rows[0]));
       stockData.incomingStock = rows
         .map((r) => {
           const rawPart = (
