@@ -133,20 +133,21 @@ router.post("/upload-mapping", upload.single("file"), async (req, res) => {
 });
 
 // POST /api/stock/upload-stock
-router.post('/upload-stock', upload.single('file'), async (req, res) => {
+router.post("/upload-stock", upload.single("file"), async (req, res) => {
   try {
     const rows = parseFile(req.file.buffer, req.file.originalname);
     const { type } = req.body;
 
     console.log(`Upload type: ${type}, rows: ${rows.length}`);
-    console.log('Sample row:', JSON.stringify(rows[0]));
+    console.log("Sample row:", JSON.stringify(rows[0]));
 
     const stockData = await StockData.findOne().sort({ uploadDate: -1 });
-    if (!stockData) return res.status(400).json({ error: 'Upload mapping first' });
+    if (!stockData)
+      return res.status(400).json({ error: "Upload mapping first" });
 
     // Build mapping lookup
     const mapLookup = {};
-    stockData.mapping.forEach(m => {
+    stockData.mapping.forEach((m) => {
       if (m.stockPartNo && m.systemPartNo) {
         mapLookup[m.stockPartNo.toLowerCase().trim()] = m.systemPartNo.trim();
       }
@@ -154,65 +155,111 @@ router.post('/upload-stock', upload.single('file'), async (req, res) => {
 
     function getPartNo(r) {
       const raw = (
-        r['part_no'] || r['part no'] || r['Part No'] ||
-        r['PART NO'] || r['PartNo'] || r['partno'] || ''
-      ).toString().trim();
+        r["part_no"] ||
+        r["part no"] ||
+        r["Part No"] ||
+        r["PART NO"] ||
+        r["PartNo"] ||
+        r["partno"] ||
+        ""
+      )
+        .toString()
+        .trim();
       return mapLookup[raw.toLowerCase()] || raw;
     }
 
-    if (type === 'current') {
+    if (type === "current") {
       stockData.currentStock = rows
-        .filter(r => r && typeof r === 'object')
-        .map(r => ({
+        .filter((r) => r && typeof r === "object")
+        .map((r) => ({
           partNo: getPartNo(r),
-          qty: parseQty(r['qty'] || r['Qty'] || r['QTY'] || r['stock'] || r['Stock'] || ''),
+          qty: parseQty(
+            r["qty"] || r["Qty"] || r["QTY"] || r["stock"] || r["Stock"] || "",
+          ),
         }))
-        .filter(r => r.partNo && r.qty > 0);
-      console.log('Current stock saved:', stockData.currentStock.length);
-
-    } else if (type === 'incoming') {
+        .filter((r) => r.partNo && r.qty > 0);
+      console.log("Current stock saved:", stockData.currentStock.length);
+    } else if (type === "incoming") {
       stockData.incomingStock = rows
-        .filter(r => r && typeof r === 'object')
-        .map(r => ({
+        .filter((r) => r && typeof r === "object")
+        .map((r) => ({
           partNo: getPartNo(r),
-          invoiceNo: (r['invoice_no'] || r['invoice no'] || r['Invoice No'] || r['INVOICE NO'] || '').toString().trim(),
-          poNo: (r['po_no'] || r['po no'] || r['PO No'] || r['PO NO'] || '').toString().trim(),
-          qty: parseQty(r['qty'] || r['Qty'] || r['QTY'] || ''),
-          date: parseDate(r['eta'] || r['ETA'] || r['date'] || r['Date'] || r['DATE'] || ''),
+          invoiceNo: (
+            r["invoice_no"] ||
+            r["invoice no"] ||
+            r["Invoice No"] ||
+            r["INVOICE NO"] ||
+            ""
+          )
+            .toString()
+            .trim(),
+          poNo: (r["po_no"] || r["po no"] || r["PO No"] || r["PO NO"] || "")
+            .toString()
+            .trim(),
+          qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || ""),
+          date: parseDate(
+            r["eta"] || r["ETA"] || r["date"] || r["Date"] || r["DATE"] || "",
+          ),
         }))
-        .filter(r => r.partNo && r.qty > 0 && r.date);
-      console.log('Incoming stock saved:', stockData.incomingStock.length);
-
-    } else if (type === 'po') {
-      stockData.poConfirmed = rows
-        .filter(r => r && typeof r === 'object')
-        .map(r => ({
-          customer: (r['customer'] || r['Customer'] || r['CUSTOMER'] || '').toString().trim(),
+        .filter((r) => r.partNo && r.qty > 0 && r.date);
+      console.log("Incoming stock saved:", stockData.incomingStock.length);
+    } else if (type === "po") {
+      console.log("PO sample row:", JSON.stringify(rows[0]));
+      const mapped = rows
+        .filter((r) => r && typeof r === "object")
+        .map((r) => ({
+          customer: (r["customer"] || r["Customer"] || r["CUSTOMER"] || "")
+            .toString()
+            .trim(),
           partNo: getPartNo(r),
-          qty: parseQty(r['qty'] || r['Qty'] || r['QTY'] || ''),
-          date: parseDate(r['delivery_date'] || r['Delivery Date'] || r['delivery date'] || r['date'] || r['Date'] || r['DATE'] || ''),
-        }))
-        .filter(r => r.partNo && r.qty > 0 && r.date);
-      console.log('PO saved:', stockData.poConfirmed.length);
+          qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || ""),
+          date: parseDate(
+            r["delivery_date"] ||
+              r["Delivery Date"] ||
+              r["delivery date"] ||
+              r["date"] ||
+              r["Date"] ||
+              r["DATE"] ||
+              "",
+          ),
+        }));
 
-    } else if (type === 'forecast') {
+      console.log("PO mapped sample:", JSON.stringify(mapped.slice(0, 3)));
+      console.log("PO before filter:", mapped.length);
+
+      const filtered = mapped.filter((r) => r.partNo && r.qty > 0 && r.date);
+      console.log("PO after filter:", filtered.length);
+
+      // Show what got rejected
+      const rejected = mapped.filter((r) => !r.partNo || !r.qty || !r.date);
+      console.log("PO rejected sample:", JSON.stringify(rejected.slice(0, 3)));
+
+      stockData.poConfirmed = filtered;
+    } else if (type === "forecast") {
       stockData.forecast = rows
-        .filter(r => r && typeof r === 'object')
-        .map(r => ({
+        .filter((r) => r && typeof r === "object")
+        .map((r) => ({
           partNo: getPartNo(r),
-          qty: parseQty(r['qty'] || r['Qty'] || r['QTY'] || ''),
-          date: parseDate(r['date'] || r['Date'] || r['DATE'] || ''),
+          qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || ""),
+          date: parseDate(r["date"] || r["Date"] || r["DATE"] || ""),
         }))
-        .filter(r => r.partNo && r.qty > 0 && r.date);
-      console.log('Forecast saved:', stockData.forecast.length);
+        .filter((r) => r.partNo && r.qty > 0 && r.date);
+      console.log("Forecast saved:", stockData.forecast.length);
     }
 
-    stockData.markModified(type === 'current' ? 'currentStock' : type === 'incoming' ? 'incomingStock' : type === 'po' ? 'poConfirmed' : 'forecast');
+    stockData.markModified(
+      type === "current"
+        ? "currentStock"
+        : type === "incoming"
+          ? "incomingStock"
+          : type === "po"
+            ? "poConfirmed"
+            : "forecast",
+    );
     await stockData.save();
     res.json({ message: `${type} uploaded`, id: stockData._id });
-
   } catch (err) {
-    console.error('Upload error:', err);
+    console.error("Upload error:", err);
     res.status(500).json({ error: err.message });
   }
 });
