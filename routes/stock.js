@@ -28,7 +28,30 @@ function parseQty(v) {
 
 function parseDate(v) {
   if (!v) return null;
-  const d = new Date(v);
+  const str = String(v).trim();
+
+  // Handle YY-MM-DD or YY/MM/DD format (e.g. 26-03-30)
+  const yymmdd = str.match(/^(\d{2})[-/](\d{2})[-/](\d{2})$/);
+  if (yymmdd) {
+    const [, yy, mm, dd] = yymmdd;
+    return new Date(`20${yy}-${mm}-${dd}`);
+  }
+
+  // Handle DD-MM-YYYY or DD/MM/YYYY format
+  const ddmmyyyy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (ddmmyyyy) {
+    const [, dd, mm, yyyy] = ddmmyyyy;
+    return new Date(`${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`);
+  }
+
+  // Handle Excel serial number
+  if (!isNaN(str)) {
+    const excelDate = new Date((parseInt(str) - 25569) * 86400 * 1000);
+    if (!isNaN(excelDate)) return excelDate;
+  }
+
+  // Default
+  const d = new Date(str);
   return isNaN(d) ? null : d;
 }
 
@@ -129,45 +152,69 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
         .filter((r) => r.partNo && r.qty > 0);
     } else if (type === "incoming") {
       console.log("Incoming sample row:", JSON.stringify(rows[0]));
-      stockData.incomingStock = rows
-        .map((r) => {
-          const rawPart = (
-            r["part_no"] ||
-            r["part no"] ||
-            r["Part No"] ||
-            r["PART NO"] ||
-            r["partno"] ||
+      console.log("Total rows:", rows.length);
+
+      const parsed = rows.map((r, idx) => {
+        const rawPart = (
+          r["part_no"] ||
+          r["part no"] ||
+          r["Part No"] ||
+          r["PART NO"] ||
+          r["partno"] ||
+          ""
+        )
+          .toString()
+          .trim();
+        const partNo = mapLookup[rawPart.toLowerCase()] || rawPart;
+        const qty = parseQty(r["qty"] || r["Qty"] || r["QTY"] || "");
+        const date = parseDate(
+          r["eta"] ||
+            r["ETA"] ||
+            r["arrival_date"] ||
+            r["date"] ||
+            r["Date"] ||
+            "",
+        );
+
+        if (idx < 3) {
+          console.log(
+            `Row ${idx}: rawPart=${rawPart}, partNo=${partNo}, qty=${qty}, date=${date}, eta_raw=${r["eta"]}`,
+          );
+        }
+
+        return {
+          partNo,
+          invoiceNo: (
+            r["invoice_no"] ||
+            r["invoice no"] ||
+            r["Invoice No"] ||
+            r["INVOICE NO"] ||
             ""
           )
             .toString()
-            .trim();
-          const partNo = mapLookup[rawPart.toLowerCase()] || rawPart;
-          return {
-            partNo,
-            invoiceNo: (
-              r["invoice_no"] ||
-              r["invoice no"] ||
-              r["Invoice No"] ||
-              r["INVOICE NO"] ||
-              ""
-            )
-              .toString()
-              .trim(),
-            poNo: (r["po_no"] || r["po no"] || r["PO No"] || r["PO NO"] || "")
-              .toString()
-              .trim(),
-            qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || ""),
-            date: parseDate(
-              r["eta"] ||
-                r["ETA"] ||
-                r["arrival_date"] ||
-                r["date"] ||
-                r["Date"] ||
-                "",
-            ),
-          };
-        })
-        .filter((r) => r.partNo && r.qty > 0 && r.date);
+            .trim(),
+          poNo: (r["po_no"] || r["po no"] || r["PO No"] || r["PO NO"] || "")
+            .toString()
+            .trim(),
+          qty,
+          date,
+        };
+      });
+
+      console.log("Parsed count before filter:", parsed.length);
+      const filtered = parsed.filter((r) => r.partNo && r.qty > 0 && r.date);
+      console.log("Filtered count after filter:", filtered.length);
+
+      // Show what got filtered out
+      const rejected = parsed.filter((r) => !r.partNo || !r.qty || !r.date);
+      if (rejected.length > 0) {
+        console.log(
+          "Rejected rows sample:",
+          JSON.stringify(rejected.slice(0, 3)),
+        );
+      }
+
+      stockData.incomingStock = filtered;
     } else if (type === "po") {
       stockData.poConfirmed = rows
         .map((r) => {
