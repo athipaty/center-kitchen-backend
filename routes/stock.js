@@ -9,16 +9,23 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // Parse file helper
 function parseFile(buffer, originalname) {
-  const ext = originalname.split(".").pop().toLowerCase();
-  if (ext === "csv") {
-    const text = buffer.toString("utf8");
-    return Papa.parse(text, { header: true, skipEmptyLines: true }).data;
+  const ext = originalname.split('.').pop().toLowerCase();
+  let rows = [];
+  if (ext === 'csv') {
+    const text = buffer.toString('utf8');
+    rows = Papa.parse(text, { header: true, skipEmptyLines: true }).data;
   } else {
-    const wb = XLSX.read(buffer, { type: "buffer" });
-    return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {
-      defval: "",
-    });
+    const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '', raw: false });
   }
+  // Trim all column key names
+  return rows.map(row => {
+    const cleaned = {};
+    Object.keys(row).forEach(k => {
+      cleaned[k.trim()] = row[k];
+    });
+    return cleaned;
+  });
 }
 
 function parseQty(v) {
