@@ -176,11 +176,21 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
     const mapLookup = {};
     stockData.mapping.forEach((m) => {
       if (m.stockPartNo && m.systemPartNo) {
-        mapLookup[m.stockPartNo.toLowerCase().trim()] = m.systemPartNo.trim();
+        mapLookup[cleanPartNo(m.stockPartNo)] = m.systemPartNo.trim();
       }
     });
 
     console.log(`Mapping lookup has ${Object.keys(mapLookup).length} entries`);
+
+    function cleanPartNo(str) {
+      return str
+        .toString()
+        .trim()
+        .replace(/,/g, "")
+        .replace(/\u00A0/g, "")
+        .replace(/[\u200B-\u200D\uFEFF]/g, "")
+        .toLowerCase();
+    }
 
     function getPartNo(r) {
       const raw = (
@@ -193,11 +203,12 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
         ""
       )
         .toString()
-        .trim();
-      const mapped = mapLookup[raw.toLowerCase()];
-      if (!mapped && raw) {
-        // log only first few unmapped
-      }
+        .trim()
+        .replace(/,/g, "")
+        .replace(/\u00A0/g, "")
+        .replace(/[\u200B-\u200D\uFEFF]/g, "");
+
+      const mapped = mapLookup[cleanPartNo(raw)];
       return mapped || raw;
     }
 
