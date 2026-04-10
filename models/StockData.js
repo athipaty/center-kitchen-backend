@@ -1,54 +1,29 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
 const StockDataSchema = new mongoose.Schema({
   uploadDate: { type: Date, default: Date.now },
-
-  // Part number mapping
-  mapping: [
-    {
-      stockPartNo: String,
-      systemPartNo: String,
-    },
-  ],
-
-  // Current stock
-  currentStock: [
-    {
-      partNo: String, // system part no (after mapping)
-      qty: Number,
-    },
-  ],
-
-  // Incoming stock (supply)
-  incomingStock: [
-    {
-      partNo: String,
-      invoiceNo: String,
-      poNo: String,
-      qty: Number,
-      date: Date,
-    },
-  ],
-
-  // PO confirmed (firm demand)
-  poConfirmed: [
-    {
-      customer: String,
-      partNo: String,
-      qty: Number,
-      date: Date,
-    },
-  ],
-
-  // Forecast (soft demand)
-  forecast: [
-    {
-      customer: String,
-      partNo: String,
-      qty: Number,
-      date: Date,
-    },
-  ],
+  mapping: [{ stockPartNo: String, systemPartNo: String }],
+  currentStock: [{ partNo: String, qty: Number }],
+  incomingStock: [{
+    partNo: String,
+    invoiceNo: String,
+    poNo: String,
+    qty: Number,
+    date: Date,
+  }],
+  poConfirmed: [{
+    customer: String,
+    partNo: String,
+    qty: Number,
+    date: Date,
+  }],
+  forecast: [{
+    customer: String,
+    partNo: String,
+    qty: Number,
+    date: Date,
+  }],
+  excludedParts: [{ partNo: String }],
 });
 
-module.exports = mongoose.model("StockData", StockDataSchema);
+module.exports = mongoose.model('StockData', StockDataSchema);

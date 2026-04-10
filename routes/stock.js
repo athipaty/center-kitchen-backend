@@ -45,13 +45,11 @@ function parseDate(v) {
   const str = String(v).trim();
   if (!str) return null;
 
-  // Pure 5-digit number — Excel serial
   if (/^\d{5}$/.test(str)) {
     const excelDate = new Date((parseInt(str) - 25569) * 86400 * 1000);
     return isNaN(excelDate) ? null : excelDate;
   }
 
-  // YY-MM-DD e.g. 26-03-30
   const yymmdd = str.match(/^(\d{2})-(\d{2})-(\d{2})$/);
   if (yymmdd) {
     const [, yy, mm, dd] = yymmdd;
@@ -59,7 +57,6 @@ function parseDate(v) {
     return isNaN(result) ? null : result;
   }
 
-  // YY/MM/DD
   const yymmddSlash = str.match(/^(\d{2})\/(\d{2})\/(\d{2})$/);
   if (yymmddSlash) {
     const [, yy, mm, dd] = yymmddSlash;
@@ -67,30 +64,23 @@ function parseDate(v) {
     return isNaN(result) ? null : result;
   }
 
-  // YYYY-MM-DD
   const yyyymmdd = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (yyyymmdd) {
     const result = new Date(str);
     return isNaN(result) ? null : result;
   }
 
-  // DD/MM/YYYY
   const ddmmyyyy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (ddmmyyyy) {
     const [, dd, mm, yyyy] = ddmmyyyy;
-    const result = new Date(
-      `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`,
-    );
+    const result = new Date(`${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`);
     return isNaN(result) ? null : result;
   }
 
-  // DD-MM-YYYY
   const ddmmyyyy2 = str.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
   if (ddmmyyyy2) {
     const [, dd, mm, yyyy] = ddmmyyyy2;
-    const result = new Date(
-      `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`,
-    );
+    const result = new Date(`${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`);
     return isNaN(result) ? null : result;
   }
 
@@ -112,6 +102,35 @@ function weekKey(date) {
   return d.toISOString().split("T")[0];
 }
 
+// Clean part number — remove commas, hidden chars, lowercase
+function cleanPartNo(str) {
+  return str.toString().trim()
+    .replace(/,/g, "")
+    .replace(/\u00A0/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .toLowerCase();
+}
+
+// Build map lookup from stockData
+function buildMapLookup(stockData) {
+  const mapLookup = {};
+  stockData.mapping.forEach((m) => {
+    if (m.stockPartNo && m.systemPartNo) {
+      mapLookup[cleanPartNo(m.stockPartNo)] = m.systemPartNo.trim();
+    }
+  });
+  return mapLookup;
+}
+
+// Get system part no from raw value using mapping
+function getPartNoFromRaw(raw, mapLookup) {
+  const cleaned = raw.toString().trim()
+    .replace(/,/g, "")
+    .replace(/\u00A0/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "");
+  return mapLookup[cleanPartNo(cleaned)] || cleaned;
+}
+
 // POST /api/stock/upload-mapping
 router.post("/upload-mapping", upload.single("file"), async (req, res) => {
   try {
@@ -120,41 +139,61 @@ router.post("/upload-mapping", upload.single("file"), async (req, res) => {
       .filter((r) => r && typeof r === "object")
       .map((r) => ({
         stockPartNo: (
-          r["stock_part_no"] ||
-          r["Stock Part No"] ||
-          r["stock part no"] ||
-          Object.values(r)[0] ||
-          ""
-        )
-          .toString()
-          .trim(),
+          r["stock_part_no"] || r["Stock Part No"] || r["stock part no"] ||
+          Object.values(r)[0] || ""
+        ).toString().trim(),
         systemPartNo: (
-          r["system_part_no"] ||
-          r["System Part No"] ||
-          r["system part no"] ||
-          Object.values(r)[1] ||
-          ""
-        )
-          .toString()
-          .trim(),
+          r["system_part_no"] || r["System Part No"] || r["system part no"] ||
+          Object.values(r)[1] || ""
+        ).toString().trim(),
       }))
       .filter((m) => m.stockPartNo && m.systemPartNo);
 
     console.log(`Mapping uploaded: ${mapping.length} entries`);
-    console.log("Sample mapping:", JSON.stringify(mapping.slice(0, 3)));
 
     let stockData = await StockData.findOne().sort({ uploadDate: -1 });
     if (!stockData) stockData = new StockData();
     stockData.mapping = mapping;
     await stockData.save();
 
-    res.json({
-      message: "Mapping uploaded",
-      count: mapping.length,
-      id: stockData._id,
-    });
+    res.json({ message: "Mapping uploaded", count: mapping.length, id: stockData._id });
   } catch (err) {
     console.error("Mapping upload error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/stock/upload-exclusions
+router.post("/upload-exclusions", upload.single("file"), async (req, res) => {
+  try {
+    const rows = parseFile(req.file.buffer, req.file.originalname);
+    const stockData = await StockData.findOne().sort({ uploadDate: -1 });
+    if (!stockData) return res.status(400).json({ error: "Upload mapping first" });
+
+    const mapLookup = buildMapLookup(stockData);
+
+    const excluded = rows
+      .filter((r) => r && typeof r === "object")
+      .map((r) => {
+        const raw = (
+          r["part_no"] || r["part no"] || r["Part No"] ||
+          r["PART NO"] || r["partno"] || Object.values(r)[0] || ""
+        ).toString().trim().replace(/,/g, "");
+        const partNo = getPartNoFromRaw(raw, mapLookup);
+        return { partNo };
+      })
+      .filter((r) => r.partNo);
+
+    console.log(`Exclusions uploaded: ${excluded.length} parts`);
+    console.log("Sample excluded:", JSON.stringify(excluded.slice(0, 3)));
+
+    stockData.excludedParts = excluded;
+    stockData.markModified("excludedParts");
+    await stockData.save();
+
+    res.json({ message: "Exclusions uploaded", count: excluded.length });
+  } catch (err) {
+    console.error("Exclusion upload error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -169,169 +208,80 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
     console.log("Sample row:", JSON.stringify(rows[0]));
 
     const stockData = await StockData.findOne().sort({ uploadDate: -1 });
-    if (!stockData)
-      return res.status(400).json({ error: "Upload mapping first" });
+    if (!stockData) return res.status(400).json({ error: "Upload mapping first" });
 
-    // Build mapping lookup
-    const mapLookup = {};
-    stockData.mapping.forEach((m) => {
-      if (m.stockPartNo && m.systemPartNo) {
-        mapLookup[cleanPartNo(m.stockPartNo)] = m.systemPartNo.trim();
-      }
-    });
-
+    const mapLookup = buildMapLookup(stockData);
     console.log(`Mapping lookup has ${Object.keys(mapLookup).length} entries`);
-
-    function cleanPartNo(str) {
-      return str
-        .toString()
-        .trim()
-        .replace(/,/g, "")
-        .replace(/\u00A0/g, "")
-        .replace(/[\u200B-\u200D\uFEFF]/g, "")
-        .toLowerCase();
-    }
 
     function getPartNo(r) {
       const raw = (
-        r["part_no"] ||
-        r["part no"] ||
-        r["Part No"] ||
-        r["PART NO"] ||
-        r["PartNo"] ||
-        r["partno"] ||
-        ""
-      )
-        .toString()
-        .trim()
-        .replace(/,/g, "")
-        .replace(/\u00A0/g, "")
-        .replace(/[\u200B-\u200D\uFEFF]/g, "");
-
-      const mapped = mapLookup[cleanPartNo(raw)];
-      return mapped || raw;
+        r["part_no"] || r["part no"] || r["Part No"] ||
+        r["PART NO"] || r["PartNo"] || r["partno"] || ""
+      ).toString();
+      return getPartNoFromRaw(raw, mapLookup);
     }
 
     if (type === "current") {
       console.log("Current stock columns:", Object.keys(rows[0]));
-      console.log("Current stock sample:", JSON.stringify(rows[0]));
       stockData.currentStock = rows
         .filter((r) => r && typeof r === "object")
         .map((r) => ({
           partNo: getPartNo(r),
-          qty: parseQty(
-            r["qty"] || r["Qty"] || r["QTY"] || r["stock"] || r["Stock"] || "",
-          ),
+          qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || r["stock"] || r["Stock"] || ""),
         }))
         .filter((r) => r.partNo && r.qty > 0);
       console.log("Current stock saved:", stockData.currentStock.length);
+
     } else if (type === "incoming") {
       stockData.incomingStock = rows
         .filter((r) => r && typeof r === "object")
         .map((r) => ({
           partNo: getPartNo(r),
-          invoiceNo: (
-            r["invoice_no"] ||
-            r["invoice no"] ||
-            r["Invoice No"] ||
-            r["INVOICE NO"] ||
-            ""
-          )
-            .toString()
-            .trim(),
-          poNo: (r["po_no"] || r["po no"] || r["PO No"] || r["PO NO"] || "")
-            .toString()
-            .trim(),
+          invoiceNo: (r["invoice_no"] || r["invoice no"] || r["Invoice No"] || r["INVOICE NO"] || "").toString().trim(),
+          poNo: (r["po_no"] || r["po no"] || r["PO No"] || r["PO NO"] || "").toString().trim(),
           qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || ""),
-          date: parseDate(
-            r["eta"] || r["ETA"] || r["date"] || r["Date"] || r["DATE"] || "",
-          ),
+          date: parseDate(r["eta"] || r["ETA"] || r["date"] || r["Date"] || r["DATE"] || ""),
         }))
         .filter((r) => r.partNo && r.qty > 0 && r.date);
       console.log("Incoming stock saved:", stockData.incomingStock.length);
+
     } else if (type === "po") {
       console.log("PO sample row:", JSON.stringify(rows[0]));
       console.log("PO all column keys:", Object.keys(rows[0]));
 
-      // Debug 9M parts
-      const sample9M = rows.find((r) => {
-        const raw = (r["part_no"] || r["part no"] || r["Part No"] || "")
-          .toString()
-          .trim();
-        return raw.includes("9M");
-      });
-      if (sample9M) {
-        const raw9M = (
-          sample9M["part_no"] ||
-          sample9M["part no"] ||
-          sample9M["Part No"] ||
-          ""
-        )
-          .toString()
-          .trim();
-        console.log("Sample 9M row:", JSON.stringify(sample9M));
-        console.log("9M raw part:", raw9M);
-        console.log(
-          "9M in mapping?",
-          mapLookup[raw9M.toLowerCase()] || "NOT FOUND",
-        );
-        console.log(
-          "Mapping keys with 9m:",
-          Object.keys(mapLookup).filter((k) => k.includes("9m")),
-        );
-      }
-
       const mapped = rows
         .filter((r) => r && typeof r === "object")
         .map((r) => ({
-          customer: (r["customer"] || r["Customer"] || r["CUSTOMER"] || "")
-            .toString()
-            .trim(),
+          customer: (r["customer"] || r["Customer"] || r["CUSTOMER"] || "").toString().trim(),
           partNo: getPartNo(r),
           qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || ""),
           date: parseDate(
-            r["delivery_date"] ||
-              r["Delivery Date"] ||
-              r["delivery date"] ||
-              r["date"] ||
-              r["Date"] ||
-              r["DATE"] ||
-              "",
+            r["delivery_date"] || r["Delivery Date"] || r["delivery date"] ||
+            r["date"] || r["Date"] || r["DATE"] || ""
           ),
         }));
 
-      console.log("PO mapped sample:", JSON.stringify(mapped.slice(0, 3)));
       console.log("PO before filter:", mapped.length);
-
       const filtered = mapped.filter((r) => r.partNo && r.qty > 0 && r.date);
       console.log("PO after filter:", filtered.length);
 
       const rejected = mapped.filter((r) => !r.partNo || !r.qty || !r.date);
       if (rejected.length > 0) {
-        console.log(
-          "PO rejected sample:",
-          JSON.stringify(rejected.slice(0, 3)),
-        );
+        console.log("PO rejected sample:", JSON.stringify(rejected.slice(0, 3)));
       }
 
       stockData.poConfirmed = filtered;
+
     } else if (type === "forecast") {
       stockData.forecast = rows
         .filter((r) => r && typeof r === "object")
         .map((r) => ({
-          customer: (r["customer"] || r["Customer"] || r["CUSTOMER"] || "")
-            .toString()
-            .trim(),
+          customer: (r["customer"] || r["Customer"] || r["CUSTOMER"] || "").toString().trim(),
           partNo: getPartNo(r),
           qty: parseQty(r["qty"] || r["Qty"] || r["QTY"] || ""),
           date: parseDate(
-            r["delivery_date"] ||
-              r["Delivery Date"] ||
-              r["delivery date"] ||
-              r["date"] ||
-              r["Date"] ||
-              r["DATE"] ||
-              "",
+            r["delivery_date"] || r["Delivery Date"] || r["delivery date"] ||
+            r["date"] || r["Date"] || r["DATE"] || ""
           ),
         }))
         .filter((r) => r.partNo && r.qty > 0 && r.date);
@@ -339,16 +289,13 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
     }
 
     stockData.markModified(
-      type === "current"
-        ? "currentStock"
-        : type === "incoming"
-          ? "incomingStock"
-          : type === "po"
-            ? "poConfirmed"
-            : "forecast",
+      type === "current" ? "currentStock" :
+      type === "incoming" ? "incomingStock" :
+      type === "po" ? "poConfirmed" : "forecast"
     );
     await stockData.save();
     res.json({ message: `${type} uploaded`, id: stockData._id });
+
   } catch (err) {
     console.error("Upload error:", err);
     res.status(500).json({ error: err.message });
@@ -359,8 +306,13 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
 router.get("/calculate", async (req, res) => {
   try {
     const stockData = await StockData.findOne().sort({ uploadDate: -1 });
-    if (!stockData)
-      return res.status(404).json({ error: "No stock data found" });
+    if (!stockData) return res.status(404).json({ error: "No stock data found" });
+
+    // Build exclusion set
+    const excludedSet = new Set(
+      (stockData.excludedParts || []).map((r) => r.partNo)
+    );
+    console.log(`Excluded parts: ${excludedSet.size}`);
 
     const allParts = [
       ...new Set([
@@ -369,7 +321,9 @@ router.get("/calculate", async (req, res) => {
         ...stockData.poConfirmed.map((r) => r.partNo),
         ...stockData.forecast.map((r) => r.partNo),
       ]),
-    ];
+    ].filter((p) => !excludedSet.has(p));
+
+    console.log(`Total parts after exclusion: ${allParts.length}`);
 
     const allDates = [
       ...stockData.incomingStock.map((r) => r.date),
@@ -426,10 +380,8 @@ router.get("/calculate", async (req, res) => {
       let balance = currentQty;
       let shortageWeek = null;
 
-      // Find last PO week for this part
       const poWeeks = Object.keys(poByWeek).sort();
-      const lastPoWeek =
-        poWeeks.length > 0 ? poWeeks[poWeeks.length - 1] : null;
+      const lastPoWeek = poWeeks.length > 0 ? poWeeks[poWeeks.length - 1] : null;
 
       const weeks = weekKeys.map((wk) => {
         const incoming = incomingByWeek[wk] || 0;
@@ -443,17 +395,14 @@ router.get("/calculate", async (req, res) => {
           demand = poByWeek[wk] || 0;
           demandType = "po";
         } else if (lastPoWeek && wk <= lastPoWeek) {
-          // Forecast on or before last PO week — cut off
           demand = 0;
           demandType = "none";
         } else {
-          // Forecast after last PO week — use it
           demand = forecastByWeek[wk] || 0;
           demandType = demand > 0 ? "forecast" : "none";
         }
 
         balance = balance + incoming - demand;
-
         if (balance < 0 && !shortageWeek) shortageWeek = wk;
 
         return {
@@ -472,16 +421,13 @@ router.get("/calculate", async (req, res) => {
         partNo,
         currentStock: currentQty,
         shortageWeek,
-        weeksUntilShortage: shortageWeek
-          ? weekKeys.indexOf(shortageWeek)
-          : null,
+        weeksUntilShortage: shortageWeek ? weekKeys.indexOf(shortageWeek) : null,
         weeks,
       };
     });
 
     results.sort((a, b) => {
-      if (a.shortageWeek && b.shortageWeek)
-        return a.shortageWeek.localeCompare(b.shortageWeek);
+      if (a.shortageWeek && b.shortageWeek) return a.shortageWeek.localeCompare(b.shortageWeek);
       if (a.shortageWeek) return -1;
       if (b.shortageWeek) return 1;
       return 0;
@@ -506,6 +452,7 @@ router.get("/status", async (req, res) => {
       incomingStock: stockData.incomingStock.length,
       poConfirmed: stockData.poConfirmed.length,
       forecast: stockData.forecast.length,
+      excludedParts: (stockData.excludedParts || []).length,
       uploadDate: stockData.uploadDate,
     });
   } catch (err) {
