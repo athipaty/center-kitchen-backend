@@ -87,15 +87,20 @@ router.post('/upload-stock', upload.single('file'), async (req, res) => {
       }).filter(r => r.partNo && r.qty > 0);
 
     } else if (type === 'incoming') {
-      stockData.incomingStock = rows.map(r => {
-        const rawPart = (r['part_no'] || r['part no'] || r['Part No'] || Object.values(r)[0] || '').toString().trim();
-        const partNo = mapLookup[rawPart.toLowerCase()] || rawPart;
-        return {
-          partNo,
-          qty: parseQty(r['qty'] || r['Qty'] || Object.values(r)[1]),
-          date: parseDate(r['date'] || r['Date'] || Object.values(r)[2]),
-        };
-      }).filter(r => r.partNo && r.qty > 0 && r.date);
+  stockData.incomingStock = rows.map(r => {
+    const rawPart = (
+      r['part_no'] || r['part no'] || r['Part No'] ||
+      r['PART NO'] || r['partno'] || ''
+    ).toString().trim();
+    const partNo = mapLookup[rawPart.toLowerCase()] || rawPart;
+    return {
+      partNo,
+      invoiceNo: (r['invoice_no'] || r['invoice no'] || r['Invoice No'] || r['INVOICE NO'] || '').toString().trim(),
+      poNo: (r['po_no'] || r['po no'] || r['PO No'] || r['PO NO'] || '').toString().trim(),
+      qty: parseQty(r['qty'] || r['Qty'] || r['QTY'] || ''),
+      date: parseDate(r['eta'] || r['ETA'] || r['arrival_date'] || r['date'] || r['Date'] || ''),
+    };
+  }).filter(r => r.partNo && r.qty > 0 && r.date);
 
     } else if (type === 'po') {
       stockData.poConfirmed = rows.map(r => {
