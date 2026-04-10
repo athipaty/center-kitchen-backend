@@ -302,6 +302,7 @@ router.get("/calculate", async (req, res) => {
         return {
           week: wk,
           incoming,
+          incomingDetail,
           demand,
           demandType,
           balance: Math.round(balance),
