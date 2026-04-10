@@ -238,36 +238,24 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
       console.log("PO sample row:", JSON.stringify(rows[0]));
       stockData.poConfirmed = rows
         .map((r) => {
-          const rawPart = (
-            r["part_no"] ||
-            r["part no"] ||
-            r["Part No"] ||
-            r["PART NO"] ||
-            r["partno"] ||
-            ""
-          )
-            .toString()
-            .trim();
-          const partNo = mapLookup[rawPart.toLowerCase()] || rawPart;
-          const customer = (
-            r["customer"] ||
-            r["Customer"] ||
-            r["CUSTOMER"] ||
-            ""
-          )
-            .toString()
-            .trim();
-          const qty = parseQty(r["qty"] || r["Qty"] || r["QTY"] || "");
-          const date = parseDate(
-            r["delivery_date"] ||
+          const rawParsed = rows.slice(0, 3).map((r) => {
+            const dateRaw =
+              r["delivery_date"] ||
               r["Delivery Date"] ||
               r["delivery date"] ||
               r["date"] ||
               r["Date"] ||
               r["DATE"] ||
-              "",
-          );
-          return { customer, partNo, qty, date };
+              "";
+            const qtyRaw = r["qty"] || r["Qty"] || r["QTY"] || "";
+            return {
+              dateRaw,
+              qtyRaw,
+              parsed: parseDate(dateRaw),
+              qty: parseQty(qtyRaw),
+            };
+          });
+          console.log("PO date debug:", JSON.stringify(rawParsed));
         })
         .filter((r) => r.partNo && r.qty > 0 && r.date);
     } else if (type === "forecast") {
