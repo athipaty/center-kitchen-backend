@@ -236,7 +236,9 @@ router.post("/upload-stock", upload.single("file"), async (req, res) => {
       stockData.incomingStock = filtered;
     } else if (type === "po") {
       console.log("PO sample row:", JSON.stringify(rows[0]));
+
       stockData.poConfirmed = rows
+        .filter((r) => r && typeof r === "object") // ← add this
         .map((r) => {
           const rawParsed = rows.slice(0, 3).map((r) => {
             const dateRaw =
