@@ -2,17 +2,23 @@ const express = require('express');
 const router = express.Router();
 const FixedBill = require('../models/FixedBill');
 
-// GET all active bills sorted by order
+// GET bills for a specific month/year
 router.get('/', async (req, res) => {
   try {
-    const bills = await FixedBill.find({ isActive: true }).sort({ order: 1 });
+    const { month, year } = req.query;
+    const filter = { isActive: true };
+    if (month && year) {
+      filter.month = Number(month);
+      filter.year = Number(year);
+    }
+    const bills = await FixedBill.find(filter).sort({ order: 1 });
     res.json(bills);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST create bill
+// POST create bill for a month
 router.post('/', async (req, res) => {
   try {
     const bill = new FixedBill(req.body);
