@@ -24,6 +24,7 @@ app.use(
       "https://productportal-jade.vercel.app",
       "https://frtforecast.vercel.app",
       "https://sgostock.vercel.app",
+      "https://expense-six-red.vercel.app",
     ],
     credentials: true,
   }),
@@ -52,6 +53,7 @@ app.use("/api/scrape", require("./routes/arb_scrape"));
 app.use("/api/compare", require("./routes/arb_ebay_scrape"));
 app.use("/api/ebay-search", require("./routes/arb_ebay_api").router);
 app.use('/api/stock', require('./routes/stock'));
+app.use('/api/expenses', require('./routes/expenses'));
 
 /* =====================
    DATABASE
