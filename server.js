@@ -54,6 +54,8 @@ app.use("/api/compare", require("./routes/arb_ebay_scrape"));
 app.use("/api/ebay-search", require("./routes/arb_ebay_api").router);
 app.use('/api/stock', require('./routes/stock'));
 app.use('/api/expenses', require('./routes/expenses'));
+app.use('/api/fixed-bills', require('./routes/fixedBills'));
+app.use('/api/income', require('./routes/income'));
 
 /* =====================
    DATABASE
