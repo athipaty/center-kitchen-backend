@@ -5,6 +5,7 @@ const cors = require("cors");
 require("dotenv").config();
 const { startPriceChecker } = require("./jobs/priceChecker");
 const abtRoutes = require('./routes/abt')
+const abtRoutes = require('./routes/abt')
 
 const app = express();
 
@@ -58,8 +59,7 @@ app.use('/api/stock', require('./routes/stock'));
 app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/fixed-bills', require('./routes/fixedBills'));
 app.use('/api/income', require('./routes/income'));
-app.use('/api/abt', abtRoutes)
-
+app.use('/api/abt', abtRoutes);
 /* =====================
    DATABASE
 ===================== */
