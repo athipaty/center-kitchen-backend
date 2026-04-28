@@ -20,7 +20,11 @@ cloudinary.config({
 
 const storage = new CloudinaryStorage({
   cloudinary,
-  params: { folder: 'abt_maesai', upload_preset: process.env.CLOUDINARY_UPLOAD_PRESET },
+  params: {
+    folder: 'abt_maesai',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    transformation: [{ width: 1200, crop: 'limit' }],
+  },
 })
 const upload = multer({ storage })
 
