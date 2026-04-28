@@ -3,19 +3,12 @@ const mongoose = require('mongoose')
 const AbtNewsSchema = new mongoose.Schema({
   title: { type: String, required: true },
   content: { type: String, default: '' },
-  image: { type: String, default: '' },         // Cloudinary URL
+  image: { type: String, default: '' },
+  images: { type: [String], default: [] },
   department: {
     type: String,
     required: true,
-    enum: [
-      'council',      // กิจการสภา
-      'office',       // สำนักปลัด
-      'childdev',     // ศูนย์พัฒนาเด็กเล็ก
-      'disaster',     // ป้องกันและบรรเทาสาธารณภัย
-      'health',       // กองสาธารณสุขและสิ่งแวดล้อม
-      'engineering',  // กองช่าง
-      'finance',      // กองคลัง
-    ]
+    enum: ['council', 'office', 'childdev', 'disaster', 'health', 'engineering', 'finance']
   },
   views: { type: Number, default: 0 },
   publishedAt: { type: Date, default: Date.now },
