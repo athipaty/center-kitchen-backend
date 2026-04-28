@@ -5,7 +5,6 @@ const cors = require("cors");
 require("dotenv").config();
 const { startPriceChecker } = require("./jobs/priceChecker");
 const abtRoutes = require('./routes/abt')
-const abtRoutes = require('./routes/abt')
 
 const app = express();
 
