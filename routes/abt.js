@@ -5,6 +5,7 @@ const cloudinary = require('cloudinary').v2
 const { CloudinaryStorage } = require('multer-storage-cloudinary')
 
 const AbtNews = require('../models/AbtNews')
+const AbtSettings = require('../models/AbtSettings')
 const AbtAnnouncement = require('../models/AbtAnnouncement')
 const AbtProcurement = require('../models/AbtProcurement')
 const AbtStaff = require('../models/AbtStaff')
@@ -329,6 +330,36 @@ router.delete('/products/:id', async (req, res) => {
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SETTINGS
+// ═════════════════════════════════════════════════════════════════════════════
+
+// GET all settings as key-value object
+router.get('/settings', async (req, res) => {
+  try {
+    const items = await AbtSettings.find()
+    const result = {}
+    items.forEach(item => { result[item.key] = item.value })
+    res.json(result)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// PUT upsert a setting by key
+router.put('/settings/:key', async (req, res) => {
+  try {
+    const item = await AbtSettings.findOneAndUpdate(
+      { key: req.params.key },
+      { value: req.body.value },
+      { new: true, upsert: true }
+    )
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
   }
 })
 
