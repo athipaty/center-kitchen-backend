@@ -4,6 +4,7 @@ const multer = require('multer')
 const cloudinary = require('cloudinary').v2
 const { CloudinaryStorage } = require('multer-storage-cloudinary')
 
+const Token = require('../models/Token')
 const AbtNews = require('../models/AbtNews')
 const AbtSettings = require('../models/AbtSettings')
 const AbtAnnouncement = require('../models/AbtAnnouncement')
@@ -12,7 +13,7 @@ const AbtStaff = require('../models/AbtStaff')
 const AbtTravel = require('../models/AbtTravel')
 const AbtProduct = require('../models/AbtProduct')
 
-// ── Cloudinary setup (reuse existing config) ──────────────────────────────────
+// ── Cloudinary setup ──────────────────────────────────────────────────────────
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -29,20 +30,42 @@ const storage = new CloudinaryStorage({
 })
 const upload = multer({ storage })
 
-// ── Image upload endpoint ─────────────────────────────────────────────────────
-router.post('/upload', upload.single('image'), (req, res) => {
+// ── Auth middleware ───────────────────────────────────────────────────────────
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress
+}
+
+async function requireAuth(req, res, next) {
+  const header = req.headers.authorization || ''
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null
+  if (!token) return res.status(401).json({ error: 'Unauthorized' })
+  try {
+    const entry = await Token.findOne({ token })
+    if (!entry) return res.status(401).json({ error: 'Invalid token' })
+    if (Date.now() > entry.expiry) {
+      await Token.deleteOne({ token })
+      return res.status(401).json({ error: 'Token expired' })
+    }
+    if (entry.ip !== getClientIp(req)) return res.status(401).json({ error: 'IP mismatch' })
+    next()
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+}
+
+// ── Image upload ──────────────────────────────────────────────────────────────
+router.post('/upload', requireAuth, upload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   res.json({ url: req.file.path })
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// NEWS / ACTIVITIES
+// NEWS
 // ═════════════════════════════════════════════════════════════════════════════
 
-// GET all news (optional ?dept=council&limit=3)
 router.get('/news', async (req, res) => {
   try {
-    const filter = { isActive: true }
+    const filter = req.query.all === '1' ? {} : { isActive: true }
     if (req.query.dept) filter.department = req.query.dept
     const limit = parseInt(req.query.limit) || 50
     const news = await AbtNews.find(filter).sort({ publishedAt: -1 }).limit(limit)
@@ -52,7 +75,6 @@ router.get('/news', async (req, res) => {
   }
 })
 
-// GET single news + increment views
 router.get('/news/:id', async (req, res) => {
   try {
     const item = await AbtNews.findByIdAndUpdate(
@@ -67,8 +89,7 @@ router.get('/news/:id', async (req, res) => {
   }
 })
 
-// POST create news
-router.post('/news', async (req, res) => {
+router.post('/news', requireAuth, async (req, res) => {
   try {
     const item = await AbtNews.create(req.body)
     res.status(201).json(item)
@@ -77,8 +98,7 @@ router.post('/news', async (req, res) => {
   }
 })
 
-// PUT update news
-router.put('/news/:id', async (req, res) => {
+router.put('/news/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtNews.findByIdAndUpdate(req.params.id, req.body, { new: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
@@ -88,8 +108,7 @@ router.put('/news/:id', async (req, res) => {
   }
 })
 
-// DELETE news
-router.delete('/news/:id', async (req, res) => {
+router.delete('/news/:id', requireAuth, async (req, res) => {
   try {
     await AbtNews.findByIdAndDelete(req.params.id)
     res.json({ success: true })
@@ -104,7 +123,7 @@ router.delete('/news/:id', async (req, res) => {
 
 router.get('/announcements', async (req, res) => {
   try {
-    const filter = { isActive: true }
+    const filter = req.query.all === '1' ? {} : { isActive: true }
     if (req.query.type) filter.type = req.query.type
     const items = await AbtAnnouncement.find(filter).sort({ publishedAt: -1 })
     res.json(items)
@@ -113,7 +132,7 @@ router.get('/announcements', async (req, res) => {
   }
 })
 
-router.post('/announcements', async (req, res) => {
+router.post('/announcements', requireAuth, async (req, res) => {
   try {
     const item = await AbtAnnouncement.create(req.body)
     res.status(201).json(item)
@@ -122,7 +141,7 @@ router.post('/announcements', async (req, res) => {
   }
 })
 
-router.put('/announcements/:id', async (req, res) => {
+router.put('/announcements/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtAnnouncement.findByIdAndUpdate(req.params.id, req.body, { new: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
@@ -132,7 +151,7 @@ router.put('/announcements/:id', async (req, res) => {
   }
 })
 
-router.delete('/announcements/:id', async (req, res) => {
+router.delete('/announcements/:id', requireAuth, async (req, res) => {
   try {
     await AbtAnnouncement.findByIdAndDelete(req.params.id)
     res.json({ success: true })
@@ -147,7 +166,7 @@ router.delete('/announcements/:id', async (req, res) => {
 
 router.get('/procurement', async (req, res) => {
   try {
-    const filter = { isActive: true }
+    const filter = req.query.all === '1' ? {} : { isActive: true }
     if (req.query.type) filter.type = req.query.type
     const items = await AbtProcurement.find(filter).sort({ publishedAt: -1 })
     res.json(items)
@@ -156,7 +175,7 @@ router.get('/procurement', async (req, res) => {
   }
 })
 
-router.post('/procurement', async (req, res) => {
+router.post('/procurement', requireAuth, async (req, res) => {
   try {
     const item = await AbtProcurement.create(req.body)
     res.status(201).json(item)
@@ -165,7 +184,7 @@ router.post('/procurement', async (req, res) => {
   }
 })
 
-router.put('/procurement/:id', async (req, res) => {
+router.put('/procurement/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtProcurement.findByIdAndUpdate(req.params.id, req.body, { new: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
@@ -175,7 +194,7 @@ router.put('/procurement/:id', async (req, res) => {
   }
 })
 
-router.delete('/procurement/:id', async (req, res) => {
+router.delete('/procurement/:id', requireAuth, async (req, res) => {
   try {
     await AbtProcurement.findByIdAndDelete(req.params.id)
     res.json({ success: true })
@@ -190,7 +209,7 @@ router.delete('/procurement/:id', async (req, res) => {
 
 router.get('/staff', async (req, res) => {
   try {
-    const filter = { isActive: true }
+    const filter = req.query.all === '1' ? {} : { isActive: true }
     if (req.query.dept) filter.department = req.query.dept
     const items = await AbtStaff.find(filter).sort({ department: 1, order: 1 })
     res.json(items)
@@ -199,7 +218,7 @@ router.get('/staff', async (req, res) => {
   }
 })
 
-router.post('/staff', async (req, res) => {
+router.post('/staff', requireAuth, async (req, res) => {
   try {
     const item = await AbtStaff.create(req.body)
     res.status(201).json(item)
@@ -208,7 +227,7 @@ router.post('/staff', async (req, res) => {
   }
 })
 
-router.put('/staff/:id', async (req, res) => {
+router.put('/staff/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtStaff.findByIdAndUpdate(req.params.id, req.body, { new: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
@@ -218,7 +237,7 @@ router.put('/staff/:id', async (req, res) => {
   }
 })
 
-router.delete('/staff/:id', async (req, res) => {
+router.delete('/staff/:id', requireAuth, async (req, res) => {
   try {
     await AbtStaff.findByIdAndDelete(req.params.id)
     res.json({ success: true })
@@ -233,7 +252,8 @@ router.delete('/staff/:id', async (req, res) => {
 
 router.get('/travel', async (req, res) => {
   try {
-    const items = await AbtTravel.find({ isActive: true }).sort({ createdAt: -1 })
+    const filter = req.query.all === '1' ? {} : { isActive: true }
+    const items = await AbtTravel.find(filter).sort({ createdAt: -1 })
     res.json(items)
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -252,7 +272,7 @@ router.get('/travel/:id', async (req, res) => {
   }
 })
 
-router.post('/travel', async (req, res) => {
+router.post('/travel', requireAuth, async (req, res) => {
   try {
     const item = await AbtTravel.create(req.body)
     res.status(201).json(item)
@@ -261,7 +281,7 @@ router.post('/travel', async (req, res) => {
   }
 })
 
-router.put('/travel/:id', async (req, res) => {
+router.put('/travel/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtTravel.findByIdAndUpdate(req.params.id, req.body, { new: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
@@ -271,7 +291,7 @@ router.put('/travel/:id', async (req, res) => {
   }
 })
 
-router.delete('/travel/:id', async (req, res) => {
+router.delete('/travel/:id', requireAuth, async (req, res) => {
   try {
     await AbtTravel.findByIdAndDelete(req.params.id)
     res.json({ success: true })
@@ -286,7 +306,8 @@ router.delete('/travel/:id', async (req, res) => {
 
 router.get('/products', async (req, res) => {
   try {
-    const items = await AbtProduct.find({ isActive: true }).sort({ createdAt: -1 })
+    const filter = req.query.all === '1' ? {} : { isActive: true }
+    const items = await AbtProduct.find(filter).sort({ createdAt: -1 })
     res.json(items)
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -305,7 +326,7 @@ router.get('/products/:id', async (req, res) => {
   }
 })
 
-router.post('/products', async (req, res) => {
+router.post('/products', requireAuth, async (req, res) => {
   try {
     const item = await AbtProduct.create(req.body)
     res.status(201).json(item)
@@ -314,7 +335,7 @@ router.post('/products', async (req, res) => {
   }
 })
 
-router.put('/products/:id', async (req, res) => {
+router.put('/products/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtProduct.findByIdAndUpdate(req.params.id, req.body, { new: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
@@ -324,7 +345,7 @@ router.put('/products/:id', async (req, res) => {
   }
 })
 
-router.delete('/products/:id', async (req, res) => {
+router.delete('/products/:id', requireAuth, async (req, res) => {
   try {
     await AbtProduct.findByIdAndDelete(req.params.id)
     res.json({ success: true })
@@ -337,7 +358,6 @@ router.delete('/products/:id', async (req, res) => {
 // SETTINGS
 // ═════════════════════════════════════════════════════════════════════════════
 
-// GET all settings as key-value object
 router.get('/settings', async (req, res) => {
   try {
     const items = await AbtSettings.find()
@@ -349,8 +369,7 @@ router.get('/settings', async (req, res) => {
   }
 })
 
-// PUT upsert a setting by key
-router.put('/settings/:key', async (req, res) => {
+router.put('/settings/:key', requireAuth, async (req, res) => {
   try {
     const item = await AbtSettings.findOneAndUpdate(
       { key: req.params.key },
