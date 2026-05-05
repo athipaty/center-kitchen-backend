@@ -13,6 +13,10 @@ const AbtProcurement = require('../models/AbtProcurement')
 const AbtStaff = require('../models/AbtStaff')
 const AbtTravel = require('../models/AbtTravel')
 const AbtProduct = require('../models/AbtProduct')
+const AbtOIT = require('../models/AbtOIT')
+const AbtEService = require('../models/AbtEService')
+const AbtComplaint = require('../models/AbtComplaint')
+const AbtDocument = require('../models/AbtDocument')
 
 // ── Cloudinary setup ──────────────────────────────────────────────────────────
 cloudinary.config({
@@ -419,6 +423,210 @@ router.put('/procurement-plans/:id', requireAuth, async (req, res) => {
 router.delete('/procurement-plans/:id', requireAuth, async (req, res) => {
   try {
     await AbtProcurementPlan.findByIdAndDelete(req.params.id)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ITA / OIT
+// ═════════════════════════════════════════════════════════════════════════════
+
+router.get('/oit', async (req, res) => {
+  try {
+    const filter = {}
+    if (req.query.year) filter.fiscalYear = req.query.year
+    const items = await AbtOIT.find(filter).sort({ fiscalYear: -1, itemNo: 1 })
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.get('/oit/years', async (req, res) => {
+  try {
+    const years = await AbtOIT.distinct('fiscalYear')
+    res.json(years.sort((a, b) => b.localeCompare(a, undefined, { numeric: true })))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/oit', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtOIT.findOneAndUpdate(
+      { fiscalYear: req.body.fiscalYear, itemNo: req.body.itemNo },
+      req.body,
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    )
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/oit/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtOIT.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/oit/:id', requireAuth, async (req, res) => {
+  try {
+    await AbtOIT.findByIdAndDelete(req.params.id)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// E-SERVICE
+// ═════════════════════════════════════════════════════════════════════════════
+
+function genRequestNo(prefix) {
+  const now = new Date()
+  const y = String(now.getFullYear() + 543).slice(2)
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const rand = String(Math.floor(Math.random() * 9000) + 1000)
+  return `${prefix}${y}${m}${rand}`
+}
+
+router.get('/eservice', requireAuth, async (req, res) => {
+  try {
+    const filter = {}
+    if (req.query.status) filter.status = req.query.status
+    if (req.query.type) filter.type = req.query.type
+    const items = await AbtEService.find(filter).sort({ createdAt: -1 }).limit(200)
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.get('/eservice/track/:requestNo', async (req, res) => {
+  try {
+    const item = await AbtEService.findOne({ requestNo: req.params.requestNo })
+    if (!item) return res.status(404).json({ error: 'ไม่พบเลขที่คำร้อง' })
+    res.json(item)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/eservice', async (req, res) => {
+  try {
+    const requestNo = genRequestNo('ES')
+    const item = await AbtEService.create({ ...req.body, requestNo })
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/eservice/:id', requireAuth, async (req, res) => {
+  try {
+    const update = { ...req.body }
+    if (update.status === 'done' || update.status === 'rejected') update.closedAt = new Date()
+    const item = await AbtEService.findByIdAndUpdate(req.params.id, update, { new: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// COMPLAINTS
+// ═════════════════════════════════════════════════════════════════════════════
+
+router.get('/complaints', requireAuth, async (req, res) => {
+  try {
+    const filter = {}
+    if (req.query.type) filter.type = req.query.type
+    if (req.query.status) filter.status = req.query.status
+    const items = await AbtComplaint.find(filter).sort({ createdAt: -1 }).limit(200)
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.get('/complaints/track/:complaintNo', async (req, res) => {
+  try {
+    const item = await AbtComplaint.findOne({ complaintNo: req.params.complaintNo })
+    if (!item) return res.status(404).json({ error: 'ไม่พบเลขที่เรื่องร้องเรียน' })
+    res.json(item)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/complaints', async (req, res) => {
+  try {
+    const complaintNo = genRequestNo('CP')
+    const item = await AbtComplaint.create({ ...req.body, complaintNo })
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/complaints/:id', requireAuth, async (req, res) => {
+  try {
+    const update = { ...req.body }
+    if (update.status === 'done' || update.status === 'rejected') update.closedAt = new Date()
+    const item = await AbtComplaint.findByIdAndUpdate(req.params.id, update, { new: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DOCUMENTS
+// ═════════════════════════════════════════════════════════════════════════════
+
+router.get('/documents', async (req, res) => {
+  try {
+    const filter = req.query.all === '1' ? {} : { isActive: true }
+    if (req.query.category) filter.category = req.query.category
+    if (req.query.year) filter.fiscalYear = req.query.year
+    const items = await AbtDocument.find(filter).sort({ publishedAt: -1 })
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/documents', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtDocument.create(req.body)
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/documents/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtDocument.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/documents/:id', requireAuth, async (req, res) => {
+  try {
+    await AbtDocument.findByIdAndDelete(req.params.id)
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })

@@ -9,6 +9,13 @@ const ProcurementPlanSchema = new mongoose.Schema({
   totalBudget: { type: Number },
   period:      { type: String },
   note:        { type: String },
+  items: [{
+    title:        { type: String },
+    budget:       { type: Number },
+    budgetSource: { type: String },
+    method:       { type: String },
+    startPeriod:  { type: String },
+  }],
   isActive:    { type: Boolean, default: true },
   publishedAt: { type: Date, default: Date.now },
 }, { timestamps: true })
