@@ -5,6 +5,7 @@ const cloudinary = require('cloudinary').v2
 const { CloudinaryStorage } = require('multer-storage-cloudinary')
 
 const Token = require('../models/Token')
+const AbtProcurementPlan = require('../models/AbtProcurementPlan')
 const AbtNews = require('../models/AbtNews')
 const AbtSettings = require('../models/AbtSettings')
 const AbtAnnouncement = require('../models/AbtAnnouncement')
@@ -379,6 +380,48 @@ router.put('/settings/:key', requireAuth, async (req, res) => {
     res.json(item)
   } catch (err) {
     res.status(400).json({ error: err.message })
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PROCUREMENT PLANS
+// ═════════════════════════════════════════════════════════════════════════════
+
+router.get('/procurement-plans', async (req, res) => {
+  try {
+    const filter = req.query.all === '1' ? {} : { isActive: true }
+    const items = await AbtProcurementPlan.find(filter).sort({ year: -1, publishedAt: -1 })
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/procurement-plans', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtProcurementPlan.create(req.body)
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/procurement-plans/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtProcurementPlan.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/procurement-plans/:id', requireAuth, async (req, res) => {
+  try {
+    await AbtProcurementPlan.findByIdAndDelete(req.params.id)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
   }
 })
 
