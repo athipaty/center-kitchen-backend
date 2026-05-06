@@ -225,6 +225,8 @@ router.get('/staff', async (req, res) => {
 
 router.post('/staff', requireAuth, async (req, res) => {
   try {
+    if (!req.body.isVacant && !req.body.name?.trim())
+      return res.status(400).json({ error: 'กรุณากรอกชื่อ-นามสกุล' })
     const item = await AbtStaff.create(req.body)
     res.status(201).json(item)
   } catch (err) {

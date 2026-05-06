@@ -1,7 +1,7 @@
 const mongoose = require('mongoose')
 
 const AbtStaffSchema = new mongoose.Schema({
-  name: { type: String, required: true },
+  name: { type: String, default: '' },
   position: { type: String, required: true },
   department: {
     type: String,
