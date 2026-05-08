@@ -36,6 +36,17 @@ const storage = new CloudinaryStorage({
 })
 const upload = multer({ storage })
 
+const pdfStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'abt_maesai_pdf',
+    resource_type: 'raw',
+    allowed_formats: ['pdf'],
+    format: 'pdf',
+  },
+})
+const uploadPdf = multer({ storage: pdfStorage })
+
 // ── Auth middleware ───────────────────────────────────────────────────────────
 function getClientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress
@@ -61,6 +72,11 @@ async function requireAuth(req, res, next) {
 
 // ── Image upload ──────────────────────────────────────────────────────────────
 router.post('/upload', requireAuth, upload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  res.json({ url: req.file.path })
+})
+
+router.post('/upload-pdf', requireAuth, uploadPdf.single('pdf'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   res.json({ url: req.file.path })
 })
