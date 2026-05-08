@@ -687,7 +687,6 @@ const NAVBAR_SLUGS = ['builtin-about','builtin-staff','builtin-eservice','builti
 const DEFAULT_MENU = [
   { title: 'เกี่ยวกับ อบต.แม่ใส',             slug: 'builtin-about',       icon: '🏛️', path: '/about',          isBuiltin: true, order: 0,  showInNavbar: true  },
   { title: 'ข่าวสาร/ประชาสัมพันธ์',            slug: 'builtin-news',        icon: '📰', path: '/news',           isBuiltin: true, order: 1,  showInNavbar: false },
-  { title: 'แผนงาน/งบประมาณ',                 slug: 'builtin-plan',        icon: '📊', path: '/development-plan',isBuiltin: true, order: 2,  showInNavbar: false },
   { title: 'การเงิน/การคลัง',                  slug: 'builtin-finance',     icon: '💰', path: '/finance',        isBuiltin: true, order: 3,  showInNavbar: false },
   { title: 'จัดซื้อจัดจ้าง',                   slug: 'builtin-procurement', icon: '📋', path: '/procurement',    isBuiltin: true, order: 4,  showInNavbar: false },
   { title: 'บุคลากร',                           slug: 'builtin-staff',       icon: '👥', path: '/staff',          isBuiltin: true, order: 5,  showInNavbar: true  },
@@ -711,6 +710,8 @@ router.get('/pages', async (req, res) => {
       await AbtPage.updateMany({ slug: { $in: NAVBAR_SLUGS }, showInNavbar: { $ne: true } }, { $set: { showInNavbar: true } })
       // Rename staff page title
       await AbtPage.updateOne({ slug: 'builtin-staff', title: 'บุคลากร/กิจการสภา' }, { $set: { title: 'บุคลากร' } })
+      // Remove development plan page from menu
+      await AbtPage.updateOne({ slug: 'builtin-plan' }, { $set: { isActive: false } })
       // Ensure eservice entry exists
       const hasEservice = pages.some(p => p.slug === 'builtin-eservice')
       if (!hasEservice) {
