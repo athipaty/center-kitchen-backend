@@ -689,7 +689,7 @@ router.post('/pages', requireAuth, async (req, res) => {
 
 router.put('/pages/:id', requireAuth, async (req, res) => {
   try {
-    const page = await AbtPage.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    const page = await AbtPage.findByIdAndUpdate(req.params.id, req.body, { new: true })
     if (!page) return res.status(404).json({ error: 'Not found' })
     res.json(page)
   } catch (err) {
