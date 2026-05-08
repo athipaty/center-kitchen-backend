@@ -710,8 +710,8 @@ router.get('/pages', async (req, res) => {
       await AbtPage.updateMany({ slug: { $in: NAVBAR_SLUGS }, showInNavbar: { $ne: true } }, { $set: { showInNavbar: true } })
       // Rename staff page title
       await AbtPage.updateOne({ slug: 'builtin-staff', title: 'บุคลากร/กิจการสภา' }, { $set: { title: 'บุคลากร' } })
-      // Remove development plan page from menu
-      await AbtPage.updateOne({ slug: 'builtin-plan' }, { $set: { isActive: false } })
+      // Permanently remove development plan page
+      await AbtPage.deleteOne({ slug: 'builtin-plan' })
       // Ensure eservice entry exists
       const hasEservice = pages.some(p => p.slug === 'builtin-eservice')
       if (!hasEservice) {
