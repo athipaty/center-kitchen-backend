@@ -11,8 +11,9 @@ const AbtPageSchema = new mongoose.Schema({
   icon:       { type: String, default: '📄' },
   parentSlug: { type: String, default: '' },
   order:      { type: Number, default: 0 },
-  isActive:   { type: Boolean, default: true },
-  isBuiltin:  { type: Boolean, default: false },
+  isActive:     { type: Boolean, default: true },
+  isBuiltin:    { type: Boolean, default: false },
+  showInNavbar: { type: Boolean, default: false },
   path:       { type: String, default: '' }, // builtin: React route; custom: /page/:slug
   blocks:     [BlockSchema],
 }, { timestamps: true })

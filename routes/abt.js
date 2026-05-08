@@ -656,20 +656,23 @@ router.delete('/documents/:id', requireAuth, async (req, res) => {
 // PAGES / MENU
 // ═════════════════════════════════════════════════════════════════════════════
 
+const NAVBAR_SLUGS = ['builtin-about','builtin-staff','builtin-eservice','builtin-complaint','builtin-corruption','builtin-contact']
+
 const DEFAULT_MENU = [
-  { title: 'เกี่ยวกับ อบต.แม่ใส',      slug: 'builtin-about',       icon: '🏛️', path: '/about',          isBuiltin: true, order: 0 },
-  { title: 'ข่าวสาร/ประชาสัมพันธ์',     slug: 'builtin-news',        icon: '📰', path: '/news',           isBuiltin: true, order: 1 },
-  { title: 'แผนงาน/งบประมาณ',          slug: 'builtin-plan',        icon: '📊', path: '/development-plan',isBuiltin: true, order: 2 },
-  { title: 'การเงิน/การคลัง',           slug: 'builtin-finance',     icon: '💰', path: '/finance',        isBuiltin: true, order: 3 },
-  { title: 'จัดซื้อจัดจ้าง',            slug: 'builtin-procurement', icon: '📋', path: '/procurement',    isBuiltin: true, order: 4 },
-  { title: 'บุคลากร/กิจการสภา',         slug: 'builtin-staff',       icon: '👥', path: '/staff',          isBuiltin: true, order: 5 },
-  { title: 'บริการสาธารณะ',             slug: 'builtin-public',      icon: '🌐', path: '/public-service', isBuiltin: true, order: 6 },
-  { title: 'ร้องเรียน/ร้องทุกข์',       slug: 'builtin-complaint',   icon: '📮', path: '/complaint',      isBuiltin: true, order: 7 },
-  { title: 'แจ้งเบาะแสทุจริต',          slug: 'builtin-corruption',  icon: '🚨', path: '/corruption',     isBuiltin: true, order: 8 },
-  { title: 'ITA/OIT',                   slug: 'builtin-ita',         icon: '📝', path: '/ita',            isBuiltin: true, order: 9 },
-  { title: 'ศูนย์ข้อมูลข่าวสาร',        slug: 'builtin-info',        icon: '📚', path: '/info-center',    isBuiltin: true, order: 10 },
-  { title: 'กฎหมาย/ข้อบัญญัติ',         slug: 'builtin-laws',        icon: '⚖️', path: '/laws',           isBuiltin: true, order: 11 },
-  { title: 'ติดต่อเรา',                 slug: 'builtin-contact',     icon: '📞', path: '/contact',        isBuiltin: true, order: 12 },
+  { title: 'เกี่ยวกับ อบต.แม่ใส',             slug: 'builtin-about',       icon: '🏛️', path: '/about',          isBuiltin: true, order: 0,  showInNavbar: true  },
+  { title: 'ข่าวสาร/ประชาสัมพันธ์',            slug: 'builtin-news',        icon: '📰', path: '/news',           isBuiltin: true, order: 1,  showInNavbar: false },
+  { title: 'แผนงาน/งบประมาณ',                 slug: 'builtin-plan',        icon: '📊', path: '/development-plan',isBuiltin: true, order: 2,  showInNavbar: false },
+  { title: 'การเงิน/การคลัง',                  slug: 'builtin-finance',     icon: '💰', path: '/finance',        isBuiltin: true, order: 3,  showInNavbar: false },
+  { title: 'จัดซื้อจัดจ้าง',                   slug: 'builtin-procurement', icon: '📋', path: '/procurement',    isBuiltin: true, order: 4,  showInNavbar: false },
+  { title: 'บุคลากร',                           slug: 'builtin-staff',       icon: '👥', path: '/staff',          isBuiltin: true, order: 5,  showInNavbar: true  },
+  { title: 'บริการสาธารณะ',                    slug: 'builtin-public',      icon: '🌐', path: '/public-service', isBuiltin: true, order: 6,  showInNavbar: false },
+  { title: 'e-Service',                        slug: 'builtin-eservice',    icon: '🌐', path: '/eservice',       isBuiltin: true, order: 7,  showInNavbar: true  },
+  { title: 'ร้องเรียน/ร้องทุกข์',              slug: 'builtin-complaint',   icon: '📮', path: '/complaint',      isBuiltin: true, order: 8,  showInNavbar: true  },
+  { title: 'ร้องเรียนการทุจริตและประพฤติมิชอบ', slug: 'builtin-corruption',  icon: '🚨', path: '/corruption',     isBuiltin: true, order: 9,  showInNavbar: true  },
+  { title: 'ITA/OIT',                          slug: 'builtin-ita',         icon: '📝', path: '/ita',            isBuiltin: true, order: 10, showInNavbar: false },
+  { title: 'ศูนย์ข้อมูลข่าวสาร',               slug: 'builtin-info',        icon: '📚', path: '/info-center',    isBuiltin: true, order: 11, showInNavbar: false },
+  { title: 'กฎหมาย/ข้อบัญญัติ',                slug: 'builtin-laws',        icon: '⚖️', path: '/laws',           isBuiltin: true, order: 12, showInNavbar: false },
+  { title: 'ติดต่อเรา',                        slug: 'builtin-contact',     icon: '📞', path: '/contact',        isBuiltin: true, order: 13, showInNavbar: true  },
 ]
 
 router.get('/pages', async (req, res) => {
@@ -677,6 +680,17 @@ router.get('/pages', async (req, res) => {
     let pages = await AbtPage.find().sort({ order: 1, createdAt: 1 })
     if (pages.length === 0) {
       pages = await AbtPage.insertMany(DEFAULT_MENU)
+    } else {
+      // Migrate: ensure navbar built-in pages have showInNavbar set correctly
+      await AbtPage.updateMany({ slug: { $in: NAVBAR_SLUGS }, showInNavbar: { $ne: true } }, { $set: { showInNavbar: true } })
+      // Rename staff page title
+      await AbtPage.updateOne({ slug: 'builtin-staff', title: 'บุคลากร/กิจการสภา' }, { $set: { title: 'บุคลากร' } })
+      // Ensure eservice entry exists
+      const hasEservice = pages.some(p => p.slug === 'builtin-eservice')
+      if (!hasEservice) {
+        await AbtPage.create({ title: 'e-Service', slug: 'builtin-eservice', icon: '🌐', path: '/eservice', isBuiltin: true, order: 7, showInNavbar: true })
+      }
+      pages = await AbtPage.find().sort({ order: 1, createdAt: 1 })
     }
     res.json(pages)
   } catch (err) {
