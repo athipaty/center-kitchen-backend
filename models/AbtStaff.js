@@ -3,19 +3,7 @@ const mongoose = require('mongoose')
 const AbtStaffSchema = new mongoose.Schema({
   name: { type: String, default: '' },
   position: { type: String, required: true },
-  department: {
-    type: String,
-    required: true,
-    enum: [
-      'executive',    // ผู้บริหาร
-      'council',      // สมาชิกสภา
-      'office',       // สำนักปลัด
-      'finance',      // กองคลัง
-      'engineering',  // กองช่าง
-      'health',       // กองสาธารณสุขฯ
-      'audit',        // หน่วยตรวจสอบภายใน
-    ]
-  },
+  department: { type: String, required: true },
   image: { type: String, default: '' },   // Cloudinary URL
   phone: { type: String, default: '' },
   order: { type: Number, default: 0 },    // display order within level
