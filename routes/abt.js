@@ -245,7 +245,7 @@ router.get('/egp-rss', async (req, res) => {
         desc:  $(el).find('description').text(),
       })
     })
-    res.json({ data: items })
+    res.json(items)
   } catch (err) {
     res.status(502).json({ error: 'ไม่สามารถเชื่อมต่อระบบ e-GP ได้: ' + err.message })
   }
