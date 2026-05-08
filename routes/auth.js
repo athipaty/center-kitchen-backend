@@ -14,18 +14,10 @@ function getClientIp(req) {
   );
 }
 
+const ADMIN_PASSWORD = "555";
+
 function getTodayPassword() {
-  // Thailand timezone (UTC+7)
-  const now = new Date();
-  const thai = new Date(
-    now.toLocaleString("en-US", { timeZone: "Asia/Bangkok" }),
-  );
-
-  const yy = String(thai.getFullYear()).slice(2); // e.g. "25"
-  const mm = String(thai.getMonth() + 1).padStart(2, "0"); // e.g. "03"
-  const dd = String(thai.getDate()).padStart(2, "0"); // e.g. "13"
-
-  return `${yy}${mm}${dd}`; // e.g. "260313"
+  return ADMIN_PASSWORD;
 }
 
 router.post("/login", async (req, res) => {
