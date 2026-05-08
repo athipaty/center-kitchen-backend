@@ -17,6 +17,7 @@ const AbtOIT = require('../models/AbtOIT')
 const AbtEService = require('../models/AbtEService')
 const AbtComplaint = require('../models/AbtComplaint')
 const AbtDocument = require('../models/AbtDocument')
+const AbtPage     = require('../models/AbtPage')
 
 // ── Cloudinary setup ──────────────────────────────────────────────────────────
 cloudinary.config({
@@ -629,6 +630,79 @@ router.put('/documents/:id', requireAuth, async (req, res) => {
 router.delete('/documents/:id', requireAuth, async (req, res) => {
   try {
     await AbtDocument.findByIdAndDelete(req.params.id)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PAGES / MENU
+// ═════════════════════════════════════════════════════════════════════════════
+
+const DEFAULT_MENU = [
+  { title: 'เกี่ยวกับ อบต.แม่ใส',      slug: 'builtin-about',       icon: '🏛️', path: '/about',          isBuiltin: true, order: 0 },
+  { title: 'ข่าวสาร/ประชาสัมพันธ์',     slug: 'builtin-news',        icon: '📰', path: '/news',           isBuiltin: true, order: 1 },
+  { title: 'แผนงาน/งบประมาณ',          slug: 'builtin-plan',        icon: '📊', path: '/development-plan',isBuiltin: true, order: 2 },
+  { title: 'การเงิน/การคลัง',           slug: 'builtin-finance',     icon: '💰', path: '/finance',        isBuiltin: true, order: 3 },
+  { title: 'จัดซื้อจัดจ้าง',            slug: 'builtin-procurement', icon: '📋', path: '/procurement',    isBuiltin: true, order: 4 },
+  { title: 'บุคลากร/กิจการสภา',         slug: 'builtin-staff',       icon: '👥', path: '/staff',          isBuiltin: true, order: 5 },
+  { title: 'บริการสาธารณะ',             slug: 'builtin-public',      icon: '🌐', path: '/public-service', isBuiltin: true, order: 6 },
+  { title: 'ร้องเรียน/ร้องทุกข์',       slug: 'builtin-complaint',   icon: '📮', path: '/complaint',      isBuiltin: true, order: 7 },
+  { title: 'แจ้งเบาะแสทุจริต',          slug: 'builtin-corruption',  icon: '🚨', path: '/corruption',     isBuiltin: true, order: 8 },
+  { title: 'ITA/OIT',                   slug: 'builtin-ita',         icon: '📝', path: '/ita',            isBuiltin: true, order: 9 },
+  { title: 'ศูนย์ข้อมูลข่าวสาร',        slug: 'builtin-info',        icon: '📚', path: '/info-center',    isBuiltin: true, order: 10 },
+  { title: 'กฎหมาย/ข้อบัญญัติ',         slug: 'builtin-laws',        icon: '⚖️', path: '/laws',           isBuiltin: true, order: 11 },
+  { title: 'ติดต่อเรา',                 slug: 'builtin-contact',     icon: '📞', path: '/contact',        isBuiltin: true, order: 12 },
+]
+
+router.get('/pages', async (req, res) => {
+  try {
+    let pages = await AbtPage.find().sort({ order: 1, createdAt: 1 })
+    if (pages.length === 0) {
+      pages = await AbtPage.insertMany(DEFAULT_MENU)
+    }
+    res.json(pages)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.get('/pages/slug/:slug', async (req, res) => {
+  try {
+    const page = await AbtPage.findOne({ slug: req.params.slug, isActive: true })
+    if (!page) return res.status(404).json({ error: 'ไม่พบหน้านี้' })
+    res.json(page)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/pages', requireAuth, async (req, res) => {
+  try {
+    const page = await AbtPage.create(req.body)
+    res.status(201).json(page)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/pages/:id', requireAuth, async (req, res) => {
+  try {
+    const page = await AbtPage.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    if (!page) return res.status(404).json({ error: 'Not found' })
+    res.json(page)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/pages/:id', requireAuth, async (req, res) => {
+  try {
+    const page = await AbtPage.findById(req.params.id)
+    if (!page) return res.status(404).json({ error: 'Not found' })
+    if (page.isBuiltin) return res.status(400).json({ error: 'ไม่สามารถลบหน้าระบบได้' })
+    await AbtPage.findByIdAndDelete(req.params.id)
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
