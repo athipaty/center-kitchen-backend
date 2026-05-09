@@ -15,8 +15,26 @@ cloudinary.config({
 // Absolute path to the recipe app's public folder
 const PUBLIC_DIR = path.resolve(
   __dirname,
-  "../../../../recipe/my-react-app/client/public"
+  "../../../recipe/my-react-app/client/public"
 );
+
+const RECIPES_JS = path.resolve(
+  __dirname,
+  "../../../recipe/my-react-app/client/src/recipes.js"
+);
+
+function loadStaticRecipes() {
+  const content = fs.readFileSync(RECIPES_JS, "utf8");
+  // Convert ES module export to CommonJS so we can require it
+  const cjs = content.replace(/export\s+default\s+\w+\s*;?\s*$/, "module.exports = recipes;");
+  const tmp = path.join(__dirname, "_tmp_recipes.js");
+  fs.writeFileSync(tmp, cjs);
+  try {
+    return require(tmp);
+  } finally {
+    fs.unlinkSync(tmp);
+  }
+}
 
 async function uploadLocal(imgPath) {
   // Already a remote URL — skip
@@ -41,12 +59,25 @@ async function uploadLocal(imgPath) {
 }
 
 async function main() {
-  await mongoose.connect(process.env.MONGO_URI);
+  await mongoose.connect(process.env.MONGO_URI, {
+    family: 4,
+    serverSelectionTimeoutMS: 30000,
+    socketTimeoutMS: 600000,
+    connectTimeoutMS: 30000,
+  });
   console.log("✅ Connected to MongoDB\n");
 
   if (!fs.existsSync(PUBLIC_DIR)) {
     console.error(`❌ Public dir not found: ${PUBLIC_DIR}`);
     process.exit(1);
+  }
+
+  let count = await Recipe.countDocuments();
+  if (count === 0) {
+    console.log("No recipes in DB — seeding from static data...");
+    const staticRecipes = loadStaticRecipes();
+    await Recipe.insertMany(staticRecipes);
+    console.log(`✅ Seeded ${staticRecipes.length} recipes\n`);
   }
 
   const recipes = await Recipe.find();
@@ -72,7 +103,7 @@ async function main() {
         totalSkipped++;
       }
     } catch (err) {
-      console.error(`    ❌ main image: ${err.message}`);
+      console.error(`    ❌ main image: ${err?.message || String(err)}`);
       totalErrors++;
     }
 
@@ -90,7 +121,7 @@ async function main() {
           totalSkipped++;
         }
       } catch (err) {
-        console.error(`    ❌ ${ing.item}: ${err.message}`);
+        console.error(`    ❌ ${ing.item}: ${err?.message || String(err)}`);
         totalErrors++;
       }
     }
