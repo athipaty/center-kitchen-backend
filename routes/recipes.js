@@ -41,6 +41,16 @@ router.post("/seed", async (req, res) => {
   }
 });
 
+// POST create new recipe
+router.post("/", async (req, res) => {
+  try {
+    const recipe = await Recipe.create(req.body);
+    res.status(201).json(recipe);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PUT update recipe
 router.put("/:id", async (req, res) => {
   try {
