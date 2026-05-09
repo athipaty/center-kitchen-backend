@@ -43,7 +43,6 @@ router.post("/login", async (req, res) => {
 router.post("/verify", async (req, res) => {
   try {
     const { token } = req.body;
-    const ip = getClientIp(req);
     const entry = await Token.findOne({ token });
 
     if (!entry)
@@ -51,9 +50,6 @@ router.post("/verify", async (req, res) => {
     if (Date.now() > entry.expiry) {
       await Token.deleteOne({ token });
       return res.status(401).json({ valid: false, reason: "Token expired" });
-    }
-    if (entry.ip !== ip) {
-      return res.status(401).json({ valid: false, reason: "IP mismatch" });
     }
 
     res.json({ valid: true });
