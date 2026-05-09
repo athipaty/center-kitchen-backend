@@ -55,9 +55,12 @@ router.put("/:id", async (req, res) => {
 });
 
 // POST upload image to Cloudinary
-router.post("/upload-image", upload.single("image"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-  res.json({ url: req.file.path });
+router.post("/upload-image", (req, res) => {
+  upload.single("image")(req, res, (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    res.json({ url: req.file.path });
+  });
 });
 
 module.exports = router;
