@@ -59,6 +59,7 @@ app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/fixed-bills', require('./routes/fixedBills'));
 app.use('/api/income', require('./routes/income'));
 app.use('/api/abt', abtRoutes);
+app.use('/api/recipes', require('./routes/recipes'));
 /* =====================
    DATABASE
 ===================== */
