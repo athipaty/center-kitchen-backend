@@ -63,7 +63,6 @@ async function requireAuth(req, res, next) {
       await Token.deleteOne({ token })
       return res.status(401).json({ error: 'Token expired' })
     }
-    if (entry.ip !== getClientIp(req)) return res.status(401).json({ error: 'IP mismatch' })
     next()
   } catch (err) {
     res.status(500).json({ error: err.message })
