@@ -31,6 +31,17 @@ function githubRequest(method, endpoint, body) {
   });
 }
 
+router.get('/test-token', async (req, res) => {
+  if (!process.env.GITHUB_TOKEN) return res.json({ ok: false, error: 'GITHUB_TOKEN is not set on the server' });
+  try {
+    const result = await githubRequest('GET', '/user');
+    if (result.status === 200) return res.json({ ok: true, user: result.body.login });
+    return res.json({ ok: false, status: result.status, error: result.body.message });
+  } catch (err) {
+    return res.json({ ok: false, error: err.message });
+  }
+});
+
 router.get('/repos', async (req, res) => {
   try {
     const result = await githubRequest('GET', '/user/repos?per_page=100&sort=updated');
