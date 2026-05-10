@@ -62,8 +62,12 @@ async function listFiles(repo) {
     .join('\n');
 }
 
+function encodePath(filePath) {
+  return filePath.split('/').map(encodeURIComponent).join('/');
+}
+
 async function readFile(repo, filePath) {
-  const res = await githubRequest('GET', `/repos/${repo}/contents/${encodeURIComponent(filePath)}`);
+  const res = await githubRequest('GET', `/repos/${repo}/contents/${encodePath(filePath)}`);
   if (res.status !== 200) throw new Error(`File not found: ${filePath} in ${repo}`);
   return {
     content: Buffer.from(res.body.content, 'base64').toString('utf-8'),
@@ -76,7 +80,7 @@ async function writeFile(repo, filePath, content, message) {
   try { const f = await readFile(repo, filePath); sha = f.sha; } catch {}
   const body = { message, content: Buffer.from(content).toString('base64') };
   if (sha) body.sha = sha;
-  const res = await githubRequest('PUT', `/repos/${repo}/contents/${encodeURIComponent(filePath)}`, body);
+  const res = await githubRequest('PUT', `/repos/${repo}/contents/${encodePath(filePath)}`, body);
   if (res.status !== 200 && res.status !== 201) throw new Error(JSON.stringify(res.body.message || res.body));
   return `Committed "${message}" to ${repo}/${filePath}`;
 }
