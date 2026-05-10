@@ -27,7 +27,8 @@ app.use(
       "https://sgostock.vercel.app",
       "https://expense-six-red.vercel.app",
       "https://maesaiphayao.vercel.app",
-      "https://my-react-app-eight-rust.vercel.app"
+      "https://my-react-app-eight-rust.vercel.app",
+      "https://tong-alpha.vercel.app"
     ],
     credentials: true,
   }),
@@ -62,6 +63,7 @@ app.use('/api/income', require('./routes/income'));
 app.use('/api/abt', abtRoutes);
 app.use('/api/recipes', require('./routes/recipes'));
 app.use('/api/ingredients', require('./routes/ingredients'));
+app.use('/api/chat', require('./routes/chat'));
 /* =====================
    DATABASE
 ===================== */
