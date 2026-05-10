@@ -31,6 +31,17 @@ function githubRequest(method, endpoint, body) {
   });
 }
 
+router.get('/repos', async (req, res) => {
+  try {
+    const result = await githubRequest('GET', '/user/repos?per_page=100&sort=updated');
+    if (result.status !== 200) return res.status(400).json({ error: 'Failed to fetch repos' });
+    const repos = result.body.map(r => ({ name: r.full_name, private: r.private }));
+    res.json(repos);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const SKIP_EXT = new Set(['.png','.jpg','.jpeg','.gif','.svg','.ico','.webp','.woff','.woff2','.ttf','.eot','.mp4','.zip','.gz','.pdf','.lock']);
 const SKIP_DIR = new Set(['node_modules','.git','dist','build','.next','__pycache__','.venv','vendor','.claude']);
 
