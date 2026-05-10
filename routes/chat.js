@@ -133,6 +133,8 @@ router.post('/', async (req, res) => {
     const system = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
     const conversationMessages = [...messages];
 
+    let rateLimits = null;
+
     while (true) {
       const stream = client.messages.stream({
         model: 'claude-sonnet-4-6',
@@ -141,6 +143,18 @@ router.post('/', async (req, res) => {
         tools: repoName ? TOOLS : [],
         messages: conversationMessages,
       });
+
+      try {
+        const httpRes = await stream.response;
+        const h = httpRes.headers;
+        rateLimits = {
+          tokensLimit: h.get('anthropic-ratelimit-tokens-limit'),
+          tokensRemaining: h.get('anthropic-ratelimit-tokens-remaining'),
+          tokensReset: h.get('anthropic-ratelimit-tokens-reset'),
+          requestsRemaining: h.get('anthropic-ratelimit-requests-remaining'),
+          requestsReset: h.get('anthropic-ratelimit-requests-reset'),
+        };
+      } catch {}
 
       for await (const chunk of stream) {
         if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
@@ -151,7 +165,7 @@ router.post('/', async (req, res) => {
       const final = await stream.finalMessage();
 
       if (final.stop_reason !== 'tool_use') {
-        send({ done: true, usage: final.usage });
+        send({ done: true, usage: final.usage, rateLimits });
         break;
       }
 
