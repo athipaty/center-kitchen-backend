@@ -47,7 +47,7 @@ const SKIP_DIR = new Set(['node_modules','.git','dist','build','.next','__pycach
 
 async function listFiles(repo) {
   const res = await githubRequest('GET', `/repos/${repo}/git/trees/HEAD?recursive=1`);
-  if (res.status !== 200) throw new Error('Repo not found or inaccessible');
+  if (res.status !== 200) throw new Error(`Repo "${repo}" not found or inaccessible`);
   return res.body.tree
     .filter(f => {
       if (f.type !== 'blob') return false;
@@ -64,7 +64,7 @@ async function listFiles(repo) {
 
 async function readFile(repo, filePath) {
   const res = await githubRequest('GET', `/repos/${repo}/contents/${encodeURIComponent(filePath)}`);
-  if (res.status !== 200) throw new Error(`File not found: ${filePath}`);
+  if (res.status !== 200) throw new Error(`File not found: ${filePath} in ${repo}`);
   return {
     content: Buffer.from(res.body.content, 'base64').toString('utf-8'),
     sha: res.body.sha,
@@ -78,41 +78,51 @@ async function writeFile(repo, filePath, content, message) {
   if (sha) body.sha = sha;
   const res = await githubRequest('PUT', `/repos/${repo}/contents/${encodeURIComponent(filePath)}`, body);
   if (res.status !== 200 && res.status !== 201) throw new Error(JSON.stringify(res.body.message || res.body));
-  return `Committed "${message}" to ${filePath}`;
+  return `Committed "${message}" to ${repo}/${filePath}`;
 }
 
 const TOOLS = [
   {
     name: 'list_files',
-    description: 'List all files in the GitHub repository.',
-    input_schema: { type: 'object', properties: {}, required: [] },
+    description: 'List all files in a GitHub repository.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Repository full name, e.g. "athipaty/tong"' },
+      },
+      required: ['repo'],
+    },
   },
   {
     name: 'read_file',
-    description: 'Read the full contents of a file from the GitHub repository.',
+    description: 'Read the full contents of a file from a GitHub repository.',
     input_schema: {
       type: 'object',
-      properties: { path: { type: 'string', description: 'File path, e.g. "src/index.js"' } },
-      required: ['path'],
+      properties: {
+        repo: { type: 'string', description: 'Repository full name, e.g. "athipaty/tong"' },
+        path: { type: 'string', description: 'File path, e.g. "src/index.js"' },
+      },
+      required: ['repo', 'path'],
     },
   },
   {
     name: 'write_file',
-    description: 'Create or update a file in the GitHub repository. Commits directly to main branch.',
+    description: 'Create or update a file in a GitHub repository. Commits directly to main branch.',
     input_schema: {
       type: 'object',
       properties: {
+        repo: { type: 'string', description: 'Repository full name, e.g. "athipaty/tong"' },
         path: { type: 'string', description: 'File path relative to repo root' },
         content: { type: 'string', description: 'Complete new file content' },
         message: { type: 'string', description: 'Git commit message' },
       },
-      required: ['path', 'content', 'message'],
+      required: ['repo', 'path', 'content', 'message'],
     },
   },
 ];
 
 router.post('/', async (req, res) => {
-  const { messages, systemPrompt, repo } = req.body;
+  const { messages, systemPrompt, repos } = req.body;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -122,17 +132,14 @@ router.post('/', async (req, res) => {
   const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   try {
-    const repoName = repo || process.env.GITHUB_REPO || '';
-    const systemText = [
-      systemPrompt || '',
-      repoName
-        ? `You have direct access to the GitHub repository "${repoName}" via tools. Use list_files to explore, read_file to read code, and write_file to make and commit changes. When asked to modify code, read the file first, then write the updated version.`
-        : 'No repository configured.',
-    ].filter(Boolean).join('\n\n');
+    const repoList = Array.isArray(repos) ? repos : [];
+    const repoContext = repoList.length > 0
+      ? `You have access to these GitHub repositories:\n${repoList.map(r => `- ${r}`).join('\n')}\n\nUse list_files to explore a repo, read_file to read code, and write_file to commit changes. Always specify the repo parameter. When modifying code, read the file first then write the updated version.`
+      : 'No repositories selected.';
 
+    const systemText = [systemPrompt || '', repoContext].filter(Boolean).join('\n\n');
     const system = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
     const conversationMessages = [...messages];
-
     let rateLimits = null;
 
     while (true) {
@@ -140,7 +147,7 @@ router.post('/', async (req, res) => {
         model: 'claude-sonnet-4-6',
         max_tokens: 8192,
         system,
-        tools: repoName ? TOOLS : [],
+        tools: repoList.length > 0 ? TOOLS : [],
         messages: conversationMessages,
       });
 
@@ -177,9 +184,9 @@ router.post('/', async (req, res) => {
         send({ tool: block.name, input: block.input });
         let result;
         try {
-          if (block.name === 'list_files') result = await listFiles(repoName);
-          else if (block.name === 'read_file') result = (await readFile(repoName, block.input.path)).content;
-          else if (block.name === 'write_file') result = await writeFile(repoName, block.input.path, block.input.content, block.input.message);
+          if (block.name === 'list_files') result = await listFiles(block.input.repo);
+          else if (block.name === 'read_file') result = (await readFile(block.input.repo, block.input.path)).content;
+          else if (block.name === 'write_file') result = await writeFile(block.input.repo, block.input.path, block.input.content, block.input.message);
         } catch (err) {
           result = `Error: ${err.message}`;
         }
