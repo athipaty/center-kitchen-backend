@@ -5,6 +5,25 @@ const router = express.Router();
 
 const client = new Anthropic();
 
+// File cache: avoid re-reading the same file within 5 minutes
+const fileCache = new Map();
+const FILE_CACHE_TTL = 5 * 60 * 1000;
+function getCached(key) {
+  const entry = fileCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > FILE_CACHE_TTL) { fileCache.delete(key); return null; }
+  return entry.value;
+}
+function setCache(key, value) { fileCache.set(key, { value, ts: Date.now() }); }
+
+const MODEL_RATES = {
+  'claude-haiku-4-5':  { input: 1.00, output: 5.00 },
+  'claude-sonnet-4-6': { input: 3.00, output: 15.00 },
+  'claude-opus-4-7':   { input: 5.00, output: 25.00 },
+};
+const DEFAULT_MODEL = 'claude-haiku-4-5';
+const MAX_HISTORY = 20;
+
 async function githubRequest(method, endpoint, body) {
   const headers = {
     'User-Agent': 'tong-app',
@@ -83,12 +102,17 @@ function encodePath(filePath) {
 }
 
 async function readFile(repo, filePath) {
+  const cacheKey = `${repo}:${filePath}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
   const res = await githubRequest('GET', `/repos/${repo}/contents/${encodePath(filePath)}`);
   if (res.status !== 200) throw new Error(`File not found: ${filePath} in ${repo}`);
-  return {
+  const result = {
     content: Buffer.from(res.body.content, 'base64').toString('utf-8'),
     sha: res.body.sha,
   };
+  setCache(cacheKey, result);
+  return result;
 }
 
 async function writeFile(repo, filePath, content, message) {
@@ -98,6 +122,8 @@ async function writeFile(repo, filePath, content, message) {
   if (sha) body.sha = sha;
   const res = await githubRequest('PUT', `/repos/${repo}/contents/${encodePath(filePath)}`, body);
   if (res.status !== 200 && res.status !== 201) throw new Error(JSON.stringify(res.body.message || res.body));
+  // Invalidate cache after write
+  fileCache.delete(`${repo}:${filePath}`);
   return `Committed "${message}" to ${repo}/${filePath}`;
 }
 
@@ -142,7 +168,7 @@ const TOOLS = [
 ];
 
 router.post('/', async (req, res) => {
-  const { messages, systemPrompt, repos } = req.body;
+  const { messages, systemPrompt, repos, model } = req.body;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -159,13 +185,17 @@ router.post('/', async (req, res) => {
 
     const systemText = [systemPrompt || '', repoContext].filter(Boolean).join('\n\n');
     const system = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
-    const conversationMessages = [...messages];
+
+    // Trim history to last MAX_HISTORY messages to save tokens
+    const trimmed = messages.slice(-MAX_HISTORY);
+    const conversationMessages = [...trimmed];
+    const selectedModel = MODEL_RATES[model] ? model : DEFAULT_MODEL;
     let rateLimits = null;
 
     while (true) {
       const stream = client.messages.stream({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 8192,
+        model: selectedModel,
+        max_tokens: 4096,
         system,
         tools: repoList.length > 0 ? TOOLS : [],
         messages: conversationMessages,
@@ -192,7 +222,13 @@ router.post('/', async (req, res) => {
       const final = await stream.finalMessage();
 
       if (final.stop_reason !== 'tool_use') {
-        send({ done: true, usage: final.usage, rateLimits });
+        const rates = MODEL_RATES[selectedModel];
+        const u = final.usage;
+        const cost = rates
+          ? ((u.input_tokens * rates.input + u.output_tokens * rates.output) / 1_000_000
+            + ((u.cache_read_input_tokens || 0) * rates.input * 0.1) / 1_000_000)
+          : null;
+        send({ done: true, usage: final.usage, rateLimits, cost, model: selectedModel });
         break;
       }
 
