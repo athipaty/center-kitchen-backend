@@ -2,11 +2,7 @@ const mongoose = require('mongoose')
 
 const EServiceSchema = new mongoose.Schema({
   requestNo:   { type: String, required: true, unique: true },
-  type: {
-    type: String,
-    required: true,
-    enum: ['general', 'road', 'street_light', 'water', 'garbage', 'noise', 'other'],
-  },
+  type: { type: String, required: true },
   citizenName: { type: String, required: true },
   phone:       { type: String, required: true },
   address:     { type: String },

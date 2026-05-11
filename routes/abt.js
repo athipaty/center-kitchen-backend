@@ -15,6 +15,7 @@ const AbtTravel = require('../models/AbtTravel')
 const AbtProduct = require('../models/AbtProduct')
 const AbtOIT = require('../models/AbtOIT')
 const AbtEService = require('../models/AbtEService')
+const AbtEServiceType = require('../models/AbtEServiceType')
 const AbtComplaint = require('../models/AbtComplaint')
 const AbtDocument = require('../models/AbtDocument')
 const AbtPage     = require('../models/AbtPage')
@@ -523,6 +524,62 @@ router.put('/oit/:id', requireAuth, async (req, res) => {
 router.delete('/oit/:id', requireAuth, async (req, res) => {
   try {
     await AbtOIT.findByIdAndDelete(req.params.id)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// E-SERVICE TYPES
+// ═════════════════════════════════════════════════════════════════════════════
+
+const DEFAULT_ESERVICE_TYPES = [
+  { value: 'general',      label: 'คำร้องทั่วไป',         icon: '📝', order: 0 },
+  { value: 'road',         label: 'แจ้งซ่อมถนน/ทางเท้า',  icon: '🛣️', order: 1 },
+  { value: 'street_light', label: 'แจ้งซ่อมไฟฟ้าสาธารณะ', icon: '💡', order: 2 },
+  { value: 'water',        label: 'แจ้งปัญหาน้ำประปา',     icon: '💧', order: 3 },
+  { value: 'garbage',      label: 'ขอถังขยะ/เก็บขยะ',      icon: '🗑️', order: 4 },
+  { value: 'noise',        label: 'ร้องเรียนเสียงรบกวน',   icon: '📢', order: 5 },
+  { value: 'other',        label: 'อื่น ๆ',                icon: '❓', order: 6 },
+]
+
+router.get('/eservice-types', async (req, res) => {
+  try {
+    let types = await AbtEServiceType.find().sort({ order: 1, createdAt: 1 })
+    if (types.length === 0) {
+      types = await AbtEServiceType.insertMany(DEFAULT_ESERVICE_TYPES)
+    }
+    res.json(types)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/eservice-types', requireAuth, async (req, res) => {
+  try {
+    const count = await AbtEServiceType.countDocuments()
+    const value = req.body.value || `type_${Date.now()}`
+    const item = await AbtEServiceType.create({ ...req.body, value, order: req.body.order ?? count * 10 })
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/eservice-types/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtEServiceType.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/eservice-types/:id', requireAuth, async (req, res) => {
+  try {
+    await AbtEServiceType.findByIdAndDelete(req.params.id)
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
