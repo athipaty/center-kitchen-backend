@@ -42,6 +42,22 @@ router.get('/test-token', async (req, res) => {
   }
 });
 
+router.get('/test-write', async (req, res) => {
+  try {
+    const repo = 'athipaty/tong';
+    const filePath = 'test-api-write.txt';
+    let sha;
+    const getRes = await githubRequest('GET', `/repos/${repo}/contents/${filePath}`);
+    if (getRes.status === 200) sha = getRes.body.sha;
+    const body = { message: 'test write from API', content: Buffer.from('test ' + Date.now()).toString('base64') };
+    if (sha) body.sha = sha;
+    const putRes = await githubRequest('PUT', `/repos/${repo}/contents/${filePath}`, body);
+    res.json({ ok: putRes.status === 200 || putRes.status === 201, status: putRes.status, body: putRes.body });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
 router.get('/repos', async (req, res) => {
   try {
     const result = await githubRequest('GET', '/user/repos?per_page=100&sort=updated');
