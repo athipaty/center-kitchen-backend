@@ -30,6 +30,16 @@ router.post('/', async (req, res) => {
   }
 });
 
+// PUT update income
+router.put('/:id', async (req, res) => {
+  try {
+    const income = await Income.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(income);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // DELETE income
 router.delete('/:id', async (req, res) => {
   try {
