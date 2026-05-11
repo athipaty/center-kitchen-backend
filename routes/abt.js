@@ -681,8 +681,6 @@ router.delete('/documents/:id', requireAuth, async (req, res) => {
 // PAGES / MENU
 // ═════════════════════════════════════════════════════════════════════════════
 
-const NAVBAR_SLUGS = ['builtin-about','builtin-staff','builtin-eservice','builtin-complaint','builtin-corruption','builtin-contact']
-
 const DEFAULT_MENU = [
   { title: 'เกี่ยวกับ อบต.แม่ใส',             slug: 'builtin-about',       icon: '🏛️', path: '/about',          isBuiltin: true, order: 0,  showInNavbar: true  },
   { title: 'ข่าวสาร/ประชาสัมพันธ์',            slug: 'builtin-news',        icon: '📰', path: '/news',           isBuiltin: true, order: 1,  showInNavbar: false },
@@ -705,8 +703,6 @@ router.get('/pages', async (req, res) => {
     if (pages.length === 0) {
       pages = await AbtPage.insertMany(DEFAULT_MENU)
     } else {
-      // Migrate: ensure navbar built-in pages have showInNavbar set correctly
-      await AbtPage.updateMany({ slug: { $in: NAVBAR_SLUGS }, showInNavbar: { $ne: true } }, { $set: { showInNavbar: true } })
       // Rename staff page title
       await AbtPage.updateOne({ slug: 'builtin-staff', title: 'บุคลากร/กิจการสภา' }, { $set: { title: 'บุคลากร' } })
       // Permanently remove development plan page
