@@ -1,41 +1,30 @@
 const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
-const https = require('https');
+const axios = require('axios');
 const router = express.Router();
 
 const client = new Anthropic();
 
-function githubRequest(method, endpoint, body) {
-  return new Promise((resolve, reject) => {
-    const headers = {
-      'User-Agent': 'tong-app',
-      'Accept': 'application/vnd.github.v3+json',
-    };
-    if (process.env.GITHUB_TOKEN) headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
-    const data = body ? JSON.stringify(body) : null;
-    if (data) {
-      headers['Content-Type'] = 'application/json';
-      headers['Content-Length'] = Buffer.byteLength(data);
-    }
-    const req = https.request({ hostname: 'api.github.com', path: endpoint, method, headers }, res => {
-      let raw = '';
-      res.on('data', c => raw += c);
-      res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: JSON.parse(raw) }); }
-        catch { resolve({ status: res.statusCode, body: raw }); }
-      });
-    });
-    req.on('error', reject);
-    if (data) req.write(data);
-    req.end();
-  });
+async function githubRequest(method, endpoint, body) {
+  const headers = {
+    'User-Agent': 'tong-app',
+    'Accept': 'application/vnd.github.v3+json',
+  };
+  if (process.env.GITHUB_TOKEN) headers['Authorization'] = `token ${process.env.GITHUB_TOKEN.trim()}`;
+  const res = await axios({ method, url: `https://api.github.com${endpoint}`, headers, data: body, validateStatus: () => true });
+  return { status: res.status, body: res.data, headers: res.headers };
 }
 
 router.get('/test-token', async (req, res) => {
   if (!process.env.GITHUB_TOKEN) return res.json({ ok: false, error: 'GITHUB_TOKEN is not set on the server' });
   try {
     const result = await githubRequest('GET', '/user');
-    if (result.status === 200) return res.json({ ok: true, user: result.body.login });
+    if (result.status === 200) return res.json({
+      ok: true,
+      user: result.body.login,
+      scopes: result.headers['x-oauth-scopes'] || 'none (fine-grained token)',
+      tokenLength: process.env.GITHUB_TOKEN.trim().length,
+    });
     return res.json({ ok: false, status: result.status, error: result.body.message });
   } catch (err) {
     return res.json({ ok: false, error: err.message });
