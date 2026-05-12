@@ -48,6 +48,16 @@ const pdfStorage = new CloudinaryStorage({
 })
 const uploadPdf = multer({ storage: pdfStorage })
 
+const excelStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'abt_maesai_excel',
+    resource_type: 'raw',
+    allowed_formats: ['xlsx', 'xls'],
+  },
+})
+const uploadExcel = multer({ storage: excelStorage })
+
 // ── Auth middleware ───────────────────────────────────────────────────────────
 function getClientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress
@@ -77,6 +87,11 @@ router.post('/upload', requireAuth, upload.single('image'), (req, res) => {
 })
 
 router.post('/upload-pdf', requireAuth, uploadPdf.single('pdf'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  res.json({ url: req.file.path })
+})
+
+router.post('/upload-excel', requireAuth, uploadExcel.single('excel'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   res.json({ url: req.file.path })
 })
