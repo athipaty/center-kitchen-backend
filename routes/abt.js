@@ -767,6 +767,8 @@ const DEFAULT_MENU = [
   { title: 'ศูนย์ข้อมูลข่าวสาร',               slug: 'builtin-info',        icon: '📚', path: '/info-center',    isBuiltin: true, order: 11, showInNavbar: false },
   { title: 'กฎหมาย/ข้อบัญญัติ',                slug: 'builtin-laws',        icon: '⚖️', path: '/laws',           isBuiltin: true, order: 12, showInNavbar: false },
   { title: 'ติดต่อเรา',                        slug: 'builtin-contact',     icon: '📞', path: '/contact',        isBuiltin: true, order: 13, showInNavbar: true  },
+  { title: 'สินค้า OTOP',                     slug: 'builtin-products',    icon: '🛍️', path: '/products',       isBuiltin: true, order: 14, showInNavbar: false },
+  { title: 'แหล่งท่องเที่ยว',                  slug: 'builtin-travel',      icon: '🗺️', path: '/travel',         isBuiltin: true, order: 15, showInNavbar: false },
 ]
 
 router.get('/pages', async (req, res) => {
@@ -783,6 +785,12 @@ router.get('/pages', async (req, res) => {
       const hasEservice = pages.some(p => p.slug === 'builtin-eservice')
       if (!hasEservice) {
         await AbtPage.create({ title: 'e-Service', slug: 'builtin-eservice', icon: '🌐', path: '/eservice', isBuiltin: true, order: 7, showInNavbar: true })
+      }
+      if (!pages.some(p => p.slug === 'builtin-products')) {
+        await AbtPage.create({ title: 'สินค้า OTOP', slug: 'builtin-products', icon: '🛍️', path: '/products', isBuiltin: true, order: 14, showInNavbar: false })
+      }
+      if (!pages.some(p => p.slug === 'builtin-travel')) {
+        await AbtPage.create({ title: 'แหล่งท่องเที่ยว', slug: 'builtin-travel', icon: '🗺️', path: '/travel', isBuiltin: true, order: 15, showInNavbar: false })
       }
       pages = await AbtPage.find().sort({ order: 1, createdAt: 1 })
     }
