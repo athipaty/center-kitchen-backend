@@ -110,8 +110,18 @@ router.post('/upload', requireAuth, upload.single('image'), (req, res) => {
 })
 
 router.post('/upload-pdf', requireAuth, (req, res, next) => {
-  try { getUploadPdf().single('pdf')(req, res, next) }
-  catch (err) { res.status(500).json({ error: err.message }) }
+  try {
+    getUploadPdf().single('pdf')(req, res, (err) => {
+      if (err) {
+        console.error('[B2 PDF upload error]', err)
+        return res.status(500).json({ error: err.message || 'Upload failed', detail: err.Code || err.code || '' })
+      }
+      next()
+    })
+  } catch (err) {
+    console.error('[B2 init error]', err)
+    res.status(500).json({ error: err.message })
+  }
 }, (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   res.json({ url: req.file.location })
