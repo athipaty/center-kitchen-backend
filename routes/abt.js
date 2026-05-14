@@ -39,29 +39,36 @@ const storage = new CloudinaryStorage({
 })
 const upload = multer({ storage })
 
-const b2Client = new S3Client({
-  endpoint: `https://s3.${process.env.B2_REGION}.backblazeb2.com`,
-  region: process.env.B2_REGION,
-  credentials: {
-    accessKeyId: process.env.B2_KEY_ID,
-    secretAccessKey: process.env.B2_APP_KEY,
-  },
-})
-const uploadPdf = multer({
-  storage: multerS3({
-    s3: b2Client,
-    bucket: process.env.B2_BUCKET,
-    contentType: multerS3.AUTO_CONTENT_TYPE,
-    key: (req, file, cb) => {
-      const safe = file.originalname.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '')
-      cb(null, `pdfs/${Date.now()}-${safe}`)
-    },
-  }),
-  limits: { fileSize: 100 * 1024 * 1024 },
-  fileFilter: (_, file, cb) => {
-    file.mimetype === 'application/pdf' ? cb(null, true) : cb(new Error('PDF only'))
-  },
-})
+let _uploadPdf = null
+function getUploadPdf() {
+  if (!_uploadPdf) {
+    const { B2_KEY_ID, B2_APP_KEY, B2_BUCKET, B2_REGION } = process.env
+    if (!B2_KEY_ID || !B2_APP_KEY || !B2_BUCKET || !B2_REGION) {
+      throw new Error('B2 env vars not set (B2_KEY_ID, B2_APP_KEY, B2_BUCKET, B2_REGION)')
+    }
+    const b2Client = new S3Client({
+      endpoint: `https://s3.${B2_REGION}.backblazeb2.com`,
+      region: B2_REGION,
+      credentials: { accessKeyId: B2_KEY_ID, secretAccessKey: B2_APP_KEY },
+    })
+    _uploadPdf = multer({
+      storage: multerS3({
+        s3: b2Client,
+        bucket: B2_BUCKET,
+        contentType: multerS3.AUTO_CONTENT_TYPE,
+        key: (req, file, cb) => {
+          const safe = file.originalname.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '')
+          cb(null, `pdfs/${Date.now()}-${safe}`)
+        },
+      }),
+      limits: { fileSize: 100 * 1024 * 1024 },
+      fileFilter: (_, file, cb) => {
+        file.mimetype === 'application/pdf' ? cb(null, true) : cb(new Error('PDF only'))
+      },
+    })
+  }
+  return _uploadPdf
+}
 
 const excelStorage = new CloudinaryStorage({
   cloudinary,
@@ -101,7 +108,10 @@ router.post('/upload', requireAuth, upload.single('image'), (req, res) => {
   res.json({ url: req.file.path })
 })
 
-router.post('/upload-pdf', requireAuth, uploadPdf.single('pdf'), (req, res) => {
+router.post('/upload-pdf', requireAuth, (req, res, next) => {
+  try { getUploadPdf().single('pdf')(req, res, next) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+}, (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   res.json({ url: req.file.location })
 })
