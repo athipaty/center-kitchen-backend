@@ -9,6 +9,10 @@ const ingredientSchema = new mongoose.Schema(
       unit: { type: String, default: "g" },
     },
     image: { type: String, default: "" },
+    stock: {
+      value: { type: Number, default: 0 },
+      unit: { type: String, default: "g" },
+    },
   },
   { timestamps: true }
 );
