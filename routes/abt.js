@@ -50,12 +50,13 @@ function getUploadPdf() {
       endpoint: `https://s3.${B2_REGION}.backblazeb2.com`,
       region: B2_REGION,
       credentials: { accessKeyId: B2_KEY_ID, secretAccessKey: B2_APP_KEY },
+      forcePathStyle: true,
     })
     _uploadPdf = multer({
       storage: multerS3({
         s3: b2Client,
         bucket: B2_BUCKET,
-        contentType: multerS3.AUTO_CONTENT_TYPE,
+        contentType: (_req, _file, cb) => cb(null, 'application/pdf'),
         key: (req, file, cb) => {
           const safe = file.originalname.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '')
           cb(null, `pdfs/${Date.now()}-${safe}`)
