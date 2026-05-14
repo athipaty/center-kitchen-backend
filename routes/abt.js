@@ -58,6 +58,7 @@ function getUploadPdf() {
         bucket: B2_BUCKET,
         acl: (_req, _file, cb) => cb(null, undefined),
         contentType: (_req, _file, cb) => cb(null, 'application/pdf'),
+        contentDisposition: (_req, _file, cb) => cb(null, 'inline'),
         key: (req, file, cb) => {
           const safe = file.originalname.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '')
           cb(null, `pdfs/${Date.now()}-${safe}`)
