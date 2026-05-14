@@ -63,6 +63,7 @@ app.use('/api/income', require('./routes/income'));
 app.use('/api/abt', abtRoutes);
 app.use('/api/recipes', require('./routes/recipes'));
 app.use('/api/ingredients', require('./routes/ingredients'));
+app.use('/api/inventory-filter', require('./routes/inventoryFilter'));
 app.use('/api/chat', require('./routes/chat'));
 /* =====================
    DATABASE
