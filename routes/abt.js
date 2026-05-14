@@ -56,6 +56,7 @@ function getUploadPdf() {
       storage: multerS3({
         s3: b2Client,
         bucket: B2_BUCKET,
+        acl: false,
         contentType: (_req, _file, cb) => cb(null, 'application/pdf'),
         key: (req, file, cb) => {
           const safe = file.originalname.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '')
