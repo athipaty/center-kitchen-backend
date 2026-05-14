@@ -3,6 +3,8 @@ const router = express.Router()
 const multer = require('multer')
 const cloudinary = require('cloudinary').v2
 const { CloudinaryStorage } = require('multer-storage-cloudinary')
+const { S3Client } = require('@aws-sdk/client-s3')
+const multerS3 = require('multer-s3')
 
 const Token = require('../models/Token')
 const AbtProcurementPlan = require('../models/AbtProcurementPlan')
@@ -37,16 +39,29 @@ const storage = new CloudinaryStorage({
 })
 const upload = multer({ storage })
 
-const pdfStorage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'abt_maesai_pdf',
-    resource_type: 'raw',
-    allowed_formats: ['pdf'],
-    format: 'pdf',
+const b2Client = new S3Client({
+  endpoint: `https://s3.${process.env.B2_REGION}.backblazeb2.com`,
+  region: process.env.B2_REGION,
+  credentials: {
+    accessKeyId: process.env.B2_KEY_ID,
+    secretAccessKey: process.env.B2_APP_KEY,
   },
 })
-const uploadPdf = multer({ storage: pdfStorage })
+const uploadPdf = multer({
+  storage: multerS3({
+    s3: b2Client,
+    bucket: process.env.B2_BUCKET,
+    contentType: multerS3.AUTO_CONTENT_TYPE,
+    key: (req, file, cb) => {
+      const safe = file.originalname.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '')
+      cb(null, `pdfs/${Date.now()}-${safe}`)
+    },
+  }),
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    file.mimetype === 'application/pdf' ? cb(null, true) : cb(new Error('PDF only'))
+  },
+})
 
 const excelStorage = new CloudinaryStorage({
   cloudinary,
@@ -88,7 +103,7 @@ router.post('/upload', requireAuth, upload.single('image'), (req, res) => {
 
 router.post('/upload-pdf', requireAuth, uploadPdf.single('pdf'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
-  res.json({ url: req.file.path })
+  res.json({ url: req.file.location })
 })
 
 router.post('/upload-excel', requireAuth, uploadExcel.single('excel'), (req, res) => {
