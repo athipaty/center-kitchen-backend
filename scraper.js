@@ -48,7 +48,12 @@ async function fetchProduct(url) {
 
       const image = data.images?.[0] || data.main_image || null;
 
-      return { title, price, currency, image };
+      const upc = data.upc
+        || data.product_information?.upc
+        || data.product_information?.ean
+        || null;
+
+      return { title, price, currency, image, upc };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }

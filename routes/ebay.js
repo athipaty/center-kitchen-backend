@@ -47,4 +47,48 @@ router.get('/search', async (req, res) => {
   }
 });
 
+// Exact product match by UPC/EAN
+router.get('/upc', async (req, res) => {
+  const { upc } = req.query;
+  if (!upc) return res.status(400).json({ error: 'upc is required' });
+
+  try {
+    const { data } = await axios.get(
+      'https://svcs.ebay.com/services/search/FindingService/v1',
+      {
+        params: {
+          'OPERATION-NAME': 'findItemsByProduct',
+          'SERVICE-VERSION': '1.0.0',
+          'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+          'RESPONSE-DATA-FORMAT': 'JSON',
+          'productId.@type': 'UPC',
+          'productId': upc,
+          'paginationInput.entriesPerPage': 12,
+          'sortOrder': 'PricePlusShippingLowest',
+        },
+      }
+    );
+
+    const items =
+      data.findItemsByProductResponse?.[0]?.searchResult?.[0]?.item || [];
+
+    const results = items.map(item => ({
+      id: item.itemId?.[0],
+      title: item.title?.[0],
+      price: parseFloat(item.sellingStatus?.[0]?.currentPrice?.[0]?.__value__ || 0),
+      currency: item.sellingStatus?.[0]?.currentPrice?.[0]?.['@currencyId'] || 'USD',
+      image: item.galleryURL?.[0],
+      url: item.viewItemURL?.[0],
+      condition: item.condition?.[0]?.conditionDisplayName?.[0] || 'Unknown',
+      shipping: parseFloat(
+        item.shippingInfo?.[0]?.shippingServiceCost?.[0]?.__value__ || 0
+      ),
+    }));
+
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

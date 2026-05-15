@@ -31,6 +31,7 @@ router.post("/", async (req, res) => {
       url: cleanedUrl,
       title: info.title,
       image: info.image || null,
+      upc: info.upc || null,
       currency: info.currency,
       current: info.price,
       lowest: info.price,
