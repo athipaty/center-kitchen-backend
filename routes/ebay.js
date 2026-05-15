@@ -53,7 +53,8 @@ router.get('/search', async (req, res) => {
   }
 });
 
-// Exact product match by UPC/EAN
+// Exact product match by UPC — uses keyword search with UPC number
+// (findItemsByProduct has very low rate limits; keyword search with UPC works just as well)
 router.get('/upc', async (req, res) => {
   const { upc } = req.query;
   if (!upc) return res.status(400).json({ error: 'upc is required' });
@@ -64,19 +65,18 @@ router.get('/upc', async (req, res) => {
       'https://svcs.ebay.com/services/search/FindingService/v1',
       {
         params: {
-          'OPERATION-NAME': 'findItemsByProduct',
+          'OPERATION-NAME': 'findItemsByKeywords',
           'SERVICE-VERSION': '1.0.0',
           'SECURITY-APPNAME': process.env.EBAY_APP_ID,
           'RESPONSE-DATA-FORMAT': 'JSON',
-          'productId.@type': 'UPC',
-          productId: upc,
+          keywords: upc,
           'paginationInput.entriesPerPage': 12,
           sortOrder: 'PricePlusShippingLowest',
         },
       }
     );
 
-    const items = data.findItemsByProductResponse?.[0]?.searchResult?.[0]?.item;
+    const items = data.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item;
     res.json(parseItems(items));
   } catch (err) {
     res.status(500).json({ error: ebayError(err) });
