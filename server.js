@@ -81,6 +81,9 @@ app.use('/auth', require('./routes/shared/auth'));
 // --- Amazon Tracker ---
 app.use('/api/tracker', require('./routes/tracker'));
 
+// --- eBay ---
+app.use('/api/ebay', require('./routes/ebay'));
+
 /* =====================
    DATABASE
 ===================== */
