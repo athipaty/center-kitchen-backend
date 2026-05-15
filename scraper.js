@@ -1,23 +1,6 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 
-const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-];
-
-const PRICE_SELECTORS = [
-  ".priceToPay .a-offscreen",
-  ".apexPriceToPay .a-offscreen",
-  "#priceblock_ourprice",
-  "#priceblock_dealprice",
-  "#price_inside_buybox",
-  ".a-price .a-offscreen",
-];
-
-const TITLE_SELECTORS = ["#productTitle", "#title", "h1.a-size-large"];
-
 function cleanUrl(url) {
   const match = url.match(
     /(https?:\/\/[a-z.]*amazon\.[a-z.]+\/(?:[^/]+\/)?dp\/[A-Z0-9]{10})/i
@@ -25,35 +8,59 @@ function cleanUrl(url) {
   return match ? match[1] : url;
 }
 
+function extractAsin(url) {
+  const match = url.match(/\/dp\/([A-Z0-9]{10})/i);
+  return match ? match[1] : null;
+}
+
 function parsePrice(text) {
   if (!text) return null;
-  const clean = text.replace(/,/g, "").trim();
+  const clean = String(text).replace(/,/g, "").trim();
   const match = clean.match(/[\d]+\.?\d*/);
   return match ? parseFloat(match[0]) : null;
 }
 
-function randomAgent() {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-}
-
 async function fetchProduct(url) {
+  const scraperKey = process.env.SCRAPER_API_KEY;
+  const asin = extractAsin(url);
+
+  // Use ScraperAPI structured endpoint when key + ASIN available
+  if (scraperKey && asin) {
+    try {
+      const { data } = await axios.get(
+        `https://api.scraperapi.com/structured/amazon/product/v1`,
+        {
+          params: { api_key: scraperKey, asin },
+          timeout: 60000,
+        }
+      );
+
+      const title = data.name || "Unknown product";
+      const price = parsePrice(data.pricing || data.original_price);
+
+      if (!price) throw new Error("Price not found in ScraperAPI response.");
+
+      const currency = data.currency === "USD" ? "$"
+        : data.currency === "GBP" ? "£"
+        : data.currency === "EUR" ? "€"
+        : data.currency === "THB" ? "฿"
+        : "$";
+
+      return { title, price, currency };
+    } catch (err) {
+      throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // Fallback: direct axios+cheerio for local dev (no API key)
   let html;
   try {
-    const scraperKey = process.env.SCRAPER_API_KEY;
-    const requestUrl = scraperKey
-      ? `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}`
-      : url;
-
-    const res = await axios.get(requestUrl, {
-      timeout: 60000,
-      headers: scraperKey ? {} : {
-        "User-Agent": randomAgent(),
+    const res = await axios.get(url, {
+      timeout: 20000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        Connection: "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Cache-Control": "max-age=0",
       },
     });
     html = res.data;
@@ -64,28 +71,20 @@ async function fetchProduct(url) {
   const $ = cheerio.load(html);
 
   if ($("form[action='/errors/validateCaptcha']").length) {
-    throw new Error("Amazon is showing a CAPTCHA. Try again in a few minutes.");
+    throw new Error("Amazon is showing a CAPTCHA. Add a SCRAPER_API_KEY env var to bypass this.");
   }
 
   let title = "Unknown product";
-  for (const sel of TITLE_SELECTORS) {
+  for (const sel of ["#productTitle", "#title", "h1.a-size-large"]) {
     const text = $(sel).first().text().trim();
     if (text) { title = text; break; }
   }
 
   let price = null;
-  for (const sel of PRICE_SELECTORS) {
+  for (const sel of [".priceToPay .a-offscreen", ".apexPriceToPay .a-offscreen", "#priceblock_ourprice", "#priceblock_dealprice", "#price_inside_buybox", ".a-price .a-offscreen"]) {
     const el = $(sel).first();
-    const raw = el.attr("content") || el.text();
-    price = parsePrice(raw);
+    price = parsePrice(el.attr("content") || el.text());
     if (price) break;
-  }
-
-  if (!price) {
-    $(".a-price").each((_, el) => {
-      if (price) return false;
-      price = parsePrice($(el).find(".a-offscreen").text() || $(el).text());
-    });
   }
 
   if (!price) throw new Error("Price not found. The product may be out of stock or the URL is unsupported.");
