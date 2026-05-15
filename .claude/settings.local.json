@@ -14,7 +14,9 @@
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\" | ForEach-Object { $_.Name })",
       "PowerShell(Get-ChildItem *)",
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\frontend\\\\src\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object -ExpandProperty FullName)",
-      "PowerShell(Set-Content *)"
+      "PowerShell(Set-Content *)",
+      "PowerShell(git *)",
+      "PowerShell(Rename-Item *)"
     ]
   }
 }

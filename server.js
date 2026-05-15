@@ -16,7 +16,6 @@ app.use(
       "http://localhost:5173",
       "https://athipaty-center-kitchen-frontend.vercel.app",
       "https://supplier-nine.vercel.app",
-      "https://inventory-ten-omega.vercel.app",
       "https://milk-tracker-rho-topaz.vercel.app",
       "https://wc7fr.csb.app",
       "https://frtstock.vercel.app",
