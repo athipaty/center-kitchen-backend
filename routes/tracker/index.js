@@ -30,6 +30,7 @@ router.post("/", async (req, res) => {
     const product = new Product({
       url: cleanedUrl,
       title: info.title,
+      image: info.image || null,
       currency: info.currency,
       current: info.price,
       lowest: info.price,

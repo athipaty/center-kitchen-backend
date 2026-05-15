@@ -46,7 +46,9 @@ async function fetchProduct(url) {
         : data.currency === "THB" ? "฿"
         : "$";
 
-      return { title, price, currency };
+      const image = data.images?.[0] || data.main_image || null;
+
+      return { title, price, currency, image };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }
