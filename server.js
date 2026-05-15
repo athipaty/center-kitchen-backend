@@ -3,8 +3,6 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 require("dotenv").config();
-const { startPriceChecker } = require("./jobs/priceChecker");
-const abtRoutes = require('./routes/abt')
 
 const app = express();
 
@@ -38,56 +36,57 @@ app.use(express.json());
 /* =====================
    ROUTES
 ===================== */
-app.use("/orders", require("./routes/orders"));
-app.use("/outlets", require("./routes/outlets"));
-app.use("/sauces", require("./routes/sauces"));
-app.use("/api/products", require("./routes/product"));
-app.use("/inventory", require("./routes/inventory"));
-app.use("/suppliers", require("./routes/suppliers"));
-app.use("/api/milk", require("./routes/milkRoutes"));
-app.use("/upload", require("./routes/upload"));
-app.use("/count", require("./routes/count"));
-app.use("/catalog", require("./routes/catalog"));
-app.use("/auth", require("./routes/auth"));
-app.use("/api/forecast", require("./routes/forecast"));
-app.use("/api/search", require("./routes/arb_search"));
-app.use("/api/watchlist", require("./routes/arb_watchlist"));
-app.use("/api/monitor", require("./routes/arb_monitor"));
-app.use("/api/scrape", require("./routes/arb_scrape"));
-app.use("/api/compare", require("./routes/arb_ebay_scrape"));
-app.use("/api/ebay-search", require("./routes/arb_ebay_api").router);
+// --- ABT ---
+app.use('/api/abt', require('./routes/abt'));
+
+// --- Expense ---
+app.use('/api/expenses',   require('./routes/expense/expenses'));
+app.use('/api/fixed-bills',require('./routes/expense/fixedBills'));
+app.use('/api/income',     require('./routes/expense/income'));
+
+// --- Forecast ---
+app.use('/api/forecast', require('./routes/forecast'));
+
+// --- Milk ---
+app.use('/api/milk', require('./routes/milk'));
+
+// --- Product Portal ---
+app.use('/api/products', require('./routes/productportal'));
+
+// --- Stock ---
 app.use('/api/stock', require('./routes/stock'));
-app.use('/api/expenses', require('./routes/expenses'));
-app.use('/api/fixed-bills', require('./routes/fixedBills'));
-app.use('/api/income', require('./routes/income'));
-app.use('/api/abt', abtRoutes);
-app.use('/api/recipes', require('./routes/recipes'));
-app.use('/api/ingredients', require('./routes/ingredients'));
-app.use('/api/inventory-filter', require('./routes/inventoryFilter'));
-app.use('/api/chat', require('./routes/chat'));
+
+// --- Supplier ---
+app.use('/suppliers', require('./routes/supplier'));
+
+// --- Inventory ---
+app.use('/upload',              require('./routes/inventory/upload'));
+app.use('/count',               require('./routes/inventory/count'));
+app.use('/catalog',             require('./routes/inventory/catalog'));
+app.use('/api/inventory-filter',require('./routes/inventory/filter'));
+
+// --- Recipe ---
+app.use('/api/recipes',     require('./routes/recipe/recipes'));
+app.use('/api/ingredients', require('./routes/recipe/ingredients'));
+
+// --- Shared ---
+app.use('/auth', require('./routes/shared/auth'));
+
 /* =====================
    DATABASE
 ===================== */
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log("✅ Connected to MongoDB");
-    startPriceChecker(); // 👈 add this line
-  })
+  .then(() => console.log("✅ Connected to MongoDB"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 /* =====================
    HEALTH CHECK
 ===================== */
-app.get("/", (req, res) => {
-  res.send("API is running 🚀");
-});
+app.get("/", (req, res) => res.send("API is running 🚀"));
 
 /* =====================
    START SERVER
 ===================== */
 const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

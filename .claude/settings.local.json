@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Select-Object Name, LastWriteTime, Length, Mode)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\backend\" | Where-Object { $_.Name -ne \"node_modules\" } | Select-Object Name, Mode, LastWriteTime)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\frontend\\\\src\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object FullName | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\backend\\\\routes\" | ForEach-Object { $_.Name })",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\backend\\\\models\" | ForEach-Object { $_.Name })",
+      "PowerShell(\\(Get-Item \"C:\\\\Users\\\\loret\\\\tong\\\\0\"\\).Length; \\(Get-Item \"C:\\\\Users\\\\loret\\\\tong\\\\m3LastPH\"\\).Length)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\recipe\\\\my-react-app\\\\src\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object Name, LastWriteTime | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\recipe\\\\my-react-app\" | Format-Table Name, Mode -AutoSize; Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\recipe\\\\my-react-app\\\\src\" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(Write-Host \"=== Routes ===\"; Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\backend\\\\routes\" | ForEach-Object { $_.Name }; Write-Host \"\"; Write-Host \"=== Models ===\"; Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\backend\\\\models\" | ForEach-Object { $_.Name }; Write-Host \"\"; Write-Host \"=== Jobs ===\"; Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\backend\\\\jobs\" | ForEach-Object { $_.Name })",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\" | ForEach-Object { $_.Name })",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\loret\\\\tong\\\\center-kitchen\\\\frontend\\\\src\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object -ExpandProperty FullName)",
+      "PowerShell(Set-Content *)"
+    ]
+  }
+}
