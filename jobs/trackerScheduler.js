@@ -83,4 +83,4 @@ function getNextCheck() {
   return null; // now per-product, not global
 }
 
-module.exports = { start, triggerNow, scheduleNew, getNextCheck };
+module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck };
