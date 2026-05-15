@@ -1,75 +1,86 @@
+const cron = require("node-cron");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
 
-let nextCheckTime = null;
-let timeoutId = null;
 let io = null;
 
-// Random ms between 1 and 3 hours
 function randomInterval() {
+  // Random ms between 1 and 3 hours
   return (Math.random() * 2 + 1) * 3600 * 1000;
 }
 
-function getNextCheck() {
-  return nextCheckTime;
+function nextCheckDate() {
+  return new Date(Date.now() + randomInterval());
 }
 
-async function runCheck() {
-  const products = await Product.find();
+async function checkProduct(p) {
+  try {
+    const info = await fetchProduct(p.url);
+    const oldPrice = p.current;
+    const dropped = info.price < oldPrice;
 
-  if (!products.length) {
-    if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results: [] });
-    scheduleNext();
-    return;
+    p.current = info.price;
+    if (info.price < p.lowest) p.lowest = info.price;
+    p.history.push({ price: info.price });
+    if (p.history.length > 200) p.history = p.history.slice(-200);
+    p.nextCheck = nextCheckDate();
+    await p.save();
+
+    if (dropped && io) {
+      io.emit("tracker:price:drop", { product: p.toObject(), oldPrice });
+    }
+
+    return { id: p._id, success: true, dropped, newPrice: info.price, oldPrice };
+  } catch (err) {
+    // Still reschedule even on failure
+    p.nextCheck = nextCheckDate();
+    await p.save();
+    return { id: p._id, success: false, error: err.message };
   }
+}
 
-  if (io) io.emit("tracker:check:start", { count: products.length, time: new Date().toISOString() });
+async function runDueChecks() {
+  const due = await Product.find({ nextCheck: { $lte: new Date() } });
+  if (!due.length) return;
+
+  if (io) io.emit("tracker:check:start", { count: due.length, time: new Date().toISOString() });
 
   const results = [];
-  try {
-    for (const p of products) {
-      try {
-        const info = await fetchProduct(p.url);
-        const oldPrice = p.current;
-        const dropped = info.price < oldPrice;
-
-        p.current = info.price;
-        if (info.price < p.lowest) p.lowest = info.price;
-        p.history.push({ price: info.price });
-        if (p.history.length > 200) p.history = p.history.slice(-200);
-        await p.save();
-
-        results.push({ id: p._id, success: true, dropped, newPrice: info.price, oldPrice });
-
-        if (dropped && io) {
-          io.emit("tracker:price:drop", { product: p.toObject(), oldPrice });
-        }
-      } catch (err) {
-        results.push({ id: p._id, success: false, error: err.message });
-      }
-    }
-  } finally {
-    if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
-    scheduleNext();
+  for (const p of due) {
+    results.push(await checkProduct(p));
   }
-}
 
-function scheduleNext() {
-  if (timeoutId) clearTimeout(timeoutId);
-  const ms = randomInterval();
-  nextCheckTime = new Date(Date.now() + ms).toISOString();
-  if (io) io.emit("tracker:scheduled", { nextCheck: nextCheckTime });
-  timeoutId = setTimeout(runCheck, ms);
+  if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
 }
 
 function start(socketIo) {
   io = socketIo;
-  scheduleNext();
+  // Check every 5 minutes which products are due
+  cron.schedule("*/5 * * * *", runDueChecks);
 }
 
+// Called when user clicks "Check Now" for a specific product or all products
 async function triggerNow() {
-  if (timeoutId) clearTimeout(timeoutId);
-  await runCheck();
+  const products = await Product.find();
+  if (!products.length) return;
+
+  if (io) io.emit("tracker:check:start", { count: products.length, time: new Date().toISOString() });
+
+  const results = [];
+  for (const p of products) {
+    results.push(await checkProduct(p));
+  }
+
+  if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
 }
 
-module.exports = { start, triggerNow, getNextCheck };
+// Set nextCheck on a newly added product
+function scheduleNew(product) {
+  product.nextCheck = nextCheckDate();
+}
+
+function getNextCheck() {
+  return null; // now per-product, not global
+}
+
+module.exports = { start, triggerNow, scheduleNew, getNextCheck };

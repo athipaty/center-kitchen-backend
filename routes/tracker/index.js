@@ -36,6 +36,7 @@ router.post("/", async (req, res) => {
       history: [{ price: info.price }],
     });
 
+    scheduler.scheduleNew(product);
     await product.save();
     res.json(product);
   } catch (err) {

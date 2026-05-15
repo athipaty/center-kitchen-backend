@@ -15,6 +15,7 @@ const productSchema = new mongoose.Schema(
     current: { type: Number, required: true },
     lowest: { type: Number, required: true },
     history: [priceEntrySchema],
+    nextCheck: { type: Date, default: () => new Date() },
   },
   { timestamps: true }
 );
