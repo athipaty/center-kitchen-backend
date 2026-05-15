@@ -26,17 +26,34 @@ function parsePrice(text) {
 }
 
 async function fetchProduct(url) {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+  });
+
   try {
     const context = await browser.newContext({
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       locale: 'en-US',
+      viewport: { width: 1280, height: 800 },
       extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
+    });
+
+    // Hide webdriver flag so Amazon doesn't detect headless browser
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
     const page = await context.newPage();
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    // Wait for price element to actually render (JS-rendered content)
+    try {
+      await page.waitForSelector(PRICE_SELECTORS.join(', '), { timeout: 8000 });
+    } catch {
+      // Price selector didn't appear — page might be CAPTCHA or out-of-stock
+    }
 
     let title = 'Unknown product';
     for (const sel of TITLE_SELECTORS) {
@@ -68,7 +85,12 @@ async function fetchProduct(url) {
       }
     }
 
-    if (!price) throw new Error('Price not found — Amazon may be blocking the request.');
+    if (!price) {
+      const html = await page.content();
+      const isRobot = html.includes('robot') || html.includes('captcha') || html.includes('CAPTCHA');
+      if (isRobot) throw new Error('Amazon is showing a CAPTCHA. Try again in a few minutes.');
+      throw new Error('Price not found. The product may be out of stock or the URL is unsupported.');
+    }
 
     const html = await page.content();
     let currency = '$';
