@@ -31,7 +31,8 @@ app.use(
       "https://expense-six-red.vercel.app",
       "https://maesaiphayao.vercel.app",
       "https://my-react-app-eight-rust.vercel.app",
-      "https://tong-alpha.vercel.app"
+      "https://tong-alpha.vercel.app",
+      "https://amazon-theta-liard.vercel.app"
     ],
     credentials: true,
   }),
