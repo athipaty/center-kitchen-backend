@@ -2,10 +2,11 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 
 function cleanUrl(url) {
-  const match = url.match(
+  const full = url.startsWith('http') ? url : `https://${url}`;
+  const match = full.match(
     /(https?:\/\/[a-z.]*amazon\.[a-z.]+\/(?:[^/]+\/)?dp\/[A-Z0-9]{10})/i
   );
-  return match ? match[1] : url;
+  return match ? match[1] : full;
 }
 
 function extractAsin(url) {
