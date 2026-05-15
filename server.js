@@ -2,9 +2,15 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const { createServer } = require("http");
+const { Server } = require("socket.io");
 require("dotenv").config();
 
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: { origin: "*", methods: ["GET", "POST"] },
+});
 
 /* =====================
    MIDDLEWARE
@@ -71,12 +77,18 @@ app.use('/api/ingredients', require('./routes/recipe/ingredients'));
 // --- Shared ---
 app.use('/auth', require('./routes/shared/auth'));
 
+// --- Amazon Tracker ---
+app.use('/api/tracker', require('./routes/tracker'));
+
 /* =====================
    DATABASE
 ===================== */
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ Connected to MongoDB"))
+  .then(() => {
+    console.log("✅ Connected to MongoDB");
+    require("./jobs/trackerScheduler").start(io);
+  })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 /* =====================
@@ -88,4 +100,4 @@ app.get("/", (req, res) => res.send("API is running 🚀"));
    START SERVER
 ===================== */
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+httpServer.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
