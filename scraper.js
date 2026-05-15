@@ -1,15 +1,22 @@
-const { chromium } = require('playwright');
+const axios = require("axios");
+const cheerio = require("cheerio");
 
-const PRICE_SELECTORS = [
-  '.priceToPay .a-offscreen',
-  '.apexPriceToPay .a-offscreen',
-  '#priceblock_ourprice',
-  '#priceblock_dealprice',
-  '#price_inside_buybox',
-  '.a-price .a-offscreen',
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
 ];
 
-const TITLE_SELECTORS = ['#productTitle', '#title', 'h1.a-size-large'];
+const PRICE_SELECTORS = [
+  ".priceToPay .a-offscreen",
+  ".apexPriceToPay .a-offscreen",
+  "#priceblock_ourprice",
+  "#priceblock_dealprice",
+  "#price_inside_buybox",
+  ".a-price .a-offscreen",
+];
+
+const TITLE_SELECTORS = ["#productTitle", "#title", "h1.a-size-large"];
 
 function cleanUrl(url) {
   const match = url.match(
@@ -20,88 +27,70 @@ function cleanUrl(url) {
 
 function parsePrice(text) {
   if (!text) return null;
-  const clean = text.replace(/,/g, '').trim();
+  const clean = text.replace(/,/g, "").trim();
   const match = clean.match(/[\d]+\.?\d*/);
   return match ? parseFloat(match[0]) : null;
 }
 
+function randomAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
 async function fetchProduct(url) {
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
-  });
-
+  let html;
   try {
-    const context = await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      locale: 'en-US',
-      viewport: { width: 1280, height: 800 },
-      extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
+    const res = await axios.get(url, {
+      timeout: 20000,
+      headers: {
+        "User-Agent": randomAgent(),
+        "Accept-Language": "en-US,en;q=0.9",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        Connection: "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0",
+      },
     });
-
-    // Hide webdriver flag so Amazon doesn't detect headless browser
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
-
-    const page = await context.newPage();
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-    // Wait for price element to actually render (JS-rendered content)
-    try {
-      await page.waitForSelector(PRICE_SELECTORS.join(', '), { timeout: 8000 });
-    } catch {
-      // Price selector didn't appear — page might be CAPTCHA or out-of-stock
-    }
-
-    let title = 'Unknown product';
-    for (const sel of TITLE_SELECTORS) {
-      const el = await page.$(sel);
-      if (el) {
-        const text = (await el.textContent()).trim();
-        if (text) { title = text; break; }
-      }
-    }
-
-    let price = null;
-    for (const sel of PRICE_SELECTORS) {
-      const el = await page.$(sel);
-      if (!el) continue;
-      const content = await el.getAttribute('content');
-      const text = content || (await el.textContent());
-      price = parsePrice(text);
-      if (price) break;
-    }
-
-    if (!price) {
-      const priceEls = await page.$$('.a-price');
-      for (const el of priceEls) {
-        const offscreen = await el.$('.a-offscreen');
-        if (offscreen) {
-          price = parsePrice(await offscreen.textContent());
-          if (price) break;
-        }
-      }
-    }
-
-    if (!price) {
-      const html = await page.content();
-      const isRobot = html.includes('robot') || html.includes('captcha') || html.includes('CAPTCHA');
-      if (isRobot) throw new Error('Amazon is showing a CAPTCHA. Try again in a few minutes.');
-      throw new Error('Price not found. The product may be out of stock or the URL is unsupported.');
-    }
-
-    const html = await page.content();
-    let currency = '$';
-    for (const sym of ['฿', '£', '€', '¥', '$']) {
-      if (html.slice(0, 10000).includes(sym)) { currency = sym; break; }
-    }
-
-    return { title, price, currency };
-  } finally {
-    await browser.close();
+    html = res.data;
+  } catch (err) {
+    throw new Error(`Network error: ${err.message}`);
   }
+
+  const $ = cheerio.load(html);
+
+  if ($("form[action='/errors/validateCaptcha']").length) {
+    throw new Error("Amazon is showing a CAPTCHA. Try again in a few minutes.");
+  }
+
+  let title = "Unknown product";
+  for (const sel of TITLE_SELECTORS) {
+    const text = $(sel).first().text().trim();
+    if (text) { title = text; break; }
+  }
+
+  let price = null;
+  for (const sel of PRICE_SELECTORS) {
+    const el = $(sel).first();
+    const raw = el.attr("content") || el.text();
+    price = parsePrice(raw);
+    if (price) break;
+  }
+
+  if (!price) {
+    $(".a-price").each((_, el) => {
+      if (price) return false;
+      price = parsePrice($(el).find(".a-offscreen").text() || $(el).text());
+    });
+  }
+
+  if (!price) throw new Error("Price not found. The product may be out of stock or the URL is unsupported.");
+
+  let currency = "$";
+  for (const sym of ["฿", "£", "€", "¥", "$"]) {
+    if (html.slice(0, 10000).includes(sym)) { currency = sym; break; }
+  }
+
+  return { title, price, currency };
 }
 
 module.exports = { cleanUrl, fetchProduct };
