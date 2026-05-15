@@ -39,9 +39,14 @@ function randomAgent() {
 async function fetchProduct(url) {
   let html;
   try {
-    const res = await axios.get(url, {
-      timeout: 20000,
-      headers: {
+    const scraperKey = process.env.SCRAPER_API_KEY;
+    const requestUrl = scraperKey
+      ? `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}`
+      : url;
+
+    const res = await axios.get(requestUrl, {
+      timeout: 60000,
+      headers: scraperKey ? {} : {
         "User-Agent": randomAgent(),
         "Accept-Language": "en-US,en;q=0.9",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
