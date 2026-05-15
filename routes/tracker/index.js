@@ -53,10 +53,15 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// POST trigger manual price check now
+// POST trigger manual price check now — waits for completion
 router.post("/check", async (req, res) => {
-  res.json({ ok: true, message: "Check triggered" });
-  scheduler.triggerNow();
+  try {
+    await scheduler.triggerNow();
+    const products = await Product.find().sort({ createdAt: -1 });
+    res.json({ ok: true, products });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET monitoring status (next check time)

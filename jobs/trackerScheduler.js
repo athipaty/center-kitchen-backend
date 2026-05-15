@@ -16,7 +16,9 @@ function getNextCheck() {
 
 async function runCheck() {
   const products = await Product.find();
+
   if (!products.length) {
+    if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results: [] });
     scheduleNext();
     return;
   }
@@ -24,30 +26,32 @@ async function runCheck() {
   if (io) io.emit("tracker:check:start", { count: products.length, time: new Date().toISOString() });
 
   const results = [];
-  for (const p of products) {
-    try {
-      const info = await fetchProduct(p.url);
-      const oldPrice = p.current;
-      const dropped = info.price < oldPrice;
+  try {
+    for (const p of products) {
+      try {
+        const info = await fetchProduct(p.url);
+        const oldPrice = p.current;
+        const dropped = info.price < oldPrice;
 
-      p.current = info.price;
-      if (info.price < p.lowest) p.lowest = info.price;
-      p.history.push({ price: info.price });
-      if (p.history.length > 200) p.history = p.history.slice(-200);
-      await p.save();
+        p.current = info.price;
+        if (info.price < p.lowest) p.lowest = info.price;
+        p.history.push({ price: info.price });
+        if (p.history.length > 200) p.history = p.history.slice(-200);
+        await p.save();
 
-      results.push({ id: p._id, success: true, dropped, newPrice: info.price, oldPrice });
+        results.push({ id: p._id, success: true, dropped, newPrice: info.price, oldPrice });
 
-      if (dropped && io) {
-        io.emit("tracker:price:drop", { product: p.toObject(), oldPrice });
+        if (dropped && io) {
+          io.emit("tracker:price:drop", { product: p.toObject(), oldPrice });
+        }
+      } catch (err) {
+        results.push({ id: p._id, success: false, error: err.message });
       }
-    } catch (err) {
-      results.push({ id: p._id, success: false, error: err.message });
     }
+  } finally {
+    if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
+    scheduleNext();
   }
-
-  if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
-  scheduleNext();
 }
 
 function scheduleNext() {
