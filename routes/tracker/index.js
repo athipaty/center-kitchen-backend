@@ -15,7 +15,14 @@ router.get("/debug-raw", async (req, res) => {
       `https://api.scraperapi.com/structured/amazon/product/v1`,
       { params: { api_key: process.env.SCRAPER_API_KEY, asin }, timeout: 60000 }
     );
-    res.json(data);
+    // Surface prime-related keys to help identify the correct field name
+    const primeKeys = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (k.toLowerCase().includes('prime') || k.toLowerCase().includes('ship') || k.toLowerCase().includes('delivery')) {
+        primeKeys[k] = v;
+      }
+    }
+    res.json({ primeRelatedFields: primeKeys, full: data });
   } catch (err) {
     res.status(500).json({ error: err.response?.data || err.message });
   }
