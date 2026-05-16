@@ -21,7 +21,25 @@ function parsePrice(text) {
   return match ? parseFloat(match[0]) : null;
 }
 
-function parseVariants(rawVariants) {
+function parseVariants(data) {
+  // Primary: customization_options.{color,size,...} — each entry has asin + value + image
+  const opts = data.customization_options;
+  if (opts && typeof opts === 'object') {
+    const seen = new Set();
+    const result = [];
+    for (const [dimension, options] of Object.entries(opts)) {
+      if (!Array.isArray(options)) continue;
+      for (const opt of options) {
+        if (!opt.asin || !opt.value || seen.has(opt.asin)) continue;
+        seen.add(opt.asin);
+        result.push({ asin: opt.asin, label: opt.value, price: null, image: opt.image || null });
+      }
+    }
+    if (result.length > 0) return result;
+  }
+
+  // Fallback: data.variants array (some products use this format)
+  const rawVariants = data.variants;
   if (!Array.isArray(rawVariants) || !rawVariants.length) return [];
   return rawVariants.map(v => {
     const asin = v.asin || v.ASIN;
@@ -35,7 +53,7 @@ function parseVariants(rawVariants) {
     }
     if (!label) label = v.title || v.dimension_value || v.value || asin;
     const price = parsePrice(v.price || v.pricing || v.original_price);
-    return { asin, label: label.trim(), price: price || null };
+    return { asin, label: label.trim(), price: price || null, image: null };
   }).filter(Boolean);
 }
 
@@ -72,7 +90,7 @@ async function fetchProduct(url) {
         || data.product_information?.ean
         || null;
 
-      const variants = parseVariants(data.variants || []);
+      const variants = parseVariants(data);
 
       return { title, price, currency, image, upc, variants };
     } catch (err) {
