@@ -21,6 +21,24 @@ function parsePrice(text) {
   return match ? parseFloat(match[0]) : null;
 }
 
+function parseVariants(rawVariants) {
+  if (!Array.isArray(rawVariants) || !rawVariants.length) return [];
+  return rawVariants.map(v => {
+    const asin = v.asin || v.ASIN;
+    if (!asin) return null;
+    let label = '';
+    const attrs = v.attributes || v.variationAttributes || {};
+    if (Array.isArray(attrs)) {
+      label = attrs.map(a => a.value || a.name || '').filter(Boolean).join(' / ');
+    } else if (typeof attrs === 'object' && Object.keys(attrs).length) {
+      label = Object.values(attrs).join(' / ');
+    }
+    if (!label) label = v.title || v.dimension_value || v.value || asin;
+    const price = parsePrice(v.price || v.pricing || v.original_price);
+    return { asin, label: label.trim(), price: price || null };
+  }).filter(Boolean);
+}
+
 async function fetchProduct(url) {
   const scraperKey = process.env.SCRAPER_API_KEY;
   const asin = extractAsin(url);
@@ -54,7 +72,9 @@ async function fetchProduct(url) {
         || data.product_information?.ean
         || null;
 
-      return { title, price, currency, image, upc };
+      const variants = parseVariants(data.variants || []);
+
+      return { title, price, currency, image, upc, variants };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }
@@ -102,7 +122,7 @@ async function fetchProduct(url) {
     if (html.slice(0, 10000).includes(sym)) { currency = sym; break; }
   }
 
-  return { title, price, currency };
+  return { title, price, currency, variants: [] };
 }
 
 module.exports = { cleanUrl, fetchProduct };

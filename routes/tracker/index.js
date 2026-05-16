@@ -14,6 +14,26 @@ router.get("/", async (req, res) => {
   }
 });
 
+// POST preview a URL — returns scraped info + variants without saving anything
+router.post("/preview", async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: "url is required" });
+    const cleanedUrl = cleanUrl(url);
+    const info = await fetchProduct(cleanedUrl);
+    // Extract base domain so variant URLs stay on the same Amazon locale
+    const domainMatch = cleanedUrl.match(/(https?:\/\/[^/]+)/);
+    const baseDomain = domainMatch ? domainMatch[1] : "https://www.amazon.com";
+    const variants = (info.variants || []).map(v => ({
+      ...v,
+      url: `${baseDomain}/dp/${v.asin}`,
+    }));
+    res.json({ title: info.title, price: info.price, currency: info.currency, image: info.image, variants });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // POST add a product to track
 router.post("/", async (req, res) => {
   try {
