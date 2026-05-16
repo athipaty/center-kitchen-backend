@@ -18,6 +18,7 @@ const productSchema = new mongoose.Schema(
     lowest: { type: Number, required: true },
     history: [priceEntrySchema],
     nextCheck: { type: Date, default: () => new Date() },
+    isPrime: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
