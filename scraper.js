@@ -88,6 +88,7 @@ async function fetchProduct(url) {
       const upc = data.upc
         || data.product_information?.upc
         || data.product_information?.ean
+        || data.product_information?.global_trade_identification_number
         || null;
 
       const variants = parseVariants(data);
