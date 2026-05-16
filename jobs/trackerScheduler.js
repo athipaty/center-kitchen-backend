@@ -24,6 +24,7 @@ async function checkProduct(p) {
     if (info.image && !p.image) p.image = info.image;
     if (info.upc && !p.upc) p.upc = info.upc;
     if (info.isPrime !== undefined) p.isPrime = info.isPrime;
+    if (info.color && !p.color) p.color = info.color;
     if (info.price !== oldPrice) {
       p.history.push({ price: info.price });
       if (p.history.length > 200) p.history = p.history.slice(-200);

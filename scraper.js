@@ -92,11 +92,12 @@ async function fetchProduct(url) {
 
       const variants = parseVariants(data);
 
-      // Prime = Fulfilled by Amazon (ships_from contains "Amazon")
       const isPrime = typeof data.ships_from === 'string' &&
         data.ships_from.toLowerCase().includes('amazon');
 
-      return { title, price, currency, image, upc, variants, isPrime };
+      const color = data.product_information?.color || null;
+
+      return { title, price, currency, image, upc, variants, isPrime, color };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }
