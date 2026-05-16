@@ -1,8 +1,25 @@
 const express = require("express");
 const router = express.Router();
+const axios = require("axios");
 const Product = require("../../models/tracker/Product");
 const { cleanUrl, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
+
+// GET raw ScraperAPI response for an ASIN — for debugging variant field names
+router.get("/debug-raw", async (req, res) => {
+  const { asin } = req.query;
+  if (!asin) return res.status(400).json({ error: "asin is required" });
+  if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
+  try {
+    const { data } = await axios.get(
+      `https://api.scraperapi.com/structured/amazon/product/v1`,
+      { params: { api_key: process.env.SCRAPER_API_KEY, asin }, timeout: 60000 }
+    );
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.response?.data || err.message });
+  }
+});
 
 // GET all tracked products
 router.get("/", async (req, res) => {
