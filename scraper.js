@@ -95,9 +95,18 @@ async function fetchProduct(url) {
       const isPrime = typeof data.ships_from === 'string' &&
         data.ships_from.toLowerCase().includes('amazon');
 
-      const color = data.product_information?.color || null;
+      // Build variant label from all selected customization options (color, size, style, etc.)
+      const selectedParts = [];
+      if (data.customization_options && typeof data.customization_options === 'object') {
+        for (const options of Object.values(data.customization_options)) {
+          if (!Array.isArray(options)) continue;
+          const selected = options.find(o => o.is_selected && o.value);
+          if (selected) selectedParts.push(selected.value);
+        }
+      }
+      const variant = selectedParts.join(' / ') || data.product_information?.color || null;
 
-      return { title, price, currency, image, upc, variants, isPrime, color };
+      return { title, price, currency, image, upc, variants, isPrime, variant };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }
