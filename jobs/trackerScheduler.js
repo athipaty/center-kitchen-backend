@@ -23,8 +23,10 @@ async function checkProduct(p) {
     if (info.price < p.lowest) p.lowest = info.price;
     if (info.image && !p.image) p.image = info.image;
     if (info.upc && !p.upc) p.upc = info.upc;
-    p.history.push({ price: info.price });
-    if (p.history.length > 200) p.history = p.history.slice(-200);
+    if (info.price !== oldPrice) {
+      p.history.push({ price: info.price });
+      if (p.history.length > 200) p.history = p.history.slice(-200);
+    }
     p.nextCheck = nextCheckDate();
     await p.save();
 
