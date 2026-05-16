@@ -20,6 +20,7 @@ const productSchema = new mongoose.Schema(
     nextCheck: { type: Date, default: () => new Date() },
     isPrime: { type: Boolean, default: false },
     variant: { type: String, default: null },
+    specs: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }
 );

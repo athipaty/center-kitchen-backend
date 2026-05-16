@@ -75,6 +75,7 @@ router.post("/", async (req, res) => {
       history: [{ price: info.price }],
       isPrime: info.isPrime || false,
       variant: info.variant || null,
+      specs: info.specs || {},
     });
 
     scheduler.scheduleNew(product);

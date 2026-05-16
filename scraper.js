@@ -106,7 +106,9 @@ async function fetchProduct(url) {
       }
       const variant = selectedParts.join(' / ') || data.product_information?.color || null;
 
-      return { title, price, currency, image, upc, variants, isPrime, variant };
+      const specs = data.product_information || {};
+
+      return { title, price, currency, image, upc, variants, isPrime, variant, specs };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }
