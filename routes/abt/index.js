@@ -22,6 +22,7 @@ const AbtComplaint = require('../../models/abt/AbtComplaint')
 const AbtDocument = require('../../models/abt/AbtDocument')
 const AbtPage     = require('../../models/abt/AbtPage')
 const AbtVisitor  = require('../../models/abt/AbtVisitor')
+const AbtBanner   = require('../../models/abt/AbtBanner')
 
 // â”€â”€ Cloudinary setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 cloudinary.config({
@@ -953,6 +954,69 @@ router.post('/visits', async (req, res) => {
       { new: true, upsert: true, setDefaultsOnInsert: true }
     )
     res.json(await getStats(doc.count))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── Banners ──────────────────────────────────────────────────────────────────
+const DEFAULT_BANNERS = [
+  { label: 'กรมส่งเสริมการปกครอง', sub: 'DLA',  href: 'http://www.dla.go.th/',          bg: 'linear-gradient(135deg,#1e3a8a,#2563eb)', order: 1 },
+  { label: 'ระบบ E-GP',            sub: 'EGP',  href: 'http://www.gprocurement.go.th/', bg: 'linear-gradient(135deg,#065f46,#059669)', order: 2 },
+  { label: 'ทะเบียนราษฎร',         sub: 'DOPA', href: 'https://stat.bora.dopa.go.th/',  bg: 'linear-gradient(135deg,#7c3aed,#a855f7)', order: 3 },
+  { label: 'ระบบสวัสดิการ',         sub: 'WEL',  href: 'https://welfare.dla.go.th/',     bg: 'linear-gradient(135deg,#b45309,#f59e0b)', order: 4 },
+  { label: 'เลือกตั้งท้องถิ่น',     sub: 'ELE',  href: 'https://ele.dla.go.th/',         bg: 'linear-gradient(135deg,#be123c,#f43f5e)', order: 5 },
+  { label: 'เมล์กรมส่งเสริมฯ',      sub: 'MAIL', href: 'https://mail.dla.go.th/login',   bg: 'linear-gradient(135deg,#0e7490,#06b6d4)', order: 6 },
+  { label: 'อุตุฯ เชียงใหม่',       sub: 'TMD',  href: 'https://cmmet.tmd.go.th/',       bg: 'linear-gradient(135deg,#0369a1,#38bdf8)', order: 7 },
+  { label: 'LPA Dashboard',         sub: 'LPA',  href: '#',                               bg: 'linear-gradient(135deg,#4f46e5,#818cf8)', order: 8 },
+  { label: 'แจ้งเบาะแสทุจริต',      sub: 'PACC', href: 'https://anonymous.pacc.go.th/', bg: 'linear-gradient(135deg,#7f1d1d,#dc2626)', order: 9 },
+]
+
+router.get('/banners', async (req, res) => {
+  try {
+    let items = await AbtBanner.find({ active: true }).sort({ order: 1, createdAt: 1 })
+    if (items.length === 0) {
+      items = await AbtBanner.insertMany(DEFAULT_BANNERS)
+    }
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.get('/banners/all', requireAuth, async (req, res) => {
+  try {
+    const items = await AbtBanner.find().sort({ order: 1, createdAt: 1 })
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/banners', requireAuth, async (req, res) => {
+  try {
+    const count = await AbtBanner.countDocuments()
+    const item = await AbtBanner.create({ ...req.body, order: req.body.order ?? (count + 1) * 10 })
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/banners/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtBanner.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/banners/:id', requireAuth, async (req, res) => {
+  try {
+    await AbtBanner.findByIdAndDelete(req.params.id)
+    res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
