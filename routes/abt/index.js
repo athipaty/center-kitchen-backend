@@ -806,7 +806,7 @@ const DEFAULT_MENU = [
   { title: 'à¸à¸²à¸£à¹€à¸‡à¸´à¸™/à¸à¸²à¸£à¸„à¸¥à¸±à¸‡',                  slug: 'builtin-finance',     icon: 'ðŸ’°', path: '/finance',        isBuiltin: true, order: 3,  showInNavbar: false },
   { title: 'à¸ˆà¸±à¸”à¸‹à¸·à¹‰à¸­à¸ˆà¸±à¸”à¸ˆà¹‰à¸²à¸‡',                   slug: 'builtin-procurement', icon: 'ðŸ“‹', path: '/procurement',    isBuiltin: true, order: 4,  showInNavbar: false },
   { title: 'à¸šà¸¸à¸„à¸¥à¸²à¸à¸£',                           slug: 'builtin-staff',       icon: 'ðŸ‘¥', path: '/staff',          isBuiltin: true, order: 5,  showInNavbar: true  },
-  { title: 'à¸šà¸£à¸´à¸à¸²à¸£à¸ªà¸²à¸˜à¸²à¸£à¸“à¸°',                    slug: 'builtin-public',      icon: 'ðŸŒ', path: '/public-service', isBuiltin: true, order: 6,  showInNavbar: false },
+  { title: 'à¸šà¸£à¸´à¸à¸²à¸£à¸ªà¸²à¸˜à¸²à¸£à¸“à¸°',                    slug: 'builtin-public',      icon: 'ðŸŒ', path: '/public-service', isBuiltin: true, order: 6,  showInNavbar: false, isActive: false },
   { title: 'e-Service',                        slug: 'builtin-eservice',    icon: 'ðŸŒ', path: '/eservice',       isBuiltin: true, order: 7,  showInNavbar: true  },
   { title: 'à¸£à¹‰à¸­à¸‡à¹€à¸£à¸µà¸¢à¸™/à¸£à¹‰à¸­à¸‡à¸—à¸¸à¸à¸‚à¹Œ',              slug: 'builtin-complaint',   icon: 'ðŸ“®', path: '/complaint',      isBuiltin: true, order: 8,  showInNavbar: true  },
   { title: 'à¸£à¹‰à¸­à¸‡à¹€à¸£à¸µà¸¢à¸™à¸à¸²à¸£à¸—à¸¸à¸ˆà¸£à¸´à¸•à¹à¸¥à¸°à¸›à¸£à¸°à¸žà¸¤à¸•à¸´à¸¡à¸´à¸Šà¸­à¸š', slug: 'builtin-corruption',  icon: 'ðŸš¨', path: '/corruption',     isBuiltin: true, order: 9,  showInNavbar: true  },
