@@ -279,12 +279,15 @@ router.delete('/procurement/:id', requireAuth, async (req, res) => {
   }
 })
 
-// e-GP RSS proxy (server-side fetch avoids CORS)
+// e-GP RSS proxy — with in-memory cache so stale data shows when feed is down
+const _egpCache = {}  // keyed by anounceType ('' = all)
+
 router.get('/egp-rss', async (req, res) => {
   const axios   = require('axios')
   const cheerio = require('cheerio')
   const DEPT_SUB_ID = '6560105'
   const BASE_URL = 'http://process3.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml'
+  const cacheKey = req.query.anounceType || ''
   try {
     const params = { deptsubId: DEPT_SUB_ID }
     if (req.query.anounceType) params.anounceType = req.query.anounceType
@@ -299,9 +302,13 @@ router.get('/egp-rss', async (req, res) => {
         desc:  $(el).find('description').text(),
       })
     })
+    _egpCache[cacheKey] = { items, cachedAt: new Date().toISOString() }
     res.json(items)
   } catch (err) {
-    res.status(502).json({ error: 'à¹„à¸¡à¹ˆà¸ªà¸²à¸¡à¸²à¸£à¸–à¹€à¸Šà¸·à¹ˆà¸­à¸¡à¸•à¹ˆà¸­à¸£à¸°à¸šà¸š e-GP à¹„à¸”à¹‰: ' + err.message })
+    if (_egpCache[cacheKey]) {
+      return res.json(_egpCache[cacheKey].items)
+    }
+    res.status(502).json({ error: 'ไม่สามารถเชื่อมต่อระบบ e-GP ได้: ' + err.message })
   }
 })
 
