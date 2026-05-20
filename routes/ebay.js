@@ -151,15 +151,19 @@ router.get('/my-listings', async (req, res) => {
     if (!offers.length) return res.json([]);
 
     // Batch-fetch inventory items for title + images (max 25 per request)
-    const skus = [...new Set(offers.map(o => o.sku))];
+    // Only pass SKUs that are alphanumeric ≤50 chars — eBay rejects others in this endpoint
+    const allSkus = [...new Set(offers.map(o => o.sku))];
+    const validSkus = allSkus.filter(s => /^[a-zA-Z0-9\-_.]{1,50}$/.test(s));
     const itemMap = {};
-    for (let i = 0; i < skus.length; i += 25) {
-      const { data: bulk } = await axios.post(
-        'https://api.ebay.com/sell/inventory/v1/bulk_get_inventory_item',
-        { requests: skus.slice(i, i + 25).map(sku => ({ sku })) },
-        { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
-      );
-      (bulk.responses || []).forEach(r => { if (r.inventoryItem) itemMap[r.sku] = r.inventoryItem; });
+    for (let i = 0; i < validSkus.length; i += 25) {
+      try {
+        const { data: bulk } = await axios.post(
+          'https://api.ebay.com/sell/inventory/v1/bulk_get_inventory_item',
+          { requests: validSkus.slice(i, i + 25).map(sku => ({ sku })) },
+          { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+        );
+        (bulk.responses || []).forEach(r => { if (r.inventoryItem) itemMap[r.sku] = r.inventoryItem; });
+      } catch { /* skip batch on error, fall back to SKU as title */ }
     }
 
     res.json(offers.map(offer => {
