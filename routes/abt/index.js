@@ -888,14 +888,51 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10)
 }
 
+function dateRanges() {
+  const now = new Date()
+  const pad = n => String(n).padStart(2, '0')
+
+  // week: Monday of this week
+  const day = now.getDay() === 0 ? 6 : now.getDay() - 1
+  const monday = new Date(now)
+  monday.setDate(now.getDate() - day)
+  const weekStart = monday.toISOString().slice(0, 10)
+
+  const monthStart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`
+  const yearStart  = `${now.getFullYear()}-01-01`
+
+  return { weekStart, monthStart, yearStart }
+}
+
+async function sumVisits(gte) {
+  const agg = await AbtVisitor.aggregate([
+    { $match: { date: { $gte: gte } } },
+    { $group: { _id: null, total: { $sum: '$count' } } },
+  ])
+  return agg[0]?.total || 0
+}
+
+async function getStats(todayCount) {
+  const { weekStart, monthStart, yearStart } = dateRanges()
+  const [week, month, year, totalAgg] = await Promise.all([
+    sumVisits(weekStart),
+    sumVisits(monthStart),
+    sumVisits(yearStart),
+    AbtVisitor.aggregate([{ $group: { _id: null, total: { $sum: '$count' } } }]),
+  ])
+  return {
+    today: todayCount,
+    week,
+    month,
+    year,
+    total: totalAgg[0]?.total || 0,
+  }
+}
+
 router.get('/visits', async (req, res) => {
   try {
-    const today = todayStr()
-    const [todayDoc, agg] = await Promise.all([
-      AbtVisitor.findOne({ date: today }),
-      AbtVisitor.aggregate([{ $group: { _id: null, total: { $sum: '$count' } } }]),
-    ])
-    res.json({ today: todayDoc?.count || 0, total: agg[0]?.total || 0 })
+    const todayDoc = await AbtVisitor.findOne({ date: todayStr() })
+    res.json(await getStats(todayDoc?.count || 0))
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -903,14 +940,12 @@ router.get('/visits', async (req, res) => {
 
 router.post('/visits', async (req, res) => {
   try {
-    const today = todayStr()
     const doc = await AbtVisitor.findOneAndUpdate(
-      { date: today },
+      { date: todayStr() },
       { $inc: { count: 1 } },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     )
-    const agg = await AbtVisitor.aggregate([{ $group: { _id: null, total: { $sum: '$count' } } }])
-    res.json({ today: doc.count, total: agg[0]?.total || 0 })
+    res.json(await getStats(doc.count))
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
