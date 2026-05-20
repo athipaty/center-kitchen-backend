@@ -286,12 +286,12 @@ router.get('/egp-rss', async (req, res) => {
   const axios   = require('axios')
   const cheerio = require('cheerio')
   const DEPT_SUB_ID = '6560105'
-  const BASE_URL = 'http://process3.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml'
+  const BASE_URL = 'https://process.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml'
   const cacheKey = req.query.anounceType || ''
   try {
     const params = { deptsubId: DEPT_SUB_ID }
     if (req.query.anounceType) params.anounceType = req.query.anounceType
-    const { data: xml } = await axios.get(BASE_URL, { params, timeout: 10000 })
+    const { data: xml } = await axios.get(BASE_URL, { params, timeout: 15000, maxRedirects: 5 })
     const $ = cheerio.load(xml, { xmlMode: true })
     const items = []
     $('item').each((_, el) => {
