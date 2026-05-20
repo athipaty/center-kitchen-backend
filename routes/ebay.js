@@ -150,33 +150,38 @@ router.get('/my-listings', async (req, res) => {
     const offers = offersData.offers || [];
     if (!offers.length) return res.json([]);
 
-    // Batch-fetch inventory items for title + images (max 25 per request)
-    // Only pass SKUs that are alphanumeric ≤50 chars — eBay rejects others in this endpoint
-    const allSkus = [...new Set(offers.map(o => o.sku))];
-    const validSkus = allSkus.filter(s => /^[a-zA-Z0-9\-_.]{1,50}$/.test(s));
+    // Use Shopping API (public) to get real titles + images by listing ID
+    const listingIds = offers.map(o => o.listing?.listingId).filter(Boolean);
     const itemMap = {};
-    for (let i = 0; i < validSkus.length; i += 25) {
+    for (let i = 0; i < listingIds.length; i += 20) {
       try {
-        const { data: bulk } = await axios.post(
-          'https://api.ebay.com/sell/inventory/v1/bulk_get_inventory_item',
-          { requests: validSkus.slice(i, i + 25).map(sku => ({ sku })) },
-          { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
-        );
-        (bulk.responses || []).forEach(r => { if (r.inventoryItem) itemMap[r.sku] = r.inventoryItem; });
-      } catch { /* skip batch on error, fall back to SKU as title */ }
+        const { data: shopData } = await axios.get('https://open.api.ebay.com/shopping', {
+          params: {
+            callname: 'GetMultipleItems',
+            responseencoding: 'JSON',
+            appid: process.env.EBAY_APP_ID,
+            version: '967',
+            ItemID: listingIds.slice(i, i + 20).join(','),
+            IncludeSelector: 'Details',
+          },
+        });
+        (shopData.Item || []).forEach(item => {
+          itemMap[item.ItemID] = { title: item.Title, image: item.PictureURL?.[0] };
+        });
+      } catch { /* skip on error, fall back to SKU */ }
     }
 
     res.json(offers.map(offer => {
-      const inv = itemMap[offer.sku] || {};
+      const detail = itemMap[offer.listing?.listingId] || {};
       return {
         offerId: offer.offerId,
         listingId: offer.listing?.listingId,
         sku: offer.sku,
-        title: inv.product?.title || offer.sku,
-        image: inv.product?.imageUrls?.[0] || null,
+        title: detail.title || offer.sku,
+        image: detail.image || null,
         price: parseFloat(offer.pricingSummary?.price?.value || 0),
         currency: offer.pricingSummary?.price?.currency || 'USD',
-        quantity: offer.availableQuantity ?? inv.availability?.shipToLocationAvailability?.quantity ?? 0,
+        quantity: offer.availableQuantity ?? 0,
         url: offer.listing?.listingId ? `https://www.ebay.com/itm/${offer.listing.listingId}` : null,
       };
     }));
