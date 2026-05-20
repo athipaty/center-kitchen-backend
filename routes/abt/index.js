@@ -951,6 +951,33 @@ router.post('/visits', async (req, res) => {
   }
 })
 
+// ── Facebook page info (followers) ──────────────────────────────────────────
+let _fbCache = null
+let _fbCacheAt = 0
+
+router.get('/facebook-page', async (req, res) => {
+  try {
+    if (_fbCache && Date.now() - _fbCacheAt < 3_600_000) {
+      return res.json({ data: _fbCache })
+    }
+    const appId     = process.env.FACEBOOK_APP_ID
+    const appSecret = process.env.FACEBOOK_APP_SECRET
+    if (!appId || !appSecret) return res.status(503).json({ error: 'Facebook credentials not configured' })
+
+    const token = `${appId}|${appSecret}`
+    const url   = `https://graph.facebook.com/v19.0/MaesaiSAOPhayao?fields=name,followers_count,fan_count&access_token=${token}`
+    const resp  = await fetch(url)
+    const data  = await resp.json()
+    if (data.error) throw new Error(data.error.message)
+
+    _fbCache   = data
+    _fbCacheAt = Date.now()
+    res.json({ data })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 module.exports = router
 
 
