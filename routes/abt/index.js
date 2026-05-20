@@ -21,6 +21,7 @@ const AbtEServiceType = require('../../models/abt/AbtEServiceType')
 const AbtComplaint = require('../../models/abt/AbtComplaint')
 const AbtDocument = require('../../models/abt/AbtDocument')
 const AbtPage     = require('../../models/abt/AbtPage')
+const AbtVisitor  = require('../../models/abt/AbtVisitor')
 
 // â”€â”€ Cloudinary setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 cloudinary.config({
@@ -874,6 +875,42 @@ router.delete('/pages/:id', requireAuth, async (req, res) => {
     if (page.isBuiltin) return res.status(400).json({ error: 'à¹„à¸¡à¹ˆà¸ªà¸²à¸¡à¸²à¸£à¸–à¸¥à¸šà¸«à¸™à¹‰à¸²à¸£à¸°à¸šà¸šà¹„à¸”à¹‰' })
     await AbtPage.findByIdAndDelete(req.params.id)
     res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISITOR COUNTER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+router.get('/visits', async (req, res) => {
+  try {
+    const today = todayStr()
+    const [todayDoc, agg] = await Promise.all([
+      AbtVisitor.findOne({ date: today }),
+      AbtVisitor.aggregate([{ $group: { _id: null, total: { $sum: '$count' } } }]),
+    ])
+    res.json({ today: todayDoc?.count || 0, total: agg[0]?.total || 0 })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/visits', async (req, res) => {
+  try {
+    const today = todayStr()
+    const doc = await AbtVisitor.findOneAndUpdate(
+      { date: today },
+      { $inc: { count: 1 } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    )
+    const agg = await AbtVisitor.aggregate([{ $group: { _id: null, total: { $sum: '$count' } } }])
+    res.json({ today: doc.count, total: agg[0]?.total || 0 })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
