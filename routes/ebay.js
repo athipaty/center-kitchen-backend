@@ -4,6 +4,20 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
+// ── Sold-price cache (6h TTL) ──────────────────────────────────────
+const soldCache = new Map(); // key → { data, expiresAt }
+const SOLD_TTL = 6 * 60 * 60 * 1000;
+
+function getCached(key) {
+  const entry = soldCache.get(key);
+  if (entry && Date.now() < entry.expiresAt) return entry.data;
+  soldCache.delete(key);
+  return null;
+}
+function setCache(key, data) {
+  soldCache.set(key, { data, expiresAt: Date.now() + SOLD_TTL });
+}
+
 // ── Token persistence ──────────────────────────────────────────────
 const TOKEN_FILE = path.join(__dirname, '..', 'ebay_tokens.json');
 let tokens = { access_token: null, refresh_token: null, expires_at: 0 };
@@ -199,6 +213,9 @@ router.get('/sold', async (req, res) => {
   if (!q) return res.status(400).json({ error: 'q is required' });
   if (!process.env.EBAY_APP_ID) return res.status(500).json({ error: 'EBAY_APP_ID not set' });
 
+  const cached = getCached(q);
+  if (cached) return res.json(cached);
+
   try {
     const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
       params: {
@@ -219,15 +236,21 @@ router.get('/sold', async (req, res) => {
       .map(item => parseFloat(item.sellingStatus?.[0]?.convertedCurrentPrice?.[0]?.__value__ || 0))
       .filter(p => p > 0);
 
-    if (!prices.length) return res.json({ count: 0, avg: null });
+    if (!prices.length) {
+      const empty = { count: 0, avg: null };
+      setCache(q, empty);
+      return res.json(empty);
+    }
 
     const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
-    res.json({
+    const result = {
       count: prices.length,
       avg: Math.round(avg * 100) / 100,
       min: Math.min(...prices),
       max: Math.max(...prices),
-    });
+    };
+    setCache(q, result);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: ebayError(err) });
   }
