@@ -193,4 +193,44 @@ router.get('/my-listings', async (req, res) => {
   }
 });
 
+// ── Sold listings (profit research) ───────────────────────────────
+router.get('/sold', async (req, res) => {
+  const { q } = req.query;
+  if (!q) return res.status(400).json({ error: 'q is required' });
+  if (!process.env.EBAY_APP_ID) return res.status(500).json({ error: 'EBAY_APP_ID not set' });
+
+  try {
+    const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+      params: {
+        'OPERATION-NAME': 'findCompletedItems',
+        'SERVICE-VERSION': '1.0.0',
+        'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+        'RESPONSE-DATA-FORMAT': 'JSON',
+        keywords: q,
+        'paginationInput.entriesPerPage': 20,
+        'itemFilter(0).name': 'SoldItemsOnly',
+        'itemFilter(0).value': 'true',
+        sortOrder: 'EndTimeSoonest',
+      },
+    });
+
+    const items = data.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
+    const prices = items
+      .map(item => parseFloat(item.sellingStatus?.[0]?.convertedCurrentPrice?.[0]?.__value__ || 0))
+      .filter(p => p > 0);
+
+    if (!prices.length) return res.json({ count: 0, avg: null });
+
+    const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
+    res.json({
+      count: prices.length,
+      avg: Math.round(avg * 100) / 100,
+      min: Math.min(...prices),
+      max: Math.max(...prices),
+    });
+  } catch (err) {
+    res.status(500).json({ error: ebayError(err) });
+  }
+});
+
 module.exports = router;
