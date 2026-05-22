@@ -9,6 +9,43 @@ const Anthropic = require('@anthropic-ai/sdk');
 const soldCache = new Map(); // key → { data, expiresAt }
 const SOLD_TTL = 6 * 60 * 60 * 1000;
 
+// ── Image proxy (eBay can't fetch Amazon CDN directly) ─────────────
+const imageProxyCache = new Map(); // key → { buffer, contentType, expiresAt }
+const IMAGE_PROXY_TTL = 15 * 60 * 1000; // 15 min — enough for eBay to fetch it
+
+async function proxyImageUrl(amazonUrl) {
+  if (!amazonUrl) return null;
+  try {
+    const { data, headers } = await axios.get(amazonUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10000,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    const key = require('crypto').randomBytes(16).toString('hex');
+    imageProxyCache.set(key, {
+      buffer: Buffer.from(data),
+      contentType: headers['content-type'] || 'image/jpeg',
+      expiresAt: Date.now() + IMAGE_PROXY_TTL,
+    });
+    const base = (process.env.BACKEND_URL || 'https://center-kitchen-backend.onrender.com').replace(/\/$/, '');
+    return `${base}/api/ebay/img/${key}`;
+  } catch (e) {
+    console.log('proxyImageUrl failed:', e.message);
+    return null;
+  }
+}
+
+// Serve proxied images so eBay can fetch them
+router.get('/img/:key', (req, res) => {
+  const entry = imageProxyCache.get(req.params.key);
+  if (!entry || Date.now() > entry.expiresAt) {
+    imageProxyCache.delete(req.params.key);
+    return res.status(404).send('expired');
+  }
+  res.setHeader('Content-Type', entry.contentType);
+  res.send(entry.buffer);
+});
+
 function getCached(key) {
   const entry = soldCache.get(key);
   if (entry && Date.now() < entry.expiresAt) return entry.data;
@@ -513,11 +550,13 @@ router.post('/create-listing', async (req, res) => {
       await resolveListingPolicies(token, { shipping, returns, zipCode });
 
     step = 'creating inventory item';
-    // imageUrl is omitted — Amazon CDN blocks eBay's image fetcher and causes a server error
+    const proxyUrl = await proxyImageUrl(imageUrl);
+    if (proxyUrl) console.log(`create-listing: image proxied → ${proxyUrl}`);
     const inventoryProduct = {
       title: safeTitle,
       description: buildDescription(safeTitle, specs),
       aspects: buildAspects(specs),
+      ...(proxyUrl ? { imageUrls: [proxyUrl] } : {}),
       ...(upc ? { upc: [upc] } : {}),
     };
     await axios.put(
