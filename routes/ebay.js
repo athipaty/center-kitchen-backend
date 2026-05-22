@@ -1186,6 +1186,7 @@ router.get('/all-active-listings', async (req, res) => {
     const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
       headers: {
         'X-EBAY-API-SITEID': '0',
+        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
         'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling',
         'X-EBAY-API-IAF-TOKEN': token,
         'Content-Type': 'text/xml',
@@ -1281,6 +1282,7 @@ router.post('/listing/price', async (req, res) => {
     const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
       headers: {
         'X-EBAY-API-SITEID': '0',
+        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
         'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem',
         'X-EBAY-API-IAF-TOKEN': token,
         'Content-Type': 'text/xml',
