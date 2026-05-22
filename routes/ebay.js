@@ -747,74 +747,43 @@ router.post('/create-listing', async (req, res) => {
         if (!is25019) throw pubErr;
       }
       if (is25019) {
-        // Round 1: retry publish with safe fallback categories (offer-level only)
-        const safeCats = ['20625', '11700', '99'];
-        let round1Err = pubErr;
-        for (const cat of safeCats) {
-          step = `publish retry category=${cat}`;
-          console.log(`create-listing: 25019 policy error, retrying publish with category ${cat} title="${safeTitle}"`);
-          try {
-            const { sku: _s, marketplaceId: _m, format: _f, ...uf } = { ...offerPayload, categoryId: cat };
-            await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, uf, { headers: h });
-            ({ data: published } = await axios.post(
-              `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
-              {}, { headers: h }
-            ));
-            break;
-          } catch (retryErr) {
-            const retryErrs = retryErr.response?.data?.errors || [];
-            console.log(`create-listing: category ${cat} also failed:`, retryErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | '));
-            round1Err = retryErr;
-          }
-        }
-
-        // Round 2: strip variant suffix + aspects, cycle same categories
-        if (!published) {
-          const strippedTitle = safeTitle.replace(/\s+-\s+\S.*$/, '').trim();
-          console.log(`create-listing: 25019 deep retry stripped title="${strippedTitle}"`);
-          // Update inventory item once with stripped content
-          try {
-            await axios.put(
-              `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
-              {
-                condition,
-                product: {
-                  title: strippedTitle,
-                  description: 'See photos and title for complete item details.',
-                  aspects: {},
-                  ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
-                },
-                availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
+        // 25019 is a content-policy error — changing category doesn't help.
+        // Strip the variant suffix and all aspects, then retry with the same leaf category.
+        step = 'publish retry stripped';
+        const strippedTitle = safeTitle.replace(/\s+-\s+\S.*$/, '').trim();
+        console.log(`create-listing: 25019 stripped retry title="${strippedTitle}" cat=${resolvedCategory || 'none'}`);
+        try {
+          // Re-PUT inventory item with cleaned content
+          await axios.put(
+            `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
+            {
+              condition,
+              product: {
+                title: strippedTitle,
+                description: 'See photos and title for complete item details.',
+                aspects: {},
+                ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
               },
-              { headers: h }
-            );
-          } catch (itemErr) {
-            console.log('create-listing: stripped inventory item update failed:', itemErr.message);
-            throw round1Err;
-          }
-          // Use the auto-detected product leaf category; re-detect from stripped title if needed
-          let strippedCat = resolvedCategory;
-          if (!strippedCat) {
-            strippedCat = await lookupCategory(strippedTitle, upc);
-            console.log(`create-listing: stripped retry re-detected category ${strippedCat}`);
-          }
-          const strippedCats = strippedCat ? [strippedCat, ...safeCats] : safeCats;
-          for (const cat of strippedCats) {
-            step = `publish retry stripped cat=${cat}`;
-            try {
-              const { sku: _s, marketplaceId: _m, format: _f, ...uf } = { ...offerPayload, categoryId: cat };
+              availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
+            },
+            { headers: h }
+          );
+          // If no leaf category was detected earlier, look one up from the stripped title
+          if (!resolvedCategory) {
+            resolvedCategory = await lookupCategory(strippedTitle, upc);
+            if (resolvedCategory) {
+              offerPayload.categoryId = resolvedCategory;
+              const { sku: _s, marketplaceId: _m, format: _f, ...uf } = offerPayload;
               await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, uf, { headers: h });
-              ({ data: published } = await axios.post(
-                `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
-                {}, { headers: h }
-              ));
-              break;
-            } catch (deepErr) {
-              const deepErrs = deepErr.response?.data?.errors || [];
-              console.log(`create-listing: stripped cat=${cat} failed:`, deepErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | '));
-              if (cat === strippedCats[strippedCats.length - 1]) throw round1Err;
             }
           }
+          ({ data: published } = await axios.post(
+            `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+            {}, { headers: h }
+          ));
+        } catch (strippedErr) {
+          console.log('create-listing: stripped retry failed:', strippedErr.response?.data?.errors?.[0]?.longMessage || strippedErr.message);
+          throw pubErr;
         }
         if (!published) throw pubErr;
       } else if (is25002Err(pubErrs)) {
