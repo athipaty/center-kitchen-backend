@@ -169,9 +169,10 @@ router.get('/my-listings', async (req, res) => {
   try {
     const token = await getAccessToken();
 
+    // Note: /sell/inventory/v1/offer does NOT support a status filter param
     const { data: offersData } = await axios.get('https://api.ebay.com/sell/inventory/v1/offer', {
       headers: { Authorization: `Bearer ${token}` },
-      params: { status: 'PUBLISHED', limit: 100 },
+      params: { limit: 100 },
     });
 
     const offers = offersData.offers || [];
@@ -216,7 +217,12 @@ router.get('/my-listings', async (req, res) => {
     if (err.status === 401 || err.message === 'not_authenticated') {
       return res.status(401).json({ error: 'not_authenticated' });
     }
-    res.status(500).json({ error: ebayError(err) });
+    const ebayErrs = err.response?.data?.errors;
+    const detail = ebayErrs?.length
+      ? ebayErrs.map(e => String(e.longMessage || e.message || '')).join(' | ')
+      : String(err.message || 'Unknown error');
+    console.error('my-listings error:', JSON.stringify(err.response?.data ?? err.message));
+    res.status(500).json({ error: detail });
   }
 });
 
