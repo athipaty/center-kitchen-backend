@@ -270,6 +270,10 @@ function buildAspects(specs) {
   return aspects;
 }
 
+function sanitizeSku(raw) {
+  return String(raw || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 50) || 'ITEM';
+}
+
 function buildDescription(title, specs) {
   if (!specs || !Object.keys(specs).length) return `<p>${title}</p>`;
   const rows = Object.entries(specs)
@@ -423,6 +427,7 @@ router.post('/create-listing', async (req, res) => {
     }
 
     const safeTitle = title.slice(0, 80);
+    const safeSKU = sanitizeSku(sku);
 
     step = 'resolving policies';
     const { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey } =
@@ -430,7 +435,7 @@ router.post('/create-listing', async (req, res) => {
 
     step = 'creating inventory item';
     await axios.put(
-      `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+      `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
       {
         condition,
         product: {
@@ -447,7 +452,7 @@ router.post('/create-listing', async (req, res) => {
 
     step = 'creating offer';
     const offerPayload = {
-      sku, marketplaceId: 'EBAY_US', format: 'FIXED_PRICE', listingDuration: 'GTC',
+      sku: safeSKU, marketplaceId: 'EBAY_US', format: 'FIXED_PRICE', listingDuration: 'GTC',
       pricingSummary: { price: { value: Number(price).toFixed(2), currency } },
       availableQuantity: Number(quantity),
       merchantLocationKey,
@@ -505,6 +510,7 @@ router.post('/create-group-listing', async (req, res) => {
     }
 
     const safeTitle = title.slice(0, 80);
+    const safeGroupKey = sanitizeSku(groupKey);
     const { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey } =
       await resolveListingPolicies(token, { shipping, returns, zipCode });
 
@@ -515,7 +521,7 @@ router.post('/create-group-listing', async (req, res) => {
     // 1. PUT each variant as its own inventory item
     const skus = [];
     for (const v of variants) {
-      const sku = v.sku || `${groupKey}-${v.label.replace(/\s+/g, '-').slice(0, 20)}`;
+      const sku = sanitizeSku(v.sku || `${groupKey}${v.label.replace(/[^a-zA-Z0-9]/g, '').slice(0, 15)}`);
       skus.push(sku);
       await axios.put(
         `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
@@ -539,9 +545,9 @@ router.post('/create-group-listing', async (req, res) => {
     // 2. PUT inventory item group
     const allImages = variants.map(v => v.image).filter(Boolean);
     await axios.put(
-      `https://api.ebay.com/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`,
+      `https://api.ebay.com/sell/inventory/v1/inventory_item_group/${encodeURIComponent(safeGroupKey)}`,
       {
-        inventoryItemGroupKey: groupKey,
+        inventoryItemGroupKey: safeGroupKey,
         title: safeTitle,
         description: buildDescription(safeTitle, specs),
         aspects: {
@@ -557,7 +563,7 @@ router.post('/create-group-listing', async (req, res) => {
 
     // 3. Create offer for the group
     const offerPayload = {
-      sku: groupKey,
+      sku: safeGroupKey,
       marketplaceId: 'EBAY_US',
       format: 'FIXED_PRICE',
       listingDuration: 'GTC',
