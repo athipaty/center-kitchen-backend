@@ -275,7 +275,7 @@ function sanitizeSku(raw) {
 }
 
 // Auto-detect eBay category from live listings, falling back to Taxonomy API
-async function lookupCategory(title, upc, token) {
+async function lookupCategory(title, upc) {
   const findingBase = {
     'SERVICE-VERSION': '1.0.0',
     'SECURITY-APPNAME': process.env.EBAY_APP_ID,
@@ -309,7 +309,7 @@ async function lookupCategory(title, upc, token) {
       if (cat) return cat;
     } catch {}
 
-    // 3. Shorter keywords (first 4 words) — handles very long specific titles
+    // 3. Shorter keywords (first 4 words)
     const short = title.split(/\s+/).slice(0, 4).join(' ');
     if (short.length < title.length) {
       try {
@@ -322,24 +322,31 @@ async function lookupCategory(title, upc, token) {
     }
   }
 
-  // 4. Commerce Taxonomy API fallback (requires OAuth token)
-  if (token) {
-    try {
-      const th = { Authorization: `Bearer ${token}` };
-      const { data: tree } = await axios.get(
-        'https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id',
-        { headers: th, params: { marketplace_id: 'EBAY_US' } }
-      );
-      const { data: sugg } = await axios.get(
-        `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${tree.categoryTreeId}/get_category_suggestions`,
-        { headers: th, params: { q: title.slice(0, 80) } }
-      );
-      const cat = sugg.categorySuggestions?.[0]?.category?.categoryId;
-      if (cat) {
-        console.log(`lookupCategory: taxonomy fallback returned category ${cat} for "${title.slice(0, 40)}"`);
-        return String(cat);
-      }
-    } catch {}
+  // 4. Commerce Taxonomy API — uses Application token (client_credentials), not user token,
+  //    so it works regardless of which scopes the user granted
+  try {
+    const { data: appToken } = await axios.post(
+      'https://api.ebay.com/identity/v1/oauth2/token',
+      new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' }),
+      { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+    const th = { Authorization: `Bearer ${appToken.access_token}` };
+    const { data: tree } = await axios.get(
+      'https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id',
+      { headers: th, params: { marketplace_id: 'EBAY_US' } }
+    );
+    const { data: sugg } = await axios.get(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${tree.categoryTreeId}/get_category_suggestions`,
+      { headers: th, params: { q: title.slice(0, 80) } }
+    );
+    const cat = sugg.categorySuggestions?.[0]?.category?.categoryId;
+    if (cat) {
+      console.log(`lookupCategory: taxonomy category ${cat} for "${title.slice(0, 40)}"`);
+      return String(cat);
+    }
+    console.log('lookupCategory: taxonomy API returned no suggestions for', title.slice(0, 40));
+  } catch (e) {
+    console.log('lookupCategory: taxonomy API failed:', e.response?.data?.error_description || e.response?.data || e.message);
   }
 
   return null;
@@ -527,7 +534,7 @@ router.post('/create-listing', async (req, res) => {
     step = 'detecting category';
     let resolvedCategory = categoryId ? String(categoryId) : null;
     if (!resolvedCategory) {
-      resolvedCategory = await lookupCategory(safeTitle, upc, token);
+      resolvedCategory = await lookupCategory(safeTitle, upc);
       if (resolvedCategory) console.log(`create-listing: auto-detected category ${resolvedCategory} for "${safeTitle}"`);
     }
 
@@ -548,28 +555,33 @@ router.post('/create-listing', async (req, res) => {
     let offerData;
     step = 'creating offer';
 
-    // Helper: find + update + return an existing offer for this SKU
-    async function findAndUpdateExistingOffer() {
-      // Try filtered first, then fetch all as fallback
+    // Helper: handle an existing draft — delete it so we can POST fresh with the correct category.
+    // Returns { listingId, url } if already published, { deleted: true } if draft was removed.
+    async function handleExistingOffer() {
       for (const params of [{ sku: safeSKU }, { limit: 200 }]) {
         try {
           const { data } = await axios.get('https://api.ebay.com/sell/inventory/v1/offer', { headers: h, params });
           const found = (data.offers || []).find(o => o.sku === safeSKU) || (params.limit ? (data.offers || [])[0] : null);
           if (!found) continue;
           console.log(`create-listing: found existing offer ${found.offerId} sku="${found.sku}" status=${found.status}`);
+
           if (found.listing?.listingId) {
-            return res.json({ listingId: found.listing.listingId, url: `https://www.ebay.com/itm/${found.listing.listingId}` });
+            return { listingId: found.listing.listingId, url: `https://www.ebay.com/itm/${found.listing.listingId}` };
           }
-          // Use the existing offer's categoryId as fallback if we don't have one yet
+
+          // Grab the draft's category as fallback before deleting
           if (!resolvedCategory && found.categoryId) {
             resolvedCategory = String(found.categoryId);
             offerPayload.categoryId = resolvedCategory;
-            console.log(`create-listing: using existing offer's categoryId ${resolvedCategory}`);
+            console.log(`create-listing: reusing draft categoryId ${resolvedCategory}`);
           }
-          const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = offerPayload;
-          try { await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${found.offerId}`, updateFields, { headers: h }); } catch {}
-          return { offerId: found.offerId };
-        } catch {}
+
+          await axios.delete(`https://api.ebay.com/sell/inventory/v1/offer/${found.offerId}`, { headers: h });
+          console.log(`create-listing: deleted draft ${found.offerId}, will create fresh`);
+          return { deleted: true };
+        } catch (e) {
+          console.log('create-listing: handleExistingOffer error:', e.response?.data?.errors?.[0]?.message || e.message);
+        }
       }
       return null;
     }
@@ -582,35 +594,45 @@ router.post('/create-listing', async (req, res) => {
       const isCatErr = errs.some(e => /categoryid|category/i.test(String(e.longMessage || e.message || '')));
 
       if (isExistsErr) {
-        const existing = await findAndUpdateExistingOffer();
-        if (!existing) throw new Error('A draft offer for this product already exists on eBay. Open eBay Seller Hub → Listings → Drafts and delete it, then try again.');
-        if (existing.url) return; // already responded inside findAndUpdateExistingOffer
-        offerData = existing;
+        const existing = await handleExistingOffer();
+        if (!existing) throw new Error('A draft offer already exists on eBay but could not be found or deleted. Please delete it manually in eBay Seller Hub → Listings → Drafts, then try again.');
+        if (existing.url) return res.json({ listingId: existing.listingId, url: existing.url });
+        // Draft deleted — create fresh
+        ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
       } else if (isCatErr && offerPayload.categoryId) {
         console.log(`create-listing: categoryId "${offerPayload.categoryId}" rejected, retrying without`);
         delete offerPayload.categoryId;
+        resolvedCategory = null;
         ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
       } else {
         throw offerErr;
       }
     }
 
-    // If we still have no category, try taxonomy API one final time then update the offer
-    if (!resolvedCategory) {
-      step = 'final category lookup';
-      resolvedCategory = await lookupCategory(safeTitle, upc, token);
-      if (resolvedCategory) {
-        console.log(`create-listing: final taxonomy category ${resolvedCategory}, updating offer ${offerData.offerId}`);
-        const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = { ...offerPayload, categoryId: resolvedCategory };
-        try { await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, updateFields, { headers: h }); } catch {}
-      }
-    }
-
     step = 'publishing offer';
-    const { data: published } = await axios.post(
-      `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
-      {}, { headers: h }
-    );
+    let published;
+    try {
+      ({ data: published } = await axios.post(
+        `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+        {}, { headers: h }
+      ));
+    } catch (pubErr) {
+      const pubErrs = pubErr.response?.data?.errors || [];
+      const noCatErr = pubErrs.some(e => /category/i.test(String(e.longMessage || e.message || '')));
+      if (!noCatErr) throw pubErr;
+
+      // Publishing failed due to missing category — look up via taxonomy API and update offer, then retry
+      step = 'fixing category before publish';
+      const fallbackCat = await lookupCategory(safeTitle, upc);
+      if (!fallbackCat) throw new Error('Could not detect an eBay category for this product. Please enter a valid eBay category ID in the listing form (e.g. find it on ebay.com by searching your product and noting the URL).');
+      console.log(`create-listing: publish retry with taxonomy category ${fallbackCat}`);
+      const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = { ...offerPayload, categoryId: fallbackCat };
+      await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, updateFields, { headers: h });
+      ({ data: published } = await axios.post(
+        `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+        {}, { headers: h }
+      ));
+    }
 
     res.json({ listingId: published.listingId, url: `https://www.ebay.com/itm/${published.listingId}` });
   } catch (err) {
@@ -704,7 +726,7 @@ router.post('/create-group-listing', async (req, res) => {
     // 3. Resolve category
     let resolvedGroupCategory = categoryId ? String(categoryId) : null;
     if (!resolvedGroupCategory) {
-      resolvedGroupCategory = await lookupCategory(safeTitle, null, token);
+      resolvedGroupCategory = await lookupCategory(safeTitle, null);
       if (resolvedGroupCategory) console.log(`create-group-listing: auto-detected category ${resolvedGroupCategory}`);
     }
 
