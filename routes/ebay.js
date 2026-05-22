@@ -83,7 +83,7 @@ router.get('/auth/login', (req, res) => {
   if (!process.env.EBAY_RUNAME) return res.status(500).json({ error: 'EBAY_RUNAME not set in .env' });
   const scope = [
     'https://api.ebay.com/oauth/api_scope/sell.inventory',
-    'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
+    'https://api.ebay.com/oauth/api_scope/sell.account',
   ].join(' ');
   const url = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(process.env.EBAY_APP_ID)}&redirect_uri=${encodeURIComponent(process.env.EBAY_RUNAME)}&response_type=code&scope=${encodeURIComponent(scope)}`;
   res.redirect(url);
@@ -281,6 +281,15 @@ async function resolveListingPolicies(token, { shipping, returns, zipCode }) {
   const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
   const mid = 'EBAY_US';
   const cats = [{ name: 'ALL_EXCLUDING_MOTORS_VEHICLES' }];
+
+  // Opt into Business Policy program — safe to call even if already enrolled
+  try {
+    await axios.post(
+      'https://api.ebay.com/sell/account/v1/program/opt_in',
+      { programType: 'SELLING_POLICY_MANAGEMENT' },
+      { headers: h }
+    );
+  } catch { /* already enrolled or not applicable — continue */ }
 
   // Helper: find policy by name or return null
   async function findPolicy(endpoint, listKey, name) {
