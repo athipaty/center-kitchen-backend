@@ -699,32 +699,33 @@ router.post('/create-listing', async (req, res) => {
       const errText = pubErrs.map(e => String(e.longMessage || e.message || '')).join(' ');
       const noCatErr = /category/i.test(errText);
       const alreadyLiveErr = /revise listing|already active|already published/i.test(errText);
+      const is25019 = pubErrs.some(e => e.errorId === 25019 || String(e.errorId) === '25019');
 
       if (alreadyLiveErr) {
+        // Try to return the existing live listing ID before anything else
+        let foundListingId = null;
         try {
           const { data: offerDetail } = await axios.get(
             `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, { headers: h }
           );
-          if (offerDetail.listing?.listingId) {
-            return res.json({ listingId: offerDetail.listing.listingId, url: `https://www.ebay.com/itm/${offerDetail.listing.listingId}` });
-          }
+          if (offerDetail.listing?.listingId) foundListingId = offerDetail.listing.listingId;
         } catch {}
-        // Current offer has no listing ID — search all offers for this SKU to find the live one
-        try {
-          const { data: skuOffers } = await axios.get(
-            'https://api.ebay.com/sell/inventory/v1/offer', { headers: h, params: { sku: safeSKU } }
-          );
-          const liveOffer = (skuOffers.offers || []).find(o => o.listing?.listingId);
-          if (liveOffer) {
-            console.log(`create-listing: found live listing ${liveOffer.listing.listingId} via SKU search after revise-error`);
-            return res.json({ listingId: liveOffer.listing.listingId, url: `https://www.ebay.com/itm/${liveOffer.listing.listingId}` });
-          }
-        } catch {}
-        throw pubErr;
+        if (!foundListingId) {
+          try {
+            const { data: skuOffers } = await axios.get(
+              'https://api.ebay.com/sell/inventory/v1/offer', { headers: h, params: { sku: safeSKU } }
+            );
+            const liveOffer = (skuOffers.offers || []).find(o => o.listing?.listingId);
+            if (liveOffer) foundListingId = liveOffer.listing.listingId;
+          } catch {}
+        }
+        if (foundListingId) {
+          console.log(`create-listing: returning existing live listing ${foundListingId} after revise-error`);
+          return res.json({ listingId: foundListingId, url: `https://www.ebay.com/itm/${foundListingId}` });
+        }
+        // No live listing found — if it's also a 25019, fall through to category retry below
+        if (!is25019) throw pubErr;
       }
-
-      // Error 25019 = content/category policy violation — retry with safe fallback categories
-      const is25019 = pubErrs.some(e => e.errorId === 25019 || String(e.errorId) === '25019');
       if (is25019) {
         // Broad safe categories to try in order: Kitchen & Dining, Home & Garden, Everything Else
         const safeCats = ['20625', '11700', '99'];
