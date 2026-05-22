@@ -448,6 +448,114 @@ router.post('/create-listing', async (req, res) => {
   }
 });
 
+// ── Create group (multi-variation) listing ─────────────────────────
+router.post('/create-group-listing', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
+
+    const {
+      groupKey,           // e.g. base ASIN — unique identifier for this group
+      title,
+      price,              // single price for the whole group
+      currency = 'USD',
+      condition = 'NEW',
+      categoryId,
+      variants,           // [{ sku, label, image, quantity }]
+      specs = {},
+      shipping = { free: true, carrier: 'USPSFirstClass', handlingDays: 1 },
+      returns = { accepted: true, days: 30, buyerPays: true },
+      zipCode = '10001',
+    } = req.body;
+
+    if (!groupKey || !title || !price || !variants?.length) {
+      return res.status(400).json({ error: 'Missing required fields: groupKey, title, price, variants' });
+    }
+
+    const safeTitle = title.slice(0, 80);
+    const { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey } =
+      await resolveListingPolicies(token, { shipping, returns, zipCode });
+
+    // Determine the "varies by" dimension name from variant labels
+    // Use "Color" as default; if labels contain "/" we use "Style"
+    const variesBy = variants.some(v => v.label?.includes('/')) ? 'Style' : 'Color';
+
+    // 1. PUT each variant as its own inventory item
+    const skus = [];
+    for (const v of variants) {
+      const sku = v.sku || `${groupKey}-${v.label.replace(/\s+/g, '-').slice(0, 20)}`;
+      skus.push(sku);
+      await axios.put(
+        `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+        {
+          condition,
+          product: {
+            title: safeTitle,
+            description: buildDescription(safeTitle, specs),
+            imageUrls: [v.image].filter(Boolean),
+            aspects: {
+              ...buildAspects(specs),
+              [variesBy]: [v.label],
+            },
+          },
+          availability: { shipToLocationAvailability: { quantity: Number(v.quantity) || 1 } },
+        },
+        { headers: h }
+      );
+    }
+
+    // 2. PUT inventory item group
+    const allImages = variants.map(v => v.image).filter(Boolean);
+    await axios.put(
+      `https://api.ebay.com/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`,
+      {
+        inventoryItemGroupKey: groupKey,
+        title: safeTitle,
+        description: buildDescription(safeTitle, specs),
+        aspects: {
+          ...buildAspects(specs),
+          [variesBy]: variants.map(v => v.label),
+        },
+        variantSKUs: skus,
+        imageUrls: allImages.length ? allImages : undefined,
+        variesBy: { aspectsImageVariesBy: [variesBy], specifications: [{ name: variesBy, values: variants.map(v => v.label) }] },
+      },
+      { headers: h }
+    );
+
+    // 3. Create offer for the group
+    const offerPayload = {
+      sku: groupKey,
+      marketplaceId: 'EBAY_US',
+      format: 'FIXED_PRICE',
+      listingDuration: 'GTC',
+      pricingSummary: { price: { value: Number(price).toFixed(2), currency } },
+      merchantLocationKey,
+      listingPolicies: {
+        fulfillmentPolicyId,
+        returnPolicyId,
+        ...(paymentPolicyId ? { paymentPolicyId } : {}),
+      },
+    };
+    if (categoryId) offerPayload.categoryId = String(categoryId);
+
+    const { data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h });
+
+    // 4. Publish
+    const { data: published } = await axios.post(
+      `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+      {}, { headers: h }
+    );
+
+    res.json({ listingId: published.listingId, url: `https://www.ebay.com/itm/${published.listingId}` });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    const detail = err.response?.data?.errors?.[0]?.message || err.message || ebayError(err);
+    res.status(500).json({ error: detail });
+  }
+});
+
 // ── SEO title generation ───────────────────────────────────────────
 router.post('/seo-title', async (req, res) => {
   const { title, specs } = req.body;

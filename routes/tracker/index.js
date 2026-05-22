@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 const Product = require("../../models/tracker/Product");
-const { cleanUrl, fetchProduct } = require("../../scraper");
+const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 
 // GET raw ScraperAPI response for an ASIN — for debugging variant field names
@@ -45,7 +45,8 @@ router.post("/preview", async (req, res) => {
       ...v,
       url: `${baseDomain}/dp/${v.asin}`,
     }));
-    res.json({ title: info.title, price: info.price, currency: info.currency, image: info.image, variants });
+    const groupId = extractAsin(cleanedUrl);
+    res.json({ title: info.title, price: info.price, currency: info.currency, image: info.image, variants, groupId });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
@@ -54,7 +55,7 @@ router.post("/preview", async (req, res) => {
 // POST add a product to track
 router.post("/", async (req, res) => {
   try {
-    const { url } = req.body;
+    const { url, groupId } = req.body;
     if (!url) return res.status(400).json({ error: "url is required" });
 
     const cleanedUrl = cleanUrl(url);
@@ -75,6 +76,7 @@ router.post("/", async (req, res) => {
       history: [{ price: info.price }],
       isPrime: info.isPrime || false,
       variant: info.variant || null,
+      groupId: groupId || null,
       specs: info.specs || {},
     });
 

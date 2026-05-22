@@ -160,4 +160,4 @@ async function fetchProduct(url) {
   return { title, price, currency, variants: [] };
 }
 
-module.exports = { cleanUrl, fetchProduct };
+module.exports = { cleanUrl, extractAsin, fetchProduct };
