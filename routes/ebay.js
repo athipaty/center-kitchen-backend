@@ -782,8 +782,46 @@ router.post('/create-listing', async (req, res) => {
             {}, { headers: h }
           ));
         } catch (strippedErr) {
-          console.log('create-listing: stripped retry failed:', strippedErr.response?.data?.errors?.[0]?.longMessage || strippedErr.message);
-          throw pubErr;
+          const strippedErrs = strippedErr.response?.data?.errors || [];
+          const still25019 = strippedErrs.some(e => e.errorId === 25019 || String(e.errorId) === '25019');
+          console.log('create-listing: stripped retry failed:', strippedErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | '));
+          if (!still25019) throw pubErr;
+
+          // Still 25019 — likely the brand is in eBay's VERO program.
+          // Remove the first word (brand) and any model-number tokens (e.g. CB-3) and retry.
+          step = 'publish retry no-brand';
+          const noBrandTitle = strippedTitle
+            .split(' ')
+            .filter((w, i) => i > 0)            // drop first word (brand)
+            .filter(w => !/^[A-Z0-9]+-[A-Z0-9]+$/i.test(w)) // drop model numbers like CB-3
+            .join(' ')
+            .trim()
+            .slice(0, 80);
+          console.log(`create-listing: 25019 no-brand retry title="${noBrandTitle}"`);
+          if (!noBrandTitle) throw pubErr;
+          try {
+            await axios.put(
+              `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
+              {
+                condition,
+                product: {
+                  title: noBrandTitle,
+                  description: 'See photos and title for complete item details.',
+                  aspects: {},
+                  ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
+                },
+                availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
+              },
+              { headers: h }
+            );
+            ({ data: published } = await axios.post(
+              `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+              {}, { headers: h }
+            ));
+          } catch (noBrandErr) {
+            console.log('create-listing: no-brand retry failed:', noBrandErr.response?.data?.errors?.[0]?.longMessage || noBrandErr.message);
+            throw pubErr;
+          }
         }
         if (!published) throw pubErr;
       } else if (is25002Err(pubErrs)) {
