@@ -749,26 +749,32 @@ router.post('/create-listing', async (req, res) => {
       if (is25019) {
         // 25019 is a content-policy error — changing category doesn't help.
         // Strip the variant suffix and all aspects, then retry with the same leaf category.
+        // Helper: PUT inventory item with a given title (no aspects, plain description)
+        const putStripped = async (t) => axios.put(
+          `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
+          {
+            condition,
+            product: {
+              title: t,
+              description: 'See photos and title for complete item details.',
+              aspects: {},
+              ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
+            },
+            availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
+          },
+          { headers: h }
+        );
+        const tryPublish = async () => axios.post(
+          `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+          {}, { headers: h }
+        );
+
+        // Attempt 1: strip variant suffix (e.g. " - Natural")
         step = 'publish retry stripped';
         const strippedTitle = safeTitle.replace(/\s+-\s+\S.*$/, '').trim();
-        console.log(`create-listing: 25019 stripped retry title="${strippedTitle}" cat=${resolvedCategory || 'none'}`);
+        console.log(`create-listing: 25019 stripped retry title="${strippedTitle}"`);
         try {
-          // Re-PUT inventory item with cleaned content
-          await axios.put(
-            `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
-            {
-              condition,
-              product: {
-                title: strippedTitle,
-                description: 'See photos and title for complete item details.',
-                aspects: {},
-                ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
-              },
-              availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
-            },
-            { headers: h }
-          );
-          // If no leaf category was detected earlier, look one up from the stripped title
+          await putStripped(strippedTitle);
           if (!resolvedCategory) {
             resolvedCategory = await lookupCategory(strippedTitle, upc);
             if (resolvedCategory) {
@@ -777,52 +783,32 @@ router.post('/create-listing', async (req, res) => {
               await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, uf, { headers: h });
             }
           }
-          ({ data: published } = await axios.post(
-            `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
-            {}, { headers: h }
-          ));
-        } catch (strippedErr) {
-          const strippedErrs = strippedErr.response?.data?.errors || [];
-          const still25019 = strippedErrs.some(e => e.errorId === 25019 || String(e.errorId) === '25019');
-          console.log('create-listing: stripped retry failed:', strippedErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | '));
-          if (!still25019) throw pubErr;
+          ({ data: published } = await tryPublish());
+        } catch (e1) {
+          console.log('create-listing: stripped retry failed:', e1.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e1.message);
+        }
 
-          // Still 25019 — likely the brand is in eBay's VERO program.
-          // Remove the first word (brand) and any model-number tokens (e.g. CB-3) and retry.
+        // Attempt 2: also remove brand (first word) and model numbers (e.g. CB-3)
+        if (!published) {
           step = 'publish retry no-brand';
           const noBrandTitle = strippedTitle
             .split(' ')
-            .filter((w, i) => i > 0)            // drop first word (brand)
-            .filter(w => !/^[A-Z0-9]+-[A-Z0-9]+$/i.test(w)) // drop model numbers like CB-3
+            .slice(1)                                          // drop first word (brand)
+            .filter(w => !/^[A-Z0-9]+-[A-Z0-9]+$/i.test(w))  // drop model numbers like CB-3
             .join(' ')
             .trim()
             .slice(0, 80);
           console.log(`create-listing: 25019 no-brand retry title="${noBrandTitle}"`);
-          if (!noBrandTitle) throw pubErr;
-          try {
-            await axios.put(
-              `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
-              {
-                condition,
-                product: {
-                  title: noBrandTitle,
-                  description: 'See photos and title for complete item details.',
-                  aspects: {},
-                  ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
-                },
-                availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
-              },
-              { headers: h }
-            );
-            ({ data: published } = await axios.post(
-              `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
-              {}, { headers: h }
-            ));
-          } catch (noBrandErr) {
-            console.log('create-listing: no-brand retry failed:', noBrandErr.response?.data?.errors?.[0]?.longMessage || noBrandErr.message);
-            throw pubErr;
+          if (noBrandTitle) {
+            try {
+              await putStripped(noBrandTitle);
+              ({ data: published } = await tryPublish());
+            } catch (e2) {
+              console.log('create-listing: no-brand retry failed:', e2.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e2.message);
+            }
           }
         }
+
         if (!published) throw pubErr;
       } else if (is25002Err(pubErrs)) {
         // Round 1: extract the missing required item specific and add "Other" as value
