@@ -696,7 +696,6 @@ router.post('/create-listing', async (req, res) => {
       const alreadyLiveErr = /revise listing|already active|already published/i.test(errText);
 
       if (alreadyLiveErr) {
-        // Listing is already live on eBay — fetch its listingId from the offer and return it
         try {
           const { data: offerDetail } = await axios.get(
             `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, { headers: h }
@@ -708,19 +707,42 @@ router.post('/create-listing', async (req, res) => {
         throw pubErr;
       }
 
-      if (!noCatErr) throw pubErr;
-
-      // Publishing failed due to missing category — look up via taxonomy API and update offer, then retry
-      step = 'fixing category before publish';
-      const fallbackCat = await lookupCategory(safeTitle, upc);
-      if (!fallbackCat) throw new Error('Could not detect an eBay category for this product. Please enter a valid eBay category ID in the listing form.');
-      console.log(`create-listing: publish retry with taxonomy category ${fallbackCat}`);
-      const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = { ...offerPayload, categoryId: fallbackCat };
-      await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, updateFields, { headers: h });
-      ({ data: published } = await axios.post(
-        `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
-        {}, { headers: h }
-      ));
+      // Error 25019 = content/category policy violation — retry with safe fallback categories
+      const is25019 = pubErrs.some(e => e.errorId === 25019 || String(e.errorId) === '25019');
+      if (is25019) {
+        // Broad safe categories to try in order: Kitchen & Dining, Home & Garden, Everything Else
+        const safeCats = ['20625', '11700', '99'];
+        for (const cat of safeCats) {
+          step = `publish retry category=${cat}`;
+          console.log(`create-listing: 25019 policy error, retrying publish with category ${cat} title="${safeTitle}"`);
+          try {
+            const { sku: _s, marketplaceId: _m, format: _f, ...uf } = { ...offerPayload, categoryId: cat };
+            await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, uf, { headers: h });
+            ({ data: published } = await axios.post(
+              `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+              {}, { headers: h }
+            ));
+            break; // success
+          } catch (retryErr) {
+            const retryErrs = retryErr.response?.data?.errors || [];
+            console.log(`create-listing: category ${cat} also failed:`, retryErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | '));
+            if (cat === safeCats[safeCats.length - 1]) throw retryErr; // all categories failed
+          }
+        }
+        if (!published) throw pubErr;
+      } else if (noCatErr) {
+        step = 'fixing category before publish';
+        const fallbackCat = await lookupCategory(safeTitle, upc);
+        if (!fallbackCat) throw new Error('Could not detect an eBay category. Please enter a valid category ID manually.');
+        const { sku: _s, marketplaceId: _m, format: _f, ...uf } = { ...offerPayload, categoryId: fallbackCat };
+        await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, uf, { headers: h });
+        ({ data: published } = await axios.post(
+          `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+          {}, { headers: h }
+        ));
+      } else {
+        throw pubErr;
+      }
     }
 
     res.json({ listingId: published.listingId, url: `https://www.ebay.com/itm/${published.listingId}` });
@@ -731,7 +753,7 @@ router.post('/create-listing', async (req, res) => {
     const detail = ebayErrs?.length
       ? ebayErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message || ''}`).join(' | ')
       : String(err.message || 'Unknown error');
-    console.error(`create-listing [${step}] error:`, JSON.stringify(err.response?.data ?? err.message, null, 2));
+    console.error(`create-listing [${step}] title="${safeTitle}" category="${resolvedCategory}" error:`, JSON.stringify(err.response?.data ?? err.message, null, 2));
     res.status(500).json({ error: `[${step}] ${detail}` });
   }
 });
