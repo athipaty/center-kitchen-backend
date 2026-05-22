@@ -410,20 +410,10 @@ function safeSpecValue(v) {
   return str.replace(/[^\x20-\x7E]/g, '').replace(/[<>&"]/g, '').slice(0, 200).trim() || null;
 }
 
-function buildDescription(title, specs) {
-  // Do NOT put the title in the description — it can contain brand/competitor names
-  // that eBay flags as policy violations when they appear in description body
-  const SKIP = new Set(['asin', 'best_sellers_rank', 'customer_reviews', 'date_first_available',
-    'product_description', 'important_information']);
-  const rows = specs ? Object.entries(specs)
-    .filter(([k, v]) => v && !SKIP.has(k))
-    .map(([k, v]) => {
-      const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      const display = safeSpecValue(v);
-      return display ? `<p>${label}: ${display}</p>` : null;
-    })
-    .filter(Boolean) : [];
-  return rows.length ? rows.join('') : '<p>Please see photos and title for full item details.</p>';
+function buildDescription() {
+  // Keep description completely generic — any product-specific content risks
+  // triggering eBay's content policy filter (competitor names, URLs, brand terms)
+  return '<p>Please see photos and title for complete item details.</p>';
 }
 
 // Auto find-or-create all required policies + location so the user never has to configure them manually
@@ -573,7 +563,21 @@ router.post('/create-listing', async (req, res) => {
 
     const safeTitle = sanitizeTitle(title);
     const safeSKU = sanitizeSku(sku);
-    console.log(`create-listing: raw sku="${sku}" → safeSKU="${safeSKU}"`);
+    console.log(`create-listing: sku="${safeSKU}" title="${safeTitle.slice(0, 50)}"`);
+
+    // Proactive check: if a published listing already exists for this SKU, return it immediately
+    step = 'checking existing listing';
+    try {
+      const { data: existingOffers } = await axios.get(
+        'https://api.ebay.com/sell/inventory/v1/offer',
+        { headers: h, params: { sku: safeSKU } }
+      );
+      const publishedOffer = (existingOffers.offers || []).find(o => o.sku === safeSKU && o.listing?.listingId);
+      if (publishedOffer) {
+        console.log(`create-listing: SKU "${safeSKU}" already has live listing ${publishedOffer.listing.listingId}`);
+        return res.json({ listingId: publishedOffer.listing.listingId, url: `https://www.ebay.com/itm/${publishedOffer.listing.listingId}` });
+      }
+    } catch {}
 
     step = 'resolving policies';
     const { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey } =
@@ -584,7 +588,7 @@ router.post('/create-listing', async (req, res) => {
     console.log(`create-listing: proxied ${proxyUrls.length}/${allImageUrls.length} images`);
     const inventoryProduct = {
       title: safeTitle,
-      description: buildDescription(safeTitle, specs),
+      description: buildDescription(),
       aspects: buildAspects(specs),
       ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
       ...(upc ? { upc: [upc] } : {}),
@@ -725,9 +729,9 @@ router.post('/create-listing', async (req, res) => {
       return res.status(401).json({ error: 'not_authenticated' });
     const ebayErrs = err.response?.data?.errors;
     const detail = ebayErrs?.length
-      ? ebayErrs.map(e => String(e.longMessage || e.message || '')).join(' | ')
+      ? ebayErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message || ''}`).join(' | ')
       : String(err.message || 'Unknown error');
-    console.error(`create-listing [${step}] error:`, JSON.stringify(err.response?.data ?? err.message));
+    console.error(`create-listing [${step}] error:`, JSON.stringify(err.response?.data ?? err.message, null, 2));
     res.status(500).json({ error: `[${step}] ${detail}` });
   }
 });
@@ -776,7 +780,7 @@ router.post('/create-group-listing', async (req, res) => {
           condition,
           product: {
             title: safeTitle,
-            description: buildDescription(safeTitle, specs),
+            description: buildDescription(),
             imageUrls: [v.image].filter(Boolean),
             aspects: {
               ...buildAspects(specs),
@@ -796,7 +800,7 @@ router.post('/create-group-listing', async (req, res) => {
       {
         inventoryItemGroupKey: safeGroupKey,
         title: safeTitle,
-        description: buildDescription(safeTitle, specs),
+        description: buildDescription(),
         aspects: {
           ...buildAspects(specs),
           [variesBy]: variants.map(v => v.label),
