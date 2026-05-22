@@ -466,35 +466,52 @@ router.post('/create-listing', async (req, res) => {
     };
     if (categoryId) offerPayload.categoryId = String(categoryId);
 
-    let offerData;
+    // Look for an existing offer for this SKU before attempting to create
+    step = 'checking existing offer';
+    let existingOfferId = null;
     try {
-      ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
-    } catch (offerErr) {
-      const errs = offerErr.response?.data?.errors || [];
-      const isExistsErr = errs.some(e => /already exists/i.test(String(e.longMessage || e.message || '')));
-      const isCatErr = errs.some(e => /categoryid|category/i.test(String(e.longMessage || e.message || '')));
+      const { data: offerList } = await axios.get(
+        'https://api.ebay.com/sell/inventory/v1/offer',
+        { headers: h, params: { limit: 200 } }
+      );
+      const found = (offerList.offers || []).find(o => o.sku === safeSKU);
+      if (found) {
+        existingOfferId = found.offerId;
+        console.log(`create-listing: found existing offer ${existingOfferId} for sku "${safeSKU}"`);
+        // If it's already published (active listing), return it directly
+        if (found.status === 'PUBLISHED' && found.listing?.listingId) {
+          return res.json({
+            listingId: found.listing.listingId,
+            url: `https://www.ebay.com/itm/${found.listing.listingId}`,
+          });
+        }
+      }
+    } catch { /* non-fatal — proceed to create/update */ }
 
-      if (isExistsErr) {
-        // A draft offer already exists for this SKU — update it with current data then publish
-        const { data: listData } = await axios.get(
-          'https://api.ebay.com/sell/inventory/v1/offer',
-          { headers: h, params: { sku: safeSKU } }
-        );
-        const existing = (listData.offers || [])[0];
-        if (!existing) throw offerErr;
-        const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = offerPayload;
-        await axios.put(
-          `https://api.ebay.com/sell/inventory/v1/offer/${existing.offerId}`,
-          updateFields, { headers: h }
-        );
-        offerData = existing;
-      } else if (isCatErr && offerPayload.categoryId) {
-        // Suggested category rejected — retry without and let eBay auto-determine
-        console.log(`create-listing: categoryId "${offerPayload.categoryId}" rejected, retrying without`);
-        delete offerPayload.categoryId;
+    let offerData;
+    step = 'creating offer';
+    if (existingOfferId) {
+      // Update the existing draft offer
+      const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = offerPayload;
+      await axios.put(
+        `https://api.ebay.com/sell/inventory/v1/offer/${existingOfferId}`,
+        updateFields, { headers: h }
+      );
+      offerData = { offerId: existingOfferId };
+    } else {
+      try {
         ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
-      } else {
-        throw offerErr;
+      } catch (offerErr) {
+        const errs = offerErr.response?.data?.errors || [];
+        const isCatErr = errs.some(e => /categoryid|category/i.test(String(e.longMessage || e.message || '')));
+        if (isCatErr && offerPayload.categoryId) {
+          // Category rejected — retry without it
+          console.log(`create-listing: categoryId "${offerPayload.categoryId}" rejected, retrying without`);
+          delete offerPayload.categoryId;
+          ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
+        } else {
+          throw offerErr;
+        }
       }
     }
 
