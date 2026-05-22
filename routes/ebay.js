@@ -265,7 +265,7 @@ function buildAspects(specs) {
   };
   const aspects = {};
   for (const [k, label] of Object.entries(MAP)) {
-    if (specs[k]) aspects[label] = [String(specs[k])];
+    if (specs[k]) aspects[label] = [String(specs[k]).slice(0, 65)];
   }
   return aspects;
 }
@@ -435,17 +435,18 @@ router.post('/create-listing', async (req, res) => {
       await resolveListingPolicies(token, { shipping, returns, zipCode });
 
     step = 'creating inventory item';
+    // imageUrl is omitted — Amazon CDN blocks eBay's image fetcher and causes a server error
+    const inventoryProduct = {
+      title: safeTitle,
+      description: buildDescription(safeTitle, specs),
+      aspects: buildAspects(specs),
+      ...(upc ? { upc: [upc] } : {}),
+    };
     await axios.put(
       `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
       {
         condition,
-        product: {
-          title: safeTitle,
-          description: buildDescription(safeTitle, specs),
-          imageUrls: [imageUrl].filter(Boolean),
-          aspects: buildAspects(specs),
-          ...(upc ? { upc: [upc] } : {}),
-        },
+        product: inventoryProduct,
         availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
       },
       { headers: h }
@@ -645,6 +646,29 @@ router.get('/diagnose', async (req, res) => {
     report.auth = `failed: ${e.message}`;
   }
   res.json(report);
+});
+
+// ── eBay category suggestions ──────────────────────────────────────
+router.get('/category-suggestions', async (req, res) => {
+  const { q } = req.query;
+  if (!q) return res.status(400).json({ error: 'q is required' });
+  try {
+    const token = await getAccessToken();
+    const { data } = await axios.get(
+      'https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions',
+      { params: { q }, headers: { Authorization: `Bearer ${token}` } }
+    );
+    const suggestions = (data.categorySuggestions || []).slice(0, 5).map(s => ({
+      id: s.category.categoryId,
+      name: s.category.categoryName,
+      path: (s.categoryTreeNodeAncestors || []).map(a => a.categoryName).reverse().join(' > '),
+    }));
+    res.json(suggestions);
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── SEO title generation ───────────────────────────────────────────
