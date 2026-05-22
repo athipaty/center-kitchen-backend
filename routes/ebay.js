@@ -31,22 +31,31 @@ function basicAuth() {
   return Buffer.from(`${process.env.EBAY_APP_ID}:${process.env.EBAY_CERT_ID}`).toString('base64');
 }
 
+function authError() {
+  const err = new Error('not_authenticated');
+  err.status = 401;
+  return err;
+}
+
 async function getAccessToken() {
   if (tokens.access_token && Date.now() < tokens.expires_at - 60000) return tokens.access_token;
-  if (!tokens.refresh_token) {
-    const err = new Error('not_authenticated');
-    err.status = 401;
-    throw err;
+  if (!tokens.refresh_token) throw authError();
+  try {
+    const { data } = await axios.post(
+      'https://api.ebay.com/identity/v1/oauth2/token',
+      new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }),
+      { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+    tokens.access_token = data.access_token;
+    tokens.expires_at = Date.now() + data.expires_in * 1000;
+    saveTokens();
+    return tokens.access_token;
+  } catch {
+    // Refresh token is expired or revoked — force re-authentication
+    tokens = { access_token: null, refresh_token: null, expires_at: 0 };
+    saveTokens();
+    throw authError();
   }
-  const { data } = await axios.post(
-    'https://api.ebay.com/identity/v1/oauth2/token',
-    new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }),
-    { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
-  );
-  tokens.access_token = data.access_token;
-  tokens.expires_at = Date.now() + data.expires_in * 1000;
-  saveTokens();
-  return tokens.access_token;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
