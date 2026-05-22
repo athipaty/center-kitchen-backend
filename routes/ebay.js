@@ -756,7 +756,7 @@ router.post('/create-listing', async (req, res) => {
         // 25019 is a content-policy error — changing category doesn't help.
         // Strip the variant suffix and all aspects, then retry with the same leaf category.
         // Helper: PUT inventory item with a given title (no aspects, plain description)
-        const putStripped = async (t) => axios.put(
+        const putStripped = async (t, imgs = proxyUrls) => axios.put(
           `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
           {
             condition,
@@ -764,7 +764,7 @@ router.post('/create-listing', async (req, res) => {
               title: t,
               description: 'See photos and title for complete item details.',
               aspects: {},
-              ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
+              ...(imgs.length ? { imageUrls: imgs } : {}),
             },
             availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
           },
@@ -812,6 +812,30 @@ router.post('/create-listing', async (req, res) => {
             } catch (e2) {
               console.log('create-listing: no-brand retry failed:', e2.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e2.message);
             }
+          }
+        }
+
+        // Attempt 3: proxy URLs may be unreachable (Render sleeps) — try with original Amazon URLs,
+        // then with no images at all, keeping the stripped title
+        if (!published && allImageUrls.length) {
+          step = 'publish retry direct-images';
+          console.log('create-listing: 25019 direct-image retry (skip proxy)');
+          try {
+            await putStripped(strippedTitle, allImageUrls);
+            ({ data: published } = await tryPublish());
+          } catch (e3) {
+            console.log('create-listing: direct-image retry failed:', e3.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e3.message);
+          }
+        }
+
+        if (!published) {
+          step = 'publish retry no-images';
+          console.log('create-listing: 25019 no-image retry');
+          try {
+            await putStripped(strippedTitle, []);
+            ({ data: published } = await tryPublish());
+          } catch (e4) {
+            console.log('create-listing: no-image retry failed:', e4.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e4.message);
           }
         }
 
