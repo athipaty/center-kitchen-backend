@@ -398,6 +398,7 @@ async function resolveListingPolicies(token, { shipping, returns, zipCode }) {
 }
 
 router.post('/create-listing', async (req, res) => {
+  let step = 'init';
   try {
     const token = await getAccessToken();
     const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
@@ -416,10 +417,12 @@ router.post('/create-listing', async (req, res) => {
     }
 
     const safeTitle = title.slice(0, 80);
+
+    step = 'resolving policies';
     const { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey } =
       await resolveListingPolicies(token, { shipping, returns, zipCode });
 
-    // 1. Create / update inventory item
+    step = 'creating inventory item';
     await axios.put(
       `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
       {
@@ -431,12 +434,12 @@ router.post('/create-listing', async (req, res) => {
           aspects: buildAspects(specs),
           ...(upc ? { upc: [upc] } : {}),
         },
-        availability: { shipToLocationAvailability: { quantity } },
+        availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
       },
       { headers: h }
     );
 
-    // 2. Create offer
+    step = 'creating offer';
     const offerPayload = {
       sku, marketplaceId: 'EBAY_US', format: 'FIXED_PRICE', listingDuration: 'GTC',
       pricingSummary: { price: { value: Number(price).toFixed(2), currency } },
@@ -452,7 +455,7 @@ router.post('/create-listing', async (req, res) => {
 
     const { data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h });
 
-    // 3. Publish
+    step = 'publishing offer';
     const { data: published } = await axios.post(
       `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
       {}, { headers: h }
@@ -464,10 +467,10 @@ router.post('/create-listing', async (req, res) => {
       return res.status(401).json({ error: 'not_authenticated' });
     const ebayErrs = err.response?.data?.errors;
     const detail = ebayErrs?.length
-      ? ebayErrs.map(e => e.longMessage || e.message).join(' | ')
-      : (err.message || 'Unknown error');
-    console.error('create-listing error:', JSON.stringify(err.response?.data ?? err.message));
-    res.status(500).json({ error: detail });
+      ? ebayErrs.map(e => String(e.longMessage || e.message || '')).join(' | ')
+      : String(err.message || 'Unknown error');
+    console.error(`create-listing [${step}] error:`, JSON.stringify(err.response?.data ?? err.message));
+    res.status(500).json({ error: `[${step}] ${detail}` });
   }
 });
 
@@ -581,6 +584,54 @@ router.post('/create-group-listing', async (req, res) => {
     console.error('create-group-listing error:', JSON.stringify(err.response?.data ?? err.message));
     res.status(500).json({ error: detail });
   }
+});
+
+// ── Diagnose eBay listing readiness ───────────────────────────────
+router.get('/diagnose', async (req, res) => {
+  const report = {};
+  try {
+    const token = await getAccessToken();
+    report.auth = 'ok';
+    const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
+    const mid = 'EBAY_US';
+
+    // Opt-in
+    try {
+      await axios.post('https://api.ebay.com/sell/account/v1/program/opt_in',
+        { programType: 'SELLING_POLICY_MANAGEMENT' }, { headers: h });
+      report.optIn = 'enrolled (or already was)';
+    } catch (e) {
+      report.optIn = `failed: ${e.response?.data?.errors?.[0]?.message || e.message}`;
+    }
+
+    // Fulfillment policies
+    try {
+      const { data } = await axios.get(`https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=${mid}`, { headers: h });
+      report.fulfillmentPolicies = (data.fulfillmentPolicies || []).map(p => ({ id: p.fulfillmentPolicyId, name: p.name }));
+    } catch (e) {
+      report.fulfillmentPolicies = `failed: ${e.response?.data?.errors?.[0]?.message || e.message}`;
+    }
+
+    // Return policies
+    try {
+      const { data } = await axios.get(`https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=${mid}`, { headers: h });
+      report.returnPolicies = (data.returnPolicies || []).map(p => ({ id: p.returnPolicyId, name: p.name }));
+    } catch (e) {
+      report.returnPolicies = `failed: ${e.response?.data?.errors?.[0]?.message || e.message}`;
+    }
+
+    // Locations
+    try {
+      const { data } = await axios.get('https://api.ebay.com/sell/inventory/v1/location', { headers: h });
+      report.locations = (data.locations || []).map(l => ({ key: l.merchantLocationKey, name: l.name }));
+    } catch (e) {
+      report.locations = `failed: ${e.response?.data?.errors?.[0]?.message || e.message}`;
+    }
+
+  } catch (e) {
+    report.auth = `failed: ${e.message}`;
+  }
+  res.json(report);
 });
 
 // ── SEO title generation ───────────────────────────────────────────
