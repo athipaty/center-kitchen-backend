@@ -572,16 +572,17 @@ router.post('/seo-title', async (req, res) => {
           .join('; ')
       : '';
 
-    const prompt = `Generate an SEO-optimized eBay listing title for this product. The title must be 80 characters or less.
+    const prompt = `Generate an SEO-optimized eBay listing title for this product.
 
 Amazon title: ${title}${specLines ? `\nKey specs: ${specLines}` : ''}
 
 Rules:
-- Maximum 80 characters — strictly enforced
+- MUST be 75 characters or less — never exceed this, titles that run long get cut off
+- Must end on a complete word — never cut mid-word or mid-phrase
 - Include brand name and model number if present
-- Use keywords buyers search for (model, key feature, color/size if relevant)
+- Use keywords buyers search for (key feature, quantity, color/size if relevant)
 - Title Case
-- No prohibited terms: no "100%", no asterisks, no "best", no exclamation marks
+- No "100%", no asterisks, no "best", no exclamation marks
 - Output ONLY the title, no quotes, no explanation`;
 
     const message = await anthropic.messages.create({
@@ -591,7 +592,10 @@ Rules:
     });
 
     let generated = (message.content[0]?.text || '').trim().replace(/^["']|["']$/g, '');
-    if (generated.length > 80) generated = generated.slice(0, 80);
+    // If still over 80, trim to last complete word before the limit
+    if (generated.length > 80) {
+      generated = generated.slice(0, 80).replace(/\s+\S*$/, '').trimEnd();
+    }
 
     res.json({ title: generated || title.slice(0, 80) });
   } catch (err) {
