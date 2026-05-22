@@ -313,8 +313,10 @@ function sanitizeSku(raw) {
 
 function sanitizeTitle(raw) {
   return String(raw || '')
-    .replace(/[^\x20-\x7E]/g, '')   // ASCII printable only
-    .replace(/[<>&"]/g, '')          // strip HTML chars eBay chokes on
+    .replace(/[^\x20-\x7E]/g, '')        // ASCII printable only
+    .replace(/[<>&"]/g, '')              // strip HTML chars
+    .replace(/\b(ebay|walmart|target)\b/gi, '')  // remove hard competitor names
+    .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80);
 }
@@ -397,28 +399,31 @@ async function lookupCategory(title, upc) {
   return null;
 }
 
-// Words/patterns eBay flags as policy violations
-const EBAY_BLOCKED = /amazon|walmart|target|bestbuy|best buy|ebay|http|www\.|\.com|free ship|lowest price|best price|#1|visit our|check out our|see our store/i;
+// Words/patterns that trigger eBay's content policy filter
+const EBAY_BLOCKED = /amazon|walmart|target|bestbuy|best buy|ebay|http|www\.|\.com|\.net|\.org|free ship|lowest price|best price|#1|visit our|check out our|see our store|money.back|satisfaction guaranteed|not sold in stores/i;
 
 function safeSpecValue(v) {
   if (v == null) return null;
   const str = Array.isArray(v) ? v.join(', ') : (typeof v === 'object' ? Object.values(v).filter(Boolean).join(', ') : String(v));
   if (EBAY_BLOCKED.test(str)) return null;
-  return str.slice(0, 200);
+  // Strip special chars that eBay's filter chokes on
+  return str.replace(/[^\x20-\x7E]/g, '').replace(/[<>&"]/g, '').slice(0, 200).trim() || null;
 }
 
 function buildDescription(title, specs) {
-  const SKIP = new Set(['asin', 'best_sellers_rank', 'customer_reviews', 'date_first_available']);
-  if (!specs || !Object.keys(specs).length) return `<p>${title}</p>`;
-  const rows = Object.entries(specs)
+  // Do NOT put the title in the description — it can contain brand/competitor names
+  // that eBay flags as policy violations when they appear in description body
+  const SKIP = new Set(['asin', 'best_sellers_rank', 'customer_reviews', 'date_first_available',
+    'product_description', 'important_information']);
+  const rows = specs ? Object.entries(specs)
     .filter(([k, v]) => v && !SKIP.has(k))
     .map(([k, v]) => {
       const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       const display = safeSpecValue(v);
       return display ? `<p>${label}: ${display}</p>` : null;
     })
-    .filter(Boolean);
-  return rows.length ? `<p>${title}</p>${rows.join('')}` : `<p>${title}</p>`;
+    .filter(Boolean) : [];
+  return rows.length ? rows.join('') : '<p>Please see photos and title for full item details.</p>';
 }
 
 // Auto find-or-create all required policies + location so the user never has to configure them manually
@@ -682,13 +687,29 @@ router.post('/create-listing', async (req, res) => {
       ));
     } catch (pubErr) {
       const pubErrs = pubErr.response?.data?.errors || [];
-      const noCatErr = pubErrs.some(e => /category/i.test(String(e.longMessage || e.message || '')));
+      const errText = pubErrs.map(e => String(e.longMessage || e.message || '')).join(' ');
+      const noCatErr = /category/i.test(errText);
+      const alreadyLiveErr = /revise listing|already active|already published/i.test(errText);
+
+      if (alreadyLiveErr) {
+        // Listing is already live on eBay — fetch its listingId from the offer and return it
+        try {
+          const { data: offerDetail } = await axios.get(
+            `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, { headers: h }
+          );
+          if (offerDetail.listing?.listingId) {
+            return res.json({ listingId: offerDetail.listing.listingId, url: `https://www.ebay.com/itm/${offerDetail.listing.listingId}` });
+          }
+        } catch {}
+        throw pubErr;
+      }
+
       if (!noCatErr) throw pubErr;
 
       // Publishing failed due to missing category — look up via taxonomy API and update offer, then retry
       step = 'fixing category before publish';
       const fallbackCat = await lookupCategory(safeTitle, upc);
-      if (!fallbackCat) throw new Error('Could not detect an eBay category for this product. Please enter a valid eBay category ID in the listing form (e.g. find it on ebay.com by searching your product and noting the URL).');
+      if (!fallbackCat) throw new Error('Could not detect an eBay category for this product. Please enter a valid eBay category ID in the listing form.');
       console.log(`create-listing: publish retry with taxonomy category ${fallbackCat}`);
       const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = { ...offerPayload, categoryId: fallbackCat };
       await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, updateFields, { headers: h });
