@@ -428,6 +428,7 @@ router.post('/create-listing', async (req, res) => {
 
     const safeTitle = title.slice(0, 80);
     const safeSKU = sanitizeSku(sku);
+    console.log(`create-listing: raw sku="${sku}" → safeSKU="${safeSKU}"`);
 
     step = 'resolving policies';
     const { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey } =
