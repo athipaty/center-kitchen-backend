@@ -1174,6 +1174,59 @@ router.get('/sold', async (req, res) => {
   }
 });
 
+// ── All active listings via Trading API (includes manually created) ─
+router.get('/all-active-listings', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+
+    const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>100</EntriesPerPage></Pagination></ActiveList></GetMyeBaySellingRequest>`;
+
+    const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
+      headers: {
+        'X-EBAY-API-SITEID': '0',
+        'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling',
+        'X-EBAY-API-IAF-TOKEN': token,
+        'Content-Type': 'text/xml',
+      },
+    });
+
+    if (/<Ack>Failure<\/Ack>/.test(xmlResp)) {
+      const msg = xmlResp.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+      console.error('all-active-listings Trading API failure:', msg);
+      return res.json([]); // Return empty — likely missing sell.item scope, user needs to reconnect
+    }
+
+    const items = [];
+    const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
+    let m;
+    while ((m = itemRe.exec(xmlResp)) !== null) {
+      const block = m[1];
+      const get = tag => {
+        const tm = block.match(new RegExp(`<${tag}[^>]*>([^<]+)<\/${tag}>`));
+        return tm ? tm[1].trim() : null;
+      };
+      const listingId = get('ItemID');
+      if (!listingId) continue;
+      items.push({
+        listingId,
+        title: get('Title') || listingId,
+        price: parseFloat(get('StartPrice') || get('BuyItNowPrice') || '0') || 0,
+        currency: 'USD',
+        quantity: parseInt(get('QuantityAvailable') || get('Quantity') || '1', 10),
+        image: get('GalleryURL') || null,
+        url: `https://www.ebay.com/itm/${listingId}`,
+      });
+    }
+
+    res.json(items);
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    console.error('all-active-listings error:', err.response?.data || err.message);
+    res.json([]); // Fail gracefully — don't break the page
+  }
+});
+
 // ── Update price — Inventory API offer ────────────────────────────
 router.patch('/offer/:offerId/price', async (req, res) => {
   try {
