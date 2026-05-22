@@ -313,10 +313,13 @@ function sanitizeSku(raw) {
 
 function sanitizeTitle(raw) {
   return String(raw || '')
-    .replace(/[^\x20-\x7E]/g, '')        // ASCII printable only
-    .replace(/[<>&"]/g, '')              // strip HTML chars
-    .replace(/\b(ebay|walmart|target)\b/gi, '')  // remove hard competitor names
-    .replace(/\s+/g, ' ')
+    .replace(/[^\x20-\x7E]/g, ' ')      // non-ASCII → space (catches ™ ® © etc.)
+    .replace(/[<>&"'|*]/g, '')           // HTML and special chars eBay chokes on
+    .replace(/\b(ebay|walmart|target|amazon)\b/gi, '')  // competitor names
+    .replace(/\b(guarantee|guaranteed|warranty|certified|authorized|authentic|genuine|official|oem)\b/gi, '')
+    .replace(/\b(free shipping|free ship|free delivery|best price|lowest price|sale|discount)\b/gi, '')
+    .replace(/100%/g, '')
+    .replace(/\s{2,}/g, ' ')
     .trim()
     .slice(0, 80);
 }
@@ -756,7 +759,7 @@ router.post('/create-listing', async (req, res) => {
       ? ebayErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message || ''}`).join(' | ')
       : String(err.message || 'Unknown error');
     console.error(`create-listing [${step}] title="${safeTitle}" category="${resolvedCategory}" error:`, JSON.stringify(err.response?.data ?? err.message, null, 2));
-    res.status(500).json({ error: `[${step}] ${detail}` });
+    res.status(500).json({ error: `[${step}] ${detail} | title sent: "${safeTitle}"` });
   }
 });
 
