@@ -466,7 +466,22 @@ router.post('/create-listing', async (req, res) => {
     };
     if (categoryId) offerPayload.categoryId = String(categoryId);
 
-    const { data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h });
+    let offerData;
+    try {
+      ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
+    } catch (offerErr) {
+      const isCatErr = (offerErr.response?.data?.errors || []).some(e =>
+        /categoryid|category/i.test(String(e.longMessage || e.message || ''))
+      );
+      if (isCatErr && offerPayload.categoryId) {
+        // Suggested category invalid — retry and let eBay auto-determine
+        console.log(`create-listing: categoryId "${offerPayload.categoryId}" rejected, retrying without it`);
+        delete offerPayload.categoryId;
+        ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
+      } else {
+        throw offerErr;
+      }
+    }
 
     step = 'publishing offer';
     const { data: published } = await axios.post(
@@ -654,15 +669,33 @@ router.get('/category-suggestions', async (req, res) => {
   if (!q) return res.status(400).json({ error: 'q is required' });
   try {
     const token = await getAccessToken();
+    const h = { Authorization: `Bearer ${token}` };
+
+    // Get the correct tree ID for EBAY_US dynamically
+    let treeId = '0';
+    try {
+      const { data: treeData } = await axios.get(
+        'https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id',
+        { params: { marketplace_id: 'EBAY_US' }, headers: h }
+      );
+      treeId = String(treeData.categoryTreeId || '0');
+    } catch { /* fall back to 0 */ }
+
     const { data } = await axios.get(
-      'https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions',
-      { params: { q }, headers: { Authorization: `Bearer ${token}` } }
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions`,
+      { params: { q }, headers: h }
     );
-    const suggestions = (data.categorySuggestions || []).slice(0, 5).map(s => ({
-      id: s.category.categoryId,
-      name: s.category.categoryName,
-      path: (s.categoryTreeNodeAncestors || []).map(a => a.categoryName).reverse().join(' > '),
-    }));
+    const suggestions = (data.categorySuggestions || []).slice(0, 5).map(s => {
+      const ancestors = (s.categoryTreeNodeAncestors || [])
+        .sort((a, b) => (a.categoryTreeNodeLevel || 0) - (b.categoryTreeNodeLevel || 0));
+      const pathParts = ancestors.slice(-2).map(a => a.categoryName);
+      pathParts.push(s.category.categoryName);
+      return {
+        id: String(s.category.categoryId),
+        name: s.category.categoryName,
+        path: pathParts.join(' > '),
+      };
+    });
     res.json(suggestions);
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
