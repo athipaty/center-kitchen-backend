@@ -274,9 +274,8 @@ function sanitizeSku(raw) {
   return String(raw || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 50) || 'ITEM';
 }
 
-// Auto-detect eBay category from live listings (guaranteed valid for selling)
-async function lookupCategory(title, upc) {
-  if (!process.env.EBAY_APP_ID) return null;
+// Auto-detect eBay category from live listings, falling back to Taxonomy API
+async function lookupCategory(title, upc, token) {
   const findingBase = {
     'SERVICE-VERSION': '1.0.0',
     'SECURITY-APPNAME': process.env.EBAY_APP_ID,
@@ -289,35 +288,57 @@ async function lookupCategory(title, upc) {
     || data?.findItemsByProductResponse?.[0]?.searchResult?.[0]?.item?.[0]?.primaryCategory?.[0]?.categoryId?.[0]
     || null;
 
-  // 1. UPC lookup (most accurate)
-  if (upc) {
+  if (process.env.EBAY_APP_ID) {
+    // 1. UPC lookup (most accurate)
+    if (upc) {
+      try {
+        const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+          params: { ...findingBase, 'OPERATION-NAME': 'findItemsByProduct', 'productId.@type': 'UPC', 'productId': upc },
+        });
+        const cat = extractCat(data);
+        if (cat) return cat;
+      } catch {}
+    }
+
+    // 2. Full title search
     try {
       const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
-        params: { ...findingBase, 'OPERATION-NAME': 'findItemsByProduct', 'productId.@type': 'UPC', 'productId': upc },
+        params: { ...findingBase, 'OPERATION-NAME': 'findItemsByKeywords', keywords: title.slice(0, 100) },
       });
       const cat = extractCat(data);
       if (cat) return cat;
     } catch {}
+
+    // 3. Shorter keywords (first 4 words) — handles very long specific titles
+    const short = title.split(/\s+/).slice(0, 4).join(' ');
+    if (short.length < title.length) {
+      try {
+        const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+          params: { ...findingBase, 'OPERATION-NAME': 'findItemsByKeywords', keywords: short },
+        });
+        const cat = extractCat(data);
+        if (cat) return cat;
+      } catch {}
+    }
   }
 
-  // 2. Full title search
-  try {
-    const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
-      params: { ...findingBase, 'OPERATION-NAME': 'findItemsByKeywords', keywords: title.slice(0, 100) },
-    });
-    const cat = extractCat(data);
-    if (cat) return cat;
-  } catch {}
-
-  // 3. Shorter keywords (first 4 words) — handles very long specific titles
-  const short = title.split(/\s+/).slice(0, 4).join(' ');
-  if (short.length < title.length) {
+  // 4. Commerce Taxonomy API fallback (requires OAuth token)
+  if (token) {
     try {
-      const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
-        params: { ...findingBase, 'OPERATION-NAME': 'findItemsByKeywords', keywords: short },
-      });
-      const cat = extractCat(data);
-      if (cat) return cat;
+      const th = { Authorization: `Bearer ${token}` };
+      const { data: tree } = await axios.get(
+        'https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id',
+        { headers: th, params: { marketplace_id: 'EBAY_US' } }
+      );
+      const { data: sugg } = await axios.get(
+        `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${tree.categoryTreeId}/get_category_suggestions`,
+        { headers: th, params: { q: title.slice(0, 80) } }
+      );
+      const cat = sugg.categorySuggestions?.[0]?.category?.categoryId;
+      if (cat) {
+        console.log(`lookupCategory: taxonomy fallback returned category ${cat} for "${title.slice(0, 40)}"`);
+        return String(cat);
+      }
     } catch {}
   }
 
@@ -506,7 +527,7 @@ router.post('/create-listing', async (req, res) => {
     step = 'detecting category';
     let resolvedCategory = categoryId ? String(categoryId) : null;
     if (!resolvedCategory) {
-      resolvedCategory = await lookupCategory(safeTitle, upc);
+      resolvedCategory = await lookupCategory(safeTitle, upc, token);
       if (resolvedCategory) console.log(`create-listing: auto-detected category ${resolvedCategory} for "${safeTitle}"`);
     }
 
@@ -539,6 +560,12 @@ router.post('/create-listing', async (req, res) => {
           if (found.listing?.listingId) {
             return res.json({ listingId: found.listing.listingId, url: `https://www.ebay.com/itm/${found.listing.listingId}` });
           }
+          // Use the existing offer's categoryId as fallback if we don't have one yet
+          if (!resolvedCategory && found.categoryId) {
+            resolvedCategory = String(found.categoryId);
+            offerPayload.categoryId = resolvedCategory;
+            console.log(`create-listing: using existing offer's categoryId ${resolvedCategory}`);
+          }
           const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = offerPayload;
           try { await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${found.offerId}`, updateFields, { headers: h }); } catch {}
           return { offerId: found.offerId };
@@ -565,6 +592,17 @@ router.post('/create-listing', async (req, res) => {
         ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
       } else {
         throw offerErr;
+      }
+    }
+
+    // If we still have no category, try taxonomy API one final time then update the offer
+    if (!resolvedCategory) {
+      step = 'final category lookup';
+      resolvedCategory = await lookupCategory(safeTitle, upc, token);
+      if (resolvedCategory) {
+        console.log(`create-listing: final taxonomy category ${resolvedCategory}, updating offer ${offerData.offerId}`);
+        const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = { ...offerPayload, categoryId: resolvedCategory };
+        try { await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, updateFields, { headers: h }); } catch {}
       }
     }
 
@@ -663,7 +701,14 @@ router.post('/create-group-listing', async (req, res) => {
       { headers: h }
     );
 
-    // 3. Create offer for the group
+    // 3. Resolve category
+    let resolvedGroupCategory = categoryId ? String(categoryId) : null;
+    if (!resolvedGroupCategory) {
+      resolvedGroupCategory = await lookupCategory(safeTitle, null, token);
+      if (resolvedGroupCategory) console.log(`create-group-listing: auto-detected category ${resolvedGroupCategory}`);
+    }
+
+    // 4. Create offer for the group
     const offerPayload = {
       sku: safeGroupKey,
       marketplaceId: 'EBAY_US',
@@ -677,11 +722,11 @@ router.post('/create-group-listing', async (req, res) => {
         ...(paymentPolicyId ? { paymentPolicyId } : {}),
       },
     };
-    if (categoryId) offerPayload.categoryId = String(categoryId);
+    if (resolvedGroupCategory) offerPayload.categoryId = resolvedGroupCategory;
 
     const { data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h });
 
-    // 4. Publish
+    // 5. Publish
     const { data: published } = await axios.post(
       `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
       {}, { headers: h }
@@ -753,10 +798,11 @@ router.get('/category-suggestions', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q is required' });
 
-  // Use lookupCategory to find a valid category from real eBay listings
-  const catId = await lookupCategory(q, null);
+  let token = null;
+  try { token = await getAccessToken(); } catch {}
+  const catId = await lookupCategory(q, null, token);
   if (catId) return res.json([{ id: catId, name: '', path: '' }]);
-  res.json([]); // frontend will show empty field, backend will retry at listing time
+  res.json([]);
 });
 
 // ── SEO title generation ───────────────────────────────────────────
