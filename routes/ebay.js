@@ -311,6 +311,14 @@ function sanitizeSku(raw) {
   return String(raw || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 50) || 'ITEM';
 }
 
+function sanitizeTitle(raw) {
+  return String(raw || '')
+    .replace(/[^\x20-\x7E]/g, '')   // ASCII printable only
+    .replace(/[<>&"]/g, '')          // strip HTML chars eBay chokes on
+    .trim()
+    .slice(0, 80);
+}
+
 // Auto-detect eBay category from live listings, falling back to Taxonomy API
 async function lookupCategory(title, upc) {
   const findingBase = {
@@ -389,16 +397,28 @@ async function lookupCategory(title, upc) {
   return null;
 }
 
+// Words/patterns eBay flags as policy violations
+const EBAY_BLOCKED = /amazon|walmart|target|bestbuy|best buy|ebay|http|www\.|\.com|free ship|lowest price|best price|#1|visit our|check out our|see our store/i;
+
+function safeSpecValue(v) {
+  if (v == null) return null;
+  const str = Array.isArray(v) ? v.join(', ') : (typeof v === 'object' ? Object.values(v).filter(Boolean).join(', ') : String(v));
+  if (EBAY_BLOCKED.test(str)) return null;
+  return str.slice(0, 200);
+}
+
 function buildDescription(title, specs) {
+  const SKIP = new Set(['asin', 'best_sellers_rank', 'customer_reviews', 'date_first_available']);
   if (!specs || !Object.keys(specs).length) return `<p>${title}</p>`;
   const rows = Object.entries(specs)
-    .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews'].includes(k))
+    .filter(([k, v]) => v && !SKIP.has(k))
     .map(([k, v]) => {
       const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      const display = Array.isArray(v) ? v.join(', ') : (typeof v === 'object' ? JSON.stringify(v) : v);
-      return `<li><b>${label}:</b> ${display}</li>`;
-    });
-  return `<h2>${title}</h2><ul>${rows.join('')}</ul>`;
+      const display = safeSpecValue(v);
+      return display ? `<p>${label}: ${display}</p>` : null;
+    })
+    .filter(Boolean);
+  return rows.length ? `<p>${title}</p>${rows.join('')}` : `<p>${title}</p>`;
 }
 
 // Auto find-or-create all required policies + location so the user never has to configure them manually
@@ -541,7 +561,7 @@ router.post('/create-listing', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: sku, title, price' });
     }
 
-    const safeTitle = title.slice(0, 80);
+    const safeTitle = sanitizeTitle(title);
     const safeSKU = sanitizeSku(sku);
     console.log(`create-listing: raw sku="${sku}" → safeSKU="${safeSKU}"`);
 
@@ -710,7 +730,7 @@ router.post('/create-group-listing', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: groupKey, title, price, variants' });
     }
 
-    const safeTitle = title.slice(0, 80);
+    const safeTitle = sanitizeTitle(title);
     const safeGroupKey = sanitizeSku(groupKey);
     const { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey } =
       await resolveListingPolicies(token, { shipping, returns, zipCode });
