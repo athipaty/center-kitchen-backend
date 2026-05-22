@@ -71,7 +71,10 @@ function ebayError(err) {
 // ── OAuth ──────────────────────────────────────────────────────────
 router.get('/auth/login', (req, res) => {
   if (!process.env.EBAY_RUNAME) return res.status(500).json({ error: 'EBAY_RUNAME not set in .env' });
-  const scope = 'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly';
+  const scope = [
+    'https://api.ebay.com/oauth/api_scope/sell.inventory',
+    'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
+  ].join(' ');
   const url = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(process.env.EBAY_APP_ID)}&redirect_uri=${encodeURIComponent(process.env.EBAY_RUNAME)}&response_type=code&scope=${encodeURIComponent(scope)}`;
   res.redirect(url);
 });
@@ -204,6 +207,129 @@ router.get('/my-listings', async (req, res) => {
       return res.status(401).json({ error: 'not_authenticated' });
     }
     res.status(500).json({ error: ebayError(err) });
+  }
+});
+
+// ── Account info (policies + locations) ───────────────────────────
+router.get('/account-info', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const h = { Authorization: `Bearer ${token}` };
+    const mid = 'EBAY_US';
+    const [ful, ret, pay, loc] = await Promise.allSettled([
+      axios.get(`https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=${mid}`, { headers: h }),
+      axios.get(`https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=${mid}`, { headers: h }),
+      axios.get(`https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=${mid}`, { headers: h }),
+      axios.get('https://api.ebay.com/sell/inventory/v1/location', { headers: h }),
+    ]);
+    res.json({
+      fulfillmentPolicies: ful.status === 'fulfilled' ? (ful.value.data.fulfillmentPolicies || []) : [],
+      returnPolicies:      ret.status === 'fulfilled' ? (ret.value.data.returnPolicies      || []) : [],
+      paymentPolicies:     pay.status === 'fulfilled' ? (pay.value.data.paymentPolicies     || []) : [],
+      locations:           loc.status === 'fulfilled' ? (loc.value.data.locations           || []) : [],
+    });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: ebayError(err) });
+  }
+});
+
+// ── Create listing ─────────────────────────────────────────────────
+function buildAspects(specs) {
+  const MAP = {
+    brand_name: 'Brand', color: 'Color', material: 'Material',
+    size: 'Size', style: 'Style', model_number: 'MPN',
+    item_weight: 'Item Weight', wattage: 'Wattage', voltage: 'Voltage',
+    power_source: 'Power Source', number_of_speeds: 'Number of Speeds',
+    country_of_origin: 'Country/Region of Manufacture',
+    indoor_outdoor_usage: 'Indoor/Outdoor Usage',
+    special_features: 'Features', mounting_type: 'Mounting Type',
+    connector_type: 'Connector Type', motor_type: 'Motor Type',
+  };
+  const aspects = {};
+  for (const [k, label] of Object.entries(MAP)) {
+    if (specs[k]) aspects[label] = [String(specs[k])];
+  }
+  return aspects;
+}
+
+function buildDescription(title, specs) {
+  if (!specs || !Object.keys(specs).length) return `<p>${title}</p>`;
+  const rows = Object.entries(specs)
+    .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews'].includes(k))
+    .map(([k, v]) => {
+      const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      return `<li><b>${label}:</b> ${Array.isArray(v) ? v.join(', ') : v}</li>`;
+    });
+  return `<h2>${title}</h2><ul>${rows.join('')}</ul>`;
+}
+
+router.post('/create-listing', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
+
+    const {
+      sku, title, price, currency = 'USD', quantity = 1,
+      condition = 'NEW', categoryId,
+      fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey,
+      imageUrl, upc, specs = {},
+    } = req.body;
+
+    if (!sku || !title || !price || !fulfillmentPolicyId || !returnPolicyId || !paymentPolicyId || !merchantLocationKey) {
+      return res.status(400).json({ error: 'Missing required fields: sku, title, price, policies, merchantLocationKey' });
+    }
+
+    const safeTitle = title.slice(0, 80);
+
+    // 1. Create / update inventory item
+    await axios.put(
+      `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+      {
+        condition,
+        product: {
+          title: safeTitle,
+          description: buildDescription(safeTitle, specs),
+          imageUrls: [imageUrl].filter(Boolean),
+          aspects: buildAspects(specs),
+          ...(upc ? { upc: [upc] } : {}),
+        },
+        availability: { shipToLocationAvailability: { quantity } },
+      },
+      { headers: h }
+    );
+
+    // 2. Create offer
+    const { data: offerData } = await axios.post(
+      'https://api.ebay.com/sell/inventory/v1/offer',
+      {
+        sku,
+        marketplaceId: 'EBAY_US',
+        format: 'FIXED_PRICE',
+        listingDuration: 'GTC',
+        pricingSummary: { price: { value: Number(price).toFixed(2), currency } },
+        availableQuantity: quantity,
+        categoryId,
+        merchantLocationKey,
+        listingPolicies: { fulfillmentPolicyId, returnPolicyId, paymentPolicyId },
+      },
+      { headers: h }
+    );
+
+    // 3. Publish
+    const { data: published } = await axios.post(
+      `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+      {},
+      { headers: h }
+    );
+
+    res.json({ listingId: published.listingId, url: `https://www.ebay.com/itm/${published.listingId}` });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    const detail = err.response?.data?.errors?.[0]?.message || ebayError(err);
+    res.status(500).json({ error: detail });
   }
 });
 
