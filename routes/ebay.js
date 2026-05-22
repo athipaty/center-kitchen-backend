@@ -709,6 +709,17 @@ router.post('/create-listing', async (req, res) => {
             return res.json({ listingId: offerDetail.listing.listingId, url: `https://www.ebay.com/itm/${offerDetail.listing.listingId}` });
           }
         } catch {}
+        // Current offer has no listing ID — search all offers for this SKU to find the live one
+        try {
+          const { data: skuOffers } = await axios.get(
+            'https://api.ebay.com/sell/inventory/v1/offer', { headers: h, params: { sku: safeSKU } }
+          );
+          const liveOffer = (skuOffers.offers || []).find(o => o.listing?.listingId);
+          if (liveOffer) {
+            console.log(`create-listing: found live listing ${liveOffer.listing.listingId} via SKU search after revise-error`);
+            return res.json({ listingId: liveOffer.listing.listingId, url: `https://www.ebay.com/itm/${liveOffer.listing.listingId}` });
+          }
+        } catch {}
         throw pubErr;
       }
 
