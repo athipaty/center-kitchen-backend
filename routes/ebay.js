@@ -1268,8 +1268,7 @@ router.patch('/offer/:offerId/price', async (req, res) => {
 });
 
 // ── Update price — any listing via Trading API ─────────────────────
-// Works for manually created listings not in the Inventory API.
-// Requires sell.item scope (user must reconnect eBay if upgrading from older auth).
+// Handles both single listings and multi-variation (size/color) listings.
 router.post('/listing/price', async (req, res) => {
   try {
     const token = await getAccessToken();
@@ -1280,32 +1279,63 @@ router.post('/listing/price', async (req, res) => {
     const cleanId = String(listingId).trim().replace(/\D/g, '');
     if (!cleanId) return res.status(400).json({ error: 'Listing ID must be numeric (e.g. 123456789012)' });
 
-    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><Item><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice></Item></ReviseFixedPriceItemRequest>`;
+    const priceStr = Number(price).toFixed(2);
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
 
-    console.log(`listing/price: ReviseFixedPriceItem listingId="${cleanId}" price=${Number(price).toFixed(2)}`);
-
-    const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
-      headers: {
-        'X-EBAY-API-SITEID': '0',
-        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-        'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem',
-        'X-EBAY-API-IAF-TOKEN': token,
-        'Content-Type': 'text/xml',
-      },
-    });
-
-    console.log('listing/price: eBay response:', xmlResp.slice(0, 500));
-
-    if (/<Ack>Failure<\/Ack>/.test(xmlResp) || /<Ack>PartialFailure<\/Ack>/.test(xmlResp)) {
-      const errCode = xmlResp.match(/<ErrorCode>(.*?)<\/ErrorCode>/)?.[1];
-      const msg = xmlResp.match(/<LongMessage>(.*?)<\/LongMessage>/)?.[1]
-        || xmlResp.match(/<ShortMessage>(.*?)<\/ShortMessage>/)?.[1]
-        || 'eBay returned an error';
-      console.error(`listing/price: failure code=${errCode} msg=${msg}`);
-      return res.status(400).json({ error: msg });
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
+      );
     }
 
-    res.json({ ok: true });
+    function checkFailure(xml) {
+      if (!/<Ack>Failure<\/Ack>/.test(xml) && !/<Ack>PartialFailure<\/Ack>/.test(xml)) return null;
+      return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
+        || 'eBay returned an error';
+    }
+
+    // Step 1: fetch item to detect variations
+    const { data: getItemXml } = await tradingPost('GetItem',
+      `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+    );
+    const getItemErr = checkFailure(getItemXml);
+    if (getItemErr) return res.status(400).json({ error: getItemErr });
+
+    // Parse <Variation> blocks — present only for multi-variation listings
+    const varBlocks = [];
+    const varRe = /<Variation>([\s\S]*?)<\/Variation>/g;
+    let vm;
+    while ((vm = varRe.exec(getItemXml)) !== null) varBlocks.push(vm[0]);
+
+    let reviseBody;
+    if (varBlocks.length === 0) {
+      // Single listing
+      reviseBody = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></Item></ReviseFixedPriceItemRequest>`;
+    } else {
+      // Multi-variation — update every variation to the same price
+      const variationsXml = varBlocks.map(vBlock => {
+        const specifics = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[0] || '';
+        return `<Variation><StartPrice currencyID="USD">${priceStr}</StartPrice>${specifics}</Variation>`;
+      }).join('');
+      reviseBody = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationsXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+    }
+
+    console.log(`listing/price: id=${cleanId} price=${priceStr} variations=${varBlocks.length}`);
+    const { data: reviseXml } = await tradingPost('ReviseFixedPriceItem', reviseBody);
+    console.log('listing/price: response:', reviseXml.slice(0, 400));
+
+    const reviseErr = checkFailure(reviseXml);
+    if (reviseErr) return res.status(400).json({ error: reviseErr });
+
+    res.json({ ok: true, variations: varBlocks.length });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
