@@ -768,12 +768,11 @@ router.post('/create-listing', async (req, res) => {
           }
         }
 
-        // Round 2: if still failing, strip variant suffix + aspects and retry with "Everything Else"
+        // Round 2: strip variant suffix + aspects, cycle same categories
         if (!published) {
-          step = 'publish retry stripped';
-          // Remove " - VariantName" suffix that may trigger keyword-stuffing detection
           const strippedTitle = safeTitle.replace(/\s+-\s+\S.*$/, '').trim();
           console.log(`create-listing: 25019 deep retry stripped title="${strippedTitle}"`);
+          // Update inventory item once with stripped content
           try {
             await axios.put(
               `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
@@ -789,15 +788,32 @@ router.post('/create-listing', async (req, res) => {
               },
               { headers: h }
             );
-            const { sku: _s, marketplaceId: _m, format: _f, ...uf } = { ...offerPayload, categoryId: '99' };
-            await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, uf, { headers: h });
-            ({ data: published } = await axios.post(
-              `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
-              {}, { headers: h }
-            ));
-          } catch (deepErr) {
-            console.log('create-listing: deep retry also failed:', deepErr.response?.data?.errors?.[0]?.longMessage || deepErr.message);
-            throw round1Err; // surface the category-retry error, not the deep-retry error
+          } catch (itemErr) {
+            console.log('create-listing: stripped inventory item update failed:', itemErr.message);
+            throw round1Err;
+          }
+          // Use the auto-detected product leaf category; re-detect from stripped title if needed
+          let strippedCat = resolvedCategory;
+          if (!strippedCat) {
+            strippedCat = await lookupCategory(strippedTitle, upc);
+            console.log(`create-listing: stripped retry re-detected category ${strippedCat}`);
+          }
+          const strippedCats = strippedCat ? [strippedCat, ...safeCats] : safeCats;
+          for (const cat of strippedCats) {
+            step = `publish retry stripped cat=${cat}`;
+            try {
+              const { sku: _s, marketplaceId: _m, format: _f, ...uf } = { ...offerPayload, categoryId: cat };
+              await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, uf, { headers: h });
+              ({ data: published } = await axios.post(
+                `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+                {}, { headers: h }
+              ));
+              break;
+            } catch (deepErr) {
+              const deepErrs = deepErr.response?.data?.errors || [];
+              console.log(`create-listing: stripped cat=${cat} failed:`, deepErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | '));
+              if (cat === strippedCats[strippedCats.length - 1]) throw round1Err;
+            }
           }
         }
         if (!published) throw pubErr;
