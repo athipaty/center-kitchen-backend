@@ -1277,7 +1277,7 @@ router.post('/listing/price', async (req, res) => {
     if (!listingId || !price || isNaN(Number(price)) || Number(price) <= 0)
       return res.status(400).json({ error: 'listingId and price are required' });
 
-    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><Item><ItemID>${listingId}</ItemID><StartPrice>${Number(price).toFixed(2)}</StartPrice></Item></ReviseFixedPriceItemRequest>`;
+    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><Item><ItemID>${listingId}</ItemID><StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice></Item></ReviseFixedPriceItemRequest>`;
 
     const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
       headers: {
