@@ -3,6 +3,7 @@ const router = express.Router();
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const Anthropic = require('@anthropic-ai/sdk');
 
 // ── Sold-price cache (6h TTL) ──────────────────────────────────────
 const soldCache = new Map(); // key → { data, expiresAt }
@@ -444,6 +445,49 @@ router.post('/create-listing', async (req, res) => {
       return res.status(401).json({ error: 'not_authenticated' });
     const detail = err.response?.data?.errors?.[0]?.message || err.message || ebayError(err);
     res.status(500).json({ error: detail });
+  }
+});
+
+// ── SEO title generation ───────────────────────────────────────────
+router.post('/seo-title', async (req, res) => {
+  const { title, specs } = req.body;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const specLines = specs
+      ? Object.entries(specs)
+          .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews'].includes(k))
+          .slice(0, 12)
+          .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+          .join('; ')
+      : '';
+
+    const prompt = `Generate an SEO-optimized eBay listing title for this product. The title must be 80 characters or less.
+
+Amazon title: ${title}${specLines ? `\nKey specs: ${specLines}` : ''}
+
+Rules:
+- Maximum 80 characters — strictly enforced
+- Include brand name and model number if present
+- Use keywords buyers search for (model, key feature, color/size if relevant)
+- Title Case
+- No prohibited terms: no "100%", no asterisks, no "best", no exclamation marks
+- Output ONLY the title, no quotes, no explanation`;
+
+    const message = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 120,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    let generated = (message.content[0]?.text || '').trim().replace(/^["']|["']$/g, '');
+    if (generated.length > 80) generated = generated.slice(0, 80);
+
+    res.json({ title: generated || title.slice(0, 80) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
