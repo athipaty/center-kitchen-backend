@@ -1277,7 +1277,12 @@ router.post('/listing/price', async (req, res) => {
     if (!listingId || !price || isNaN(Number(price)) || Number(price) <= 0)
       return res.status(400).json({ error: 'listingId and price are required' });
 
-    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><Item><ItemID>${listingId}</ItemID><StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice></Item></ReviseFixedPriceItemRequest>`;
+    const cleanId = String(listingId).trim().replace(/\D/g, '');
+    if (!cleanId) return res.status(400).json({ error: 'Listing ID must be numeric (e.g. 123456789012)' });
+
+    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><Item><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice></Item></ReviseFixedPriceItemRequest>`;
+
+    console.log(`listing/price: ReviseFixedPriceItem listingId="${cleanId}" price=${Number(price).toFixed(2)}`);
 
     const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
       headers: {
@@ -1289,10 +1294,14 @@ router.post('/listing/price', async (req, res) => {
       },
     });
 
+    console.log('listing/price: eBay response:', xmlResp.slice(0, 500));
+
     if (/<Ack>Failure<\/Ack>/.test(xmlResp) || /<Ack>PartialFailure<\/Ack>/.test(xmlResp)) {
+      const errCode = xmlResp.match(/<ErrorCode>(.*?)<\/ErrorCode>/)?.[1];
       const msg = xmlResp.match(/<LongMessage>(.*?)<\/LongMessage>/)?.[1]
         || xmlResp.match(/<ShortMessage>(.*?)<\/ShortMessage>/)?.[1]
         || 'eBay returned an error';
+      console.error(`listing/price: failure code=${errCode} msg=${msg}`);
       return res.status(400).json({ error: msg });
     }
 
