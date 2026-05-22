@@ -134,14 +134,16 @@ router.get('/auth/login', (req, res) => {
   const scope = [
     'https://api.ebay.com/oauth/api_scope/sell.inventory',
     'https://api.ebay.com/oauth/api_scope/sell.account',
-    'https://api.ebay.com/oauth/api_scope/sell.item',
   ].join(' ');
   const url = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(process.env.EBAY_APP_ID)}&redirect_uri=${encodeURIComponent(process.env.EBAY_RUNAME)}&response_type=code&scope=${encodeURIComponent(scope)}`;
   res.redirect(url);
 });
 
 router.get('/auth/callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, error, error_description } = req.query;
+  if (error) {
+    return res.status(400).send(`eBay authorization failed: ${error_description || error}`);
+  }
   if (!code) return res.status(400).send('No authorization code received from eBay.');
   try {
     const { data } = await axios.post(
