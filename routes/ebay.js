@@ -269,9 +269,112 @@ function buildDescription(title, specs) {
     .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews'].includes(k))
     .map(([k, v]) => {
       const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      return `<li><b>${label}:</b> ${Array.isArray(v) ? v.join(', ') : v}</li>`;
+      const display = Array.isArray(v) ? v.join(', ') : (typeof v === 'object' ? JSON.stringify(v) : v);
+      return `<li><b>${label}:</b> ${display}</li>`;
     });
   return `<h2>${title}</h2><ul>${rows.join('')}</ul>`;
+}
+
+// Auto find-or-create all required policies + location so the user never has to configure them manually
+async function resolveListingPolicies(token, { shipping, returns, zipCode }) {
+  const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
+  const mid = 'EBAY_US';
+  const cats = [{ name: 'ALL_EXCLUDING_MOTORS_VEHICLES' }];
+
+  // Helper: find policy by name or return null
+  async function findPolicy(endpoint, listKey, name) {
+    try {
+      const { data } = await axios.get(`https://api.ebay.com/sell/account/v1/${endpoint}?marketplace_id=${mid}`, { headers: h });
+      return (data[listKey] || []).find(p => p.name === name) || null;
+    } catch { return null; }
+  }
+
+  // ── Fulfillment policy ──────────────────────────────────────────
+  const fulName = shipping.free
+    ? `Free_${shipping.carrier}_${shipping.handlingDays}d`
+    : `Flat_${Number(shipping.cost).toFixed(2)}_${shipping.carrier}_${shipping.handlingDays}d`;
+
+  let fulfillmentPolicyId;
+  const existingFul = await findPolicy('fulfillment_policy', 'fulfillmentPolicies', fulName);
+  if (existingFul) {
+    fulfillmentPolicyId = existingFul.fulfillmentPolicyId;
+  } else {
+    try {
+      const { data } = await axios.post('https://api.ebay.com/sell/account/v1/fulfillment_policy', {
+        name: fulName, marketplaceId: mid, categoryTypes: cats,
+        handlingTime: { unit: 'DAY', value: Number(shipping.handlingDays) || 1 },
+        shippingOptions: [{
+          optionType: 'DOMESTIC', costType: 'FLAT_RATE',
+          shippingServices: [{
+            shippingServiceCode: shipping.carrier || 'USPSFirstClass',
+            shippingCost: { currency: 'USD', value: shipping.free ? '0.00' : String(Number(shipping.cost || 0).toFixed(2)) },
+            sortOrder: 1,
+          }],
+        }],
+      }, { headers: h });
+      fulfillmentPolicyId = data.fulfillmentPolicyId;
+    } catch {
+      // Fallback: use any existing policy
+      const { data } = await axios.get(`https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=${mid}`, { headers: h });
+      fulfillmentPolicyId = data.fulfillmentPolicies?.[0]?.fulfillmentPolicyId;
+      if (!fulfillmentPolicyId) throw new Error('No fulfillment policy available. Please set one up in your eBay Seller Hub.');
+    }
+  }
+
+  // ── Return policy ───────────────────────────────────────────────
+  const retName = returns.accepted ? `Returns_${returns.days}d_${returns.buyerPays ? 'BuyerPays' : 'SellerPays'}` : 'NoReturns';
+
+  let returnPolicyId;
+  const existingRet = await findPolicy('return_policy', 'returnPolicies', retName);
+  if (existingRet) {
+    returnPolicyId = existingRet.returnPolicyId;
+  } else {
+    try {
+      const payload = { name: retName, marketplaceId: mid, categoryTypes: cats, returnsAccepted: !!returns.accepted };
+      if (returns.accepted) {
+        payload.returnPeriod = { unit: 'DAY', value: Number(returns.days) || 30 };
+        payload.refundMethod = 'MONEY_BACK';
+        payload.returnShippingCostPayer = returns.buyerPays ? 'BUYER' : 'SELLER';
+      }
+      const { data } = await axios.post('https://api.ebay.com/sell/account/v1/return_policy', payload, { headers: h });
+      returnPolicyId = data.returnPolicyId;
+    } catch {
+      const { data } = await axios.get(`https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=${mid}`, { headers: h });
+      returnPolicyId = data.returnPolicies?.[0]?.returnPolicyId;
+      if (!returnPolicyId) throw new Error('No return policy available. Please set one up in your eBay Seller Hub.');
+    }
+  }
+
+  // ── Payment policy ──────────────────────────────────────────────
+  // Optional for eBay Managed Payments sellers; use first existing or create a basic one
+  let paymentPolicyId = null;
+  try {
+    const { data } = await axios.get(`https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=${mid}`, { headers: h });
+    paymentPolicyId = data.paymentPolicies?.[0]?.paymentPolicyId || null;
+    if (!paymentPolicyId) {
+      const { data: created } = await axios.post('https://api.ebay.com/sell/account/v1/payment_policy', {
+        name: 'eBay Managed Payments', marketplaceId: mid, categoryTypes: cats, immediatePay: true,
+      }, { headers: h });
+      paymentPolicyId = created.paymentPolicyId;
+    }
+  } catch { /* managed payments — paymentPolicyId stays null, offer will still publish */ }
+
+  // ── Merchant location ───────────────────────────────────────────
+  const locationKey = 'default-location';
+  let merchantLocationKey = locationKey;
+  try {
+    await axios.get(`https://api.ebay.com/sell/inventory/v1/location/${locationKey}`, { headers: h });
+  } catch {
+    try {
+      await axios.post(`https://api.ebay.com/sell/inventory/v1/location/${locationKey}`, {
+        location: { address: { postalCode: zipCode || '10001', country: 'US' } },
+        locationTypes: ['WAREHOUSE'],
+        name: 'Default Location',
+      }, { headers: h });
+    } catch { /* location may already exist under a different key — proceed */ }
+  }
+
+  return { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey };
 }
 
 router.post('/create-listing', async (req, res) => {
@@ -282,15 +385,19 @@ router.post('/create-listing', async (req, res) => {
     const {
       sku, title, price, currency = 'USD', quantity = 1,
       condition = 'NEW', categoryId,
-      fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey,
       imageUrl, upc, specs = {},
+      shipping = { free: true, carrier: 'USPSFirstClass', handlingDays: 1 },
+      returns = { accepted: true, days: 30, buyerPays: true },
+      zipCode = '10001',
     } = req.body;
 
-    if (!sku || !title || !price || !fulfillmentPolicyId || !returnPolicyId || !paymentPolicyId || !merchantLocationKey) {
-      return res.status(400).json({ error: 'Missing required fields: sku, title, price, policies, merchantLocationKey' });
+    if (!sku || !title || !price) {
+      return res.status(400).json({ error: 'Missing required fields: sku, title, price' });
     }
 
     const safeTitle = title.slice(0, 80);
+    const { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey } =
+      await resolveListingPolicies(token, { shipping, returns, zipCode });
 
     // 1. Create / update inventory item
     await axios.put(
@@ -310,34 +417,32 @@ router.post('/create-listing', async (req, res) => {
     );
 
     // 2. Create offer
-    const { data: offerData } = await axios.post(
-      'https://api.ebay.com/sell/inventory/v1/offer',
-      {
-        sku,
-        marketplaceId: 'EBAY_US',
-        format: 'FIXED_PRICE',
-        listingDuration: 'GTC',
-        pricingSummary: { price: { value: Number(price).toFixed(2), currency } },
-        availableQuantity: quantity,
-        categoryId,
-        merchantLocationKey,
-        listingPolicies: { fulfillmentPolicyId, returnPolicyId, paymentPolicyId },
+    const offerPayload = {
+      sku, marketplaceId: 'EBAY_US', format: 'FIXED_PRICE', listingDuration: 'GTC',
+      pricingSummary: { price: { value: Number(price).toFixed(2), currency } },
+      availableQuantity: Number(quantity),
+      merchantLocationKey,
+      listingPolicies: {
+        fulfillmentPolicyId,
+        returnPolicyId,
+        ...(paymentPolicyId ? { paymentPolicyId } : {}),
       },
-      { headers: h }
-    );
+    };
+    if (categoryId) offerPayload.categoryId = String(categoryId);
+
+    const { data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h });
 
     // 3. Publish
     const { data: published } = await axios.post(
       `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
-      {},
-      { headers: h }
+      {}, { headers: h }
     );
 
     res.json({ listingId: published.listingId, url: `https://www.ebay.com/itm/${published.listingId}` });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
-    const detail = err.response?.data?.errors?.[0]?.message || ebayError(err);
+    const detail = err.response?.data?.errors?.[0]?.message || err.message || ebayError(err);
     res.status(500).json({ error: detail });
   }
 });
