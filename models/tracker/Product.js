@@ -12,6 +12,7 @@ const productSchema = new mongoose.Schema(
     url: { type: String, required: true, unique: true },
     title: { type: String, required: true },
     image: { type: String, default: null },
+    images: { type: [String], default: [] },
     upc: { type: String, default: null },
     currency: { type: String, default: "$" },
     current: { type: Number, required: true },

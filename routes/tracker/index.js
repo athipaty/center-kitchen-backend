@@ -69,6 +69,7 @@ router.post("/", async (req, res) => {
       url: cleanedUrl,
       title: info.title,
       image: info.image || null,
+      images: info.images || [],
       upc: info.upc || null,
       currency: info.currency,
       current: info.price,

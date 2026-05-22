@@ -84,6 +84,7 @@ async function fetchProduct(url) {
         : "$";
 
       const image = data.images?.[0] || data.main_image || null;
+      const images = Array.isArray(data.images) && data.images.length ? data.images : (image ? [image] : []);
 
       const upc = data.upc
         || data.product_information?.upc
@@ -109,7 +110,7 @@ async function fetchProduct(url) {
 
       const specs = data.product_information || {};
 
-      return { title, price, currency, image, upc, variants, isPrime, variant, specs };
+      return { title, price, currency, image, images, upc, variants, isPrime, variant, specs };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }

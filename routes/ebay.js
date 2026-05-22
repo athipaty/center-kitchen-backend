@@ -551,11 +551,16 @@ router.post('/create-listing', async (req, res) => {
     const {
       sku, title, price, currency = 'USD', quantity = 1,
       condition = 'NEW', categoryId,
-      imageUrl, upc, specs = {},
+      imageUrl, imageUrls: imageUrlsRaw, upc, specs = {},
       shipping = { free: true, carrier: 'USPSFirstClass', handlingDays: 1 },
       returns = { accepted: true, days: 30, buyerPays: true },
       zipCode = '10001',
     } = req.body;
+    // Merge all available image URLs, deduplicated, capped at 12 (eBay max 24 but 12 is plenty)
+    const allImageUrls = [...new Set([
+      ...(Array.isArray(imageUrlsRaw) ? imageUrlsRaw : []),
+      ...(imageUrl ? [imageUrl] : []),
+    ])].slice(0, 12);
 
     if (!sku || !title || !price) {
       return res.status(400).json({ error: 'Missing required fields: sku, title, price' });
@@ -570,13 +575,13 @@ router.post('/create-listing', async (req, res) => {
       await resolveListingPolicies(token, { shipping, returns, zipCode });
 
     step = 'creating inventory item';
-    const proxyUrl = await proxyImageUrl(imageUrl);
-    if (proxyUrl) console.log(`create-listing: image proxied → ${proxyUrl}`);
+    const proxyUrls = (await Promise.all(allImageUrls.map(u => proxyImageUrl(u)))).filter(Boolean);
+    console.log(`create-listing: proxied ${proxyUrls.length}/${allImageUrls.length} images`);
     const inventoryProduct = {
       title: safeTitle,
       description: buildDescription(safeTitle, specs),
       aspects: buildAspects(specs),
-      ...(proxyUrl ? { imageUrls: [proxyUrl] } : {}),
+      ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
       ...(upc ? { upc: [upc] } : {}),
     };
     await axios.put(
