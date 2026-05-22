@@ -134,6 +134,7 @@ router.get('/auth/login', (req, res) => {
   const scope = [
     'https://api.ebay.com/oauth/api_scope/sell.inventory',
     'https://api.ebay.com/oauth/api_scope/sell.account',
+    'https://api.ebay.com/oauth/api_scope/sell.item',
   ].join(' ');
   const url = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(process.env.EBAY_APP_ID)}&redirect_uri=${encodeURIComponent(process.env.EBAY_RUNAME)}&response_type=code&scope=${encodeURIComponent(scope)}`;
   res.redirect(url);
@@ -1170,6 +1171,78 @@ router.get('/sold', async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: ebayError(err) });
+  }
+});
+
+// ── Update price — Inventory API offer ────────────────────────────
+router.patch('/offer/:offerId/price', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
+    const { offerId } = req.params;
+    const { price } = req.body;
+    if (!price || isNaN(Number(price)) || Number(price) <= 0)
+      return res.status(400).json({ error: 'price is required and must be > 0' });
+
+    const { data: offer } = await axios.get(
+      `https://api.ebay.com/sell/inventory/v1/offer/${offerId}`, { headers: h }
+    );
+
+    await axios.put(
+      `https://api.ebay.com/sell/inventory/v1/offer/${offerId}`,
+      {
+        availableQuantity: offer.availableQuantity,
+        listingPolicies: offer.listingPolicies,
+        merchantLocationKey: offer.merchantLocationKey,
+        pricingSummary: { price: { value: Number(price).toFixed(2), currency: offer.pricingSummary?.price?.currency || 'USD' } },
+        ...(offer.categoryId ? { categoryId: offer.categoryId } : {}),
+      },
+      { headers: h }
+    );
+
+    await axios.post(`https://api.ebay.com/sell/inventory/v1/offer/${offerId}/publish`, {}, { headers: h });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    const ebayErrs = err.response?.data?.errors;
+    res.status(500).json({ error: ebayErrs?.length ? ebayErrs.map(e => e.longMessage || e.message).join(' | ') : (err.message || 'Failed') });
+  }
+});
+
+// ── Update price — any listing via Trading API ─────────────────────
+// Works for manually created listings not in the Inventory API.
+// Requires sell.item scope (user must reconnect eBay if upgrading from older auth).
+router.post('/listing/price', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { listingId, price } = req.body;
+    if (!listingId || !price || isNaN(Number(price)) || Number(price) <= 0)
+      return res.status(400).json({ error: 'listingId and price are required' });
+
+    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><Item><ItemID>${listingId}</ItemID><StartPrice>${Number(price).toFixed(2)}</StartPrice></Item></ReviseFixedPriceItemRequest>`;
+
+    const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
+      headers: {
+        'X-EBAY-API-SITEID': '0',
+        'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem',
+        'X-EBAY-API-IAF-TOKEN': token,
+        'Content-Type': 'text/xml',
+      },
+    });
+
+    if (/<Ack>Failure<\/Ack>/.test(xmlResp) || /<Ack>PartialFailure<\/Ack>/.test(xmlResp)) {
+      const msg = xmlResp.match(/<LongMessage>(.*?)<\/LongMessage>/)?.[1]
+        || xmlResp.match(/<ShortMessage>(.*?)<\/ShortMessage>/)?.[1]
+        || 'eBay returned an error';
+      return res.status(400).json({ error: msg });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message || 'Failed to update price' });
   }
 });
 
