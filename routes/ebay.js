@@ -470,12 +470,27 @@ router.post('/create-listing', async (req, res) => {
     try {
       ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
     } catch (offerErr) {
-      const isCatErr = (offerErr.response?.data?.errors || []).some(e =>
-        /categoryid|category/i.test(String(e.longMessage || e.message || ''))
-      );
-      if (isCatErr && offerPayload.categoryId) {
-        // Suggested category invalid — retry and let eBay auto-determine
-        console.log(`create-listing: categoryId "${offerPayload.categoryId}" rejected, retrying without it`);
+      const errs = offerErr.response?.data?.errors || [];
+      const isExistsErr = errs.some(e => /already exists/i.test(String(e.longMessage || e.message || '')));
+      const isCatErr = errs.some(e => /categoryid|category/i.test(String(e.longMessage || e.message || '')));
+
+      if (isExistsErr) {
+        // A draft offer already exists for this SKU — update it with current data then publish
+        const { data: listData } = await axios.get(
+          'https://api.ebay.com/sell/inventory/v1/offer',
+          { headers: h, params: { sku: safeSKU } }
+        );
+        const existing = (listData.offers || [])[0];
+        if (!existing) throw offerErr;
+        const { sku: _s, marketplaceId: _m, format: _f, ...updateFields } = offerPayload;
+        await axios.put(
+          `https://api.ebay.com/sell/inventory/v1/offer/${existing.offerId}`,
+          updateFields, { headers: h }
+        );
+        offerData = existing;
+      } else if (isCatErr && offerPayload.categoryId) {
+        // Suggested category rejected — retry without and let eBay auto-determine
+        console.log(`create-listing: categoryId "${offerPayload.categoryId}" rejected, retrying without`);
         delete offerPayload.categoryId;
         ({ data: offerData } = await axios.post('https://api.ebay.com/sell/inventory/v1/offer', offerPayload, { headers: h }));
       } else {
@@ -667,11 +682,41 @@ router.get('/diagnose', async (req, res) => {
 router.get('/category-suggestions', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q is required' });
+
+  // Primary: search real eBay listings — category IDs from live items are always valid for selling
+  if (process.env.EBAY_APP_ID) {
+    try {
+      const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+        params: {
+          'OPERATION-NAME': 'findItemsByKeywords',
+          'SERVICE-VERSION': '1.0.0',
+          'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+          'RESPONSE-DATA-FORMAT': 'JSON',
+          keywords: q,
+          'paginationInput.entriesPerPage': 10,
+          sortOrder: 'BestMatch',
+        },
+      });
+      const items = data.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || [];
+      const seen = new Set();
+      const suggestions = [];
+      for (const item of items) {
+        const catId = item.primaryCategory?.[0]?.categoryId?.[0];
+        const catName = item.primaryCategory?.[0]?.categoryName?.[0] || '';
+        if (catId && !seen.has(catId)) {
+          seen.add(catId);
+          suggestions.push({ id: catId, name: catName, path: catName });
+        }
+        if (suggestions.length >= 3) break;
+      }
+      if (suggestions.length > 0) return res.json(suggestions);
+    } catch { /* fall through to taxonomy */ }
+  }
+
+  // Fallback: taxonomy API
   try {
     const token = await getAccessToken();
     const h = { Authorization: `Bearer ${token}` };
-
-    // Get the correct tree ID for EBAY_US dynamically
     let treeId = '0';
     try {
       const { data: treeData } = await axios.get(
@@ -679,24 +724,18 @@ router.get('/category-suggestions', async (req, res) => {
         { params: { marketplace_id: 'EBAY_US' }, headers: h }
       );
       treeId = String(treeData.categoryTreeId || '0');
-    } catch { /* fall back to 0 */ }
-
+    } catch {}
     const { data } = await axios.get(
       `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions`,
       { params: { q }, headers: h }
     );
-    const suggestions = (data.categorySuggestions || []).slice(0, 5).map(s => {
+    const suggestions = (data.categorySuggestions || []).slice(0, 3).map(s => {
       const ancestors = (s.categoryTreeNodeAncestors || [])
         .sort((a, b) => (a.categoryTreeNodeLevel || 0) - (b.categoryTreeNodeLevel || 0));
-      const pathParts = ancestors.slice(-2).map(a => a.categoryName);
-      pathParts.push(s.category.categoryName);
-      return {
-        id: String(s.category.categoryId),
-        name: s.category.categoryName,
-        path: pathParts.join(' > '),
-      };
+      const pathParts = [...ancestors.slice(-2).map(a => a.categoryName), s.category.categoryName];
+      return { id: String(s.category.categoryId), name: s.category.categoryName, path: pathParts.join(' > ') };
     });
-    res.json(suggestions);
+    return res.json(suggestions);
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
