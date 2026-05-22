@@ -700,6 +700,7 @@ router.post('/create-listing', async (req, res) => {
       const noCatErr = /category/i.test(errText);
       const alreadyLiveErr = /revise listing|already active|already published/i.test(errText);
       const is25019 = pubErrs.some(e => e.errorId === 25019 || String(e.errorId) === '25019');
+      const is25002Err = errs => errs.some(e => e.errorId === 25002 || String(e.errorId) === '25002');
 
       if (alreadyLiveErr) {
         // Try to return the existing live listing ID before anything else
@@ -727,8 +728,9 @@ router.post('/create-listing', async (req, res) => {
         if (!is25019) throw pubErr;
       }
       if (is25019) {
-        // Broad safe categories to try in order: Kitchen & Dining, Home & Garden, Everything Else
+        // Round 1: retry publish with safe fallback categories (offer-level only)
         const safeCats = ['20625', '11700', '99'];
+        let round1Err = pubErr;
         for (const cat of safeCats) {
           step = `publish retry category=${cat}`;
           console.log(`create-listing: 25019 policy error, retrying publish with category ${cat} title="${safeTitle}"`);
@@ -739,14 +741,76 @@ router.post('/create-listing', async (req, res) => {
               `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
               {}, { headers: h }
             ));
-            break; // success
+            break;
           } catch (retryErr) {
             const retryErrs = retryErr.response?.data?.errors || [];
             console.log(`create-listing: category ${cat} also failed:`, retryErrs.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | '));
-            if (cat === safeCats[safeCats.length - 1]) throw retryErr; // all categories failed
+            round1Err = retryErr;
+          }
+        }
+
+        // Round 2: if still failing, strip variant suffix + aspects and retry with "Everything Else"
+        if (!published) {
+          step = 'publish retry stripped';
+          // Remove " - VariantName" suffix that may trigger keyword-stuffing detection
+          const strippedTitle = safeTitle.replace(/\s+-\s+\S.*$/, '').trim();
+          console.log(`create-listing: 25019 deep retry stripped title="${strippedTitle}"`);
+          try {
+            await axios.put(
+              `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
+              {
+                condition,
+                product: {
+                  title: strippedTitle,
+                  description: 'See photos and title for complete item details.',
+                  aspects: {},
+                  ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
+                },
+                availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
+              },
+              { headers: h }
+            );
+            const { sku: _s, marketplaceId: _m, format: _f, ...uf } = { ...offerPayload, categoryId: '99' };
+            await axios.put(`https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}`, uf, { headers: h });
+            ({ data: published } = await axios.post(
+              `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+              {}, { headers: h }
+            ));
+          } catch (deepErr) {
+            console.log('create-listing: deep retry also failed:', deepErr.response?.data?.errors?.[0]?.longMessage || deepErr.message);
+            throw round1Err; // surface the category-retry error, not the deep-retry error
           }
         }
         if (!published) throw pubErr;
+      } else if (is25002Err(pubErrs)) {
+        // Round 1: extract the missing required item specific and add "Other" as value
+        const field = errText.match(/item specific\s+(\S+)\s+is missing/i)?.[1];
+        step = `adding missing item specific ${field || ''}`;
+        console.log(`create-listing: 25002 missing item specific "${field}", adding Other`);
+        if (field) {
+          const patchedAspects = { ...buildAspects(specs), [field]: ['Other'] };
+          await axios.put(
+            `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(safeSKU)}`,
+            {
+              condition,
+              product: {
+                title: safeTitle,
+                description: buildDescription(),
+                aspects: patchedAspects,
+                ...(proxyUrls.length ? { imageUrls: proxyUrls } : {}),
+                ...(upc ? { upc: [upc] } : {}),
+              },
+              availability: { shipToLocationAvailability: { quantity: Number(quantity) } },
+            },
+            { headers: h }
+          );
+          ({ data: published } = await axios.post(
+            `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
+            {}, { headers: h }
+          ));
+        } else {
+          throw pubErr;
+        }
       } else if (noCatErr) {
         step = 'fixing category before publish';
         const fallbackCat = await lookupCategory(safeTitle, upc);
