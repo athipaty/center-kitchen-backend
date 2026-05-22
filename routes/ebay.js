@@ -274,6 +274,56 @@ function sanitizeSku(raw) {
   return String(raw || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 50) || 'ITEM';
 }
 
+// Auto-detect eBay category from live listings (guaranteed valid for selling)
+async function lookupCategory(title, upc) {
+  if (!process.env.EBAY_APP_ID) return null;
+  const findingBase = {
+    'SERVICE-VERSION': '1.0.0',
+    'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+    'RESPONSE-DATA-FORMAT': 'JSON',
+    'paginationInput.entriesPerPage': 5,
+    sortOrder: 'BestMatch',
+  };
+  const extractCat = data =>
+    data?.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item?.[0]?.primaryCategory?.[0]?.categoryId?.[0]
+    || data?.findItemsByProductResponse?.[0]?.searchResult?.[0]?.item?.[0]?.primaryCategory?.[0]?.categoryId?.[0]
+    || null;
+
+  // 1. UPC lookup (most accurate)
+  if (upc) {
+    try {
+      const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+        params: { ...findingBase, 'OPERATION-NAME': 'findItemsByProduct', 'productId.@type': 'UPC', 'productId': upc },
+      });
+      const cat = extractCat(data);
+      if (cat) return cat;
+    } catch {}
+  }
+
+  // 2. Full title search
+  try {
+    const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+      params: { ...findingBase, 'OPERATION-NAME': 'findItemsByKeywords', keywords: title.slice(0, 100) },
+    });
+    const cat = extractCat(data);
+    if (cat) return cat;
+  } catch {}
+
+  // 3. Shorter keywords (first 4 words) — handles very long specific titles
+  const short = title.split(/\s+/).slice(0, 4).join(' ');
+  if (short.length < title.length) {
+    try {
+      const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+        params: { ...findingBase, 'OPERATION-NAME': 'findItemsByKeywords', keywords: short },
+      });
+      const cat = extractCat(data);
+      if (cat) return cat;
+    } catch {}
+  }
+
+  return null;
+}
+
 function buildDescription(title, specs) {
   if (!specs || !Object.keys(specs).length) return `<p>${title}</p>`;
   const rows = Object.entries(specs)
@@ -452,6 +502,14 @@ router.post('/create-listing', async (req, res) => {
       { headers: h }
     );
 
+    // Resolve category — use provided value, auto-detect from eBay search, or leave unset
+    step = 'detecting category';
+    let resolvedCategory = categoryId ? String(categoryId) : null;
+    if (!resolvedCategory) {
+      resolvedCategory = await lookupCategory(safeTitle, upc);
+      if (resolvedCategory) console.log(`create-listing: auto-detected category ${resolvedCategory} for "${safeTitle}"`);
+    }
+
     step = 'creating offer';
     const offerPayload = {
       sku: safeSKU, marketplaceId: 'EBAY_US', format: 'FIXED_PRICE', listingDuration: 'GTC',
@@ -464,7 +522,7 @@ router.post('/create-listing', async (req, res) => {
         ...(paymentPolicyId ? { paymentPolicyId } : {}),
       },
     };
-    if (categoryId) offerPayload.categoryId = String(categoryId);
+    if (resolvedCategory) offerPayload.categoryId = resolvedCategory;
 
     // Look for an existing offer for this SKU before attempting to create
     step = 'checking existing offer';
@@ -700,64 +758,10 @@ router.get('/category-suggestions', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q is required' });
 
-  // Primary: search real eBay listings — category IDs from live items are always valid for selling
-  if (process.env.EBAY_APP_ID) {
-    try {
-      const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
-        params: {
-          'OPERATION-NAME': 'findItemsByKeywords',
-          'SERVICE-VERSION': '1.0.0',
-          'SECURITY-APPNAME': process.env.EBAY_APP_ID,
-          'RESPONSE-DATA-FORMAT': 'JSON',
-          keywords: q,
-          'paginationInput.entriesPerPage': 10,
-          sortOrder: 'BestMatch',
-        },
-      });
-      const items = data.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || [];
-      const seen = new Set();
-      const suggestions = [];
-      for (const item of items) {
-        const catId = item.primaryCategory?.[0]?.categoryId?.[0];
-        const catName = item.primaryCategory?.[0]?.categoryName?.[0] || '';
-        if (catId && !seen.has(catId)) {
-          seen.add(catId);
-          suggestions.push({ id: catId, name: catName, path: catName });
-        }
-        if (suggestions.length >= 3) break;
-      }
-      if (suggestions.length > 0) return res.json(suggestions);
-    } catch { /* fall through to taxonomy */ }
-  }
-
-  // Fallback: taxonomy API
-  try {
-    const token = await getAccessToken();
-    const h = { Authorization: `Bearer ${token}` };
-    let treeId = '0';
-    try {
-      const { data: treeData } = await axios.get(
-        'https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id',
-        { params: { marketplace_id: 'EBAY_US' }, headers: h }
-      );
-      treeId = String(treeData.categoryTreeId || '0');
-    } catch {}
-    const { data } = await axios.get(
-      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions`,
-      { params: { q }, headers: h }
-    );
-    const suggestions = (data.categorySuggestions || []).slice(0, 3).map(s => {
-      const ancestors = (s.categoryTreeNodeAncestors || [])
-        .sort((a, b) => (a.categoryTreeNodeLevel || 0) - (b.categoryTreeNodeLevel || 0));
-      const pathParts = [...ancestors.slice(-2).map(a => a.categoryName), s.category.categoryName];
-      return { id: String(s.category.categoryId), name: s.category.categoryName, path: pathParts.join(' > ') };
-    });
-    return res.json(suggestions);
-  } catch (err) {
-    if (err.status === 401 || err.message === 'not_authenticated')
-      return res.status(401).json({ error: 'not_authenticated' });
-    res.status(500).json({ error: err.message });
-  }
+  // Use lookupCategory to find a valid category from real eBay listings
+  const catId = await lookupCategory(q, null);
+  if (catId) return res.json([{ id: catId, name: '', path: '' }]);
+  res.json([]); // frontend will show empty field, backend will retry at listing time
 });
 
 // ── SEO title generation ───────────────────────────────────────────
