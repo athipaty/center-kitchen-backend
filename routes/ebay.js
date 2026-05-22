@@ -1193,7 +1193,8 @@ router.get('/all-active-listings', async (req, res) => {
     if (/<Ack>Failure<\/Ack>/.test(xmlResp)) {
       const msg = xmlResp.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
       console.error('all-active-listings Trading API failure:', msg);
-      return res.json([]); // Return empty — likely missing sell.item scope, user needs to reconnect
+      // Missing sell.item scope → tell the client so they can show a reconnect prompt
+      return res.status(403).json({ error: 'needs_reconnect', message: msg });
     }
 
     const items = [];
