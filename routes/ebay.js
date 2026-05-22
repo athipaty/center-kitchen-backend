@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
+const EbayToken = require('../models/shared/EbayToken');
 
 // ── Sold-price cache (6h TTL) ──────────────────────────────────────
 const soldCache = new Map(); // key → { data, expiresAt }
@@ -56,13 +55,21 @@ function setCache(key, data) {
   soldCache.set(key, { data, expiresAt: Date.now() + SOLD_TTL });
 }
 
-// ── Token persistence ──────────────────────────────────────────────
-const TOKEN_FILE = path.join(__dirname, '..', 'ebay_tokens.json');
+// ── Token persistence (MongoDB — survives Render restarts) ─────────
 let tokens = { access_token: null, refresh_token: null, expires_at: 0 };
-try { tokens = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8')); } catch {}
 
-function saveTokens() {
-  try { fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens)); } catch {}
+// Load tokens from MongoDB on startup
+(async () => {
+  try {
+    const doc = await EbayToken.findById('ebay');
+    if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at };
+  } catch {}
+})();
+
+async function saveTokens() {
+  try {
+    await EbayToken.findByIdAndUpdate('ebay', tokens, { upsert: true, new: true });
+  } catch {}
 }
 
 function basicAuth() {
@@ -76,6 +83,13 @@ function authError() {
 }
 
 async function getAccessToken() {
+  // Lazy-load from DB if in-memory tokens are empty (e.g. first request after restart)
+  if (!tokens.refresh_token) {
+    try {
+      const doc = await EbayToken.findById('ebay');
+      if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at };
+    } catch {}
+  }
   if (tokens.access_token && Date.now() < tokens.expires_at - 60000) return tokens.access_token;
   if (!tokens.refresh_token) throw authError();
   try {
@@ -86,12 +100,11 @@ async function getAccessToken() {
     );
     tokens.access_token = data.access_token;
     tokens.expires_at = Date.now() + data.expires_in * 1000;
-    saveTokens();
+    await saveTokens();
     return tokens.access_token;
   } catch {
-    // Refresh token is expired or revoked — force re-authentication
     tokens = { access_token: null, refresh_token: null, expires_at: 0 };
-    saveTokens();
+    await saveTokens();
     throw authError();
   }
 }
@@ -140,14 +153,20 @@ router.get('/auth/callback', async (req, res) => {
       refresh_token: data.refresh_token,
       expires_at: Date.now() + data.expires_in * 1000,
     };
-    saveTokens();
+    await saveTokens();
     res.redirect(`${process.env.CLIENT_URL}/ebay?connected=1`);
   } catch (err) {
     res.status(500).send('eBay auth failed: ' + (err.response?.data?.error_description || err.message));
   }
 });
 
-router.get('/auth/status', (_req, res) => {
+router.get('/auth/status', async (_req, res) => {
+  if (!tokens.refresh_token) {
+    try {
+      const doc = await EbayToken.findById('ebay');
+      if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at };
+    } catch {}
+  }
   res.json({ connected: !!tokens.refresh_token });
 });
 
