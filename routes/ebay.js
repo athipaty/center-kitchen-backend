@@ -226,10 +226,16 @@ router.get('/my-listings', async (req, res) => {
     const token = await getAccessToken();
 
     // Note: /sell/inventory/v1/offer does NOT support a status filter param
-    const { data: offersData } = await axios.get('https://api.ebay.com/sell/inventory/v1/offer', {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { limit: 100 },
-    });
+    let offersData;
+    try {
+      ({ data: offersData } = await axios.get('https://api.ebay.com/sell/inventory/v1/offer', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: 100 },
+      }));
+    } catch (offerErr) {
+      console.error('my-listings: GET /offer failed:', JSON.stringify(offerErr.response?.data ?? offerErr.message));
+      return res.json([]);
+    }
 
     const offers = offersData.offers || [];
     if (!offers.length) return res.json([]);
