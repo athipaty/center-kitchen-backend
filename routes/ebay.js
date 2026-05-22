@@ -539,6 +539,8 @@ async function resolveListingPolicies(token, { shipping, returns, zipCode }) {
 
 router.post('/create-listing', async (req, res) => {
   let step = 'init';
+  let safeTitle = '';
+  let resolvedCategory = null;
   try {
     const token = await getAccessToken();
     const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
@@ -561,7 +563,7 @@ router.post('/create-listing', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: sku, title, price' });
     }
 
-    const safeTitle = sanitizeTitle(title);
+    safeTitle = sanitizeTitle(title);
     const safeSKU = sanitizeSku(sku);
     console.log(`create-listing: sku="${safeSKU}" title="${safeTitle.slice(0, 50)}"`);
 
@@ -605,7 +607,7 @@ router.post('/create-listing', async (req, res) => {
 
     // Resolve category — use provided value, auto-detect from eBay search, or leave unset
     step = 'detecting category';
-    let resolvedCategory = categoryId ? String(categoryId) : null;
+    resolvedCategory = categoryId ? String(categoryId) : null;
     if (!resolvedCategory) {
       resolvedCategory = await lookupCategory(safeTitle, upc);
       if (resolvedCategory) console.log(`create-listing: auto-detected category ${resolvedCategory} for "${safeTitle}"`);
