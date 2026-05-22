@@ -361,18 +361,28 @@ async function resolveListingPolicies(token, { shipping, returns, zipCode }) {
   } catch { /* managed payments — paymentPolicyId stays null, offer will still publish */ }
 
   // ── Merchant location ───────────────────────────────────────────
-  const locationKey = 'default-location';
-  let merchantLocationKey = locationKey;
+  let merchantLocationKey;
   try {
-    await axios.get(`https://api.ebay.com/sell/inventory/v1/location/${locationKey}`, { headers: h });
-  } catch {
-    try {
-      await axios.post(`https://api.ebay.com/sell/inventory/v1/location/${locationKey}`, {
+    // Use any existing location first
+    const { data: locList } = await axios.get('https://api.ebay.com/sell/inventory/v1/location', { headers: h });
+    const existing = locList.locations?.[0];
+    if (existing) {
+      merchantLocationKey = existing.merchantLocationKey;
+    } else {
+      // No locations found — create a default one
+      const locKey = 'default-location';
+      await axios.post(`https://api.ebay.com/sell/inventory/v1/location/${locKey}`, {
         location: { address: { postalCode: zipCode || '10001', country: 'US' } },
         locationTypes: ['WAREHOUSE'],
         name: 'Default Location',
       }, { headers: h });
-    } catch { /* location may already exist under a different key — proceed */ }
+      merchantLocationKey = locKey;
+    }
+  } catch (locErr) {
+    const msg = locErr.response?.data?.errors?.[0]?.longMessage
+      || locErr.response?.data?.errors?.[0]?.message
+      || locErr.message;
+    throw new Error(`Merchant location error: ${msg}`);
   }
 
   return { fulfillmentPolicyId, returnPolicyId, paymentPolicyId, merchantLocationKey };
@@ -443,7 +453,11 @@ router.post('/create-listing', async (req, res) => {
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
-    const detail = err.response?.data?.errors?.[0]?.message || err.message || ebayError(err);
+    const ebayErrs = err.response?.data?.errors;
+    const detail = ebayErrs?.length
+      ? ebayErrs.map(e => e.longMessage || e.message).join(' | ')
+      : (err.message || 'Unknown error');
+    console.error('create-listing error:', JSON.stringify(err.response?.data ?? err.message));
     res.status(500).json({ error: detail });
   }
 });
@@ -551,7 +565,11 @@ router.post('/create-group-listing', async (req, res) => {
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
-    const detail = err.response?.data?.errors?.[0]?.message || err.message || ebayError(err);
+    const ebayErrs = err.response?.data?.errors;
+    const detail = ebayErrs?.length
+      ? ebayErrs.map(e => e.longMessage || e.message).join(' | ')
+      : (err.message || 'Unknown error');
+    console.error('create-group-listing error:', JSON.stringify(err.response?.data ?? err.message));
     res.status(500).json({ error: detail });
   }
 });
