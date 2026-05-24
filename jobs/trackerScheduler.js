@@ -1,6 +1,7 @@
 const cron = require("node-cron");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
+const { syncEbayPrice } = require("./ebayPriceSync");
 
 let io = null;
 
@@ -29,6 +30,15 @@ async function checkProduct(p) {
     if (info.price !== oldPrice) {
       p.history.push({ price: info.price });
       if (p.history.length > 200) p.history = p.history.slice(-200);
+
+      if (p.ebayListingId) {
+        try {
+          await syncEbayPrice(p.ebayListingId, info.price);
+          console.log(`eBay price synced: listing ${p.ebayListingId} → $${info.price}`);
+        } catch (ebayErr) {
+          console.error(`eBay price sync failed for listing ${p.ebayListingId}:`, ebayErr.message);
+        }
+      }
     }
     p.nextCheck = nextCheckDate();
     await p.save();
