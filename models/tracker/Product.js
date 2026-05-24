@@ -23,6 +23,7 @@ const productSchema = new mongoose.Schema(
     variant: { type: String, default: null },
     groupId: { type: String, default: null, index: true },
     specs: { type: mongoose.Schema.Types.Mixed, default: {} },
+    ebayListingId: { type: String, default: null },
   },
   { timestamps: true }
 );

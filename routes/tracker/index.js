@@ -89,6 +89,22 @@ router.post("/", async (req, res) => {
   }
 });
 
+// PATCH update eBay listing ID for a product
+router.patch("/:id/ebay", async (req, res) => {
+  try {
+    const { ebayListingId } = req.body;
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { ebayListingId: ebayListingId || null },
+      { new: true }
+    );
+    if (!product) return res.status(404).json({ error: "Product not found" });
+    res.json(product);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE remove a product
 router.delete("/:id", async (req, res) => {
   try {
