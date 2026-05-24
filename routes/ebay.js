@@ -1302,44 +1302,91 @@ router.post('/listing/price', async (req, res) => {
         || 'eBay returned an error';
     }
 
-    // Step 1: fetch item to detect variations
+    // Step 1: GetItem to detect variations
     const { data: getItemXml } = await tradingPost('GetItem',
       `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
     );
     const getItemErr = checkFailure(getItemXml);
     if (getItemErr) return res.status(400).json({ error: getItemErr });
 
-    // Parse <Variation> blocks — present only for multi-variation listings
+    // Parse <Variation> blocks — only present for multi-variation listings
     const varBlocks = [];
     const varRe = /<Variation>([\s\S]*?)<\/Variation>/g;
     let vm;
     while ((vm = varRe.exec(getItemXml)) !== null) varBlocks.push(vm[0]);
 
-    let reviseBody;
+    console.log(`listing/price: id=${cleanId} price=${priceStr} variations=${varBlocks.length}`);
+
+    // ReviseInventoryStatus is the correct eBay API for price updates.
+    // Multi-variation listings need one <InventoryStatus> block per variation
+    // with <VariationSpecificsRevise>, batched up to 4 per API call.
     if (varBlocks.length === 0) {
       // Single listing
-      reviseBody = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></Item></ReviseFixedPriceItemRequest>`;
+      const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`;
+      const { data: reviseXml } = await tradingPost('ReviseInventoryStatus', body);
+      console.log('listing/price: response:', reviseXml.slice(0, 400));
+      const err = checkFailure(reviseXml);
+      if (err) return res.status(400).json({ error: err });
     } else {
-      // Multi-variation — update every variation to the same price
-      const variationsXml = varBlocks.map(vBlock => {
-        const specifics = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[0] || '';
-        return `<Variation><StartPrice currencyID="USD">${priceStr}</StartPrice>${specifics}</Variation>`;
-      }).join('');
-      reviseBody = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationsXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+      // Multi-variation: one InventoryStatus per variation, batched 4 at a time
+      const inventoryItems = varBlocks.map(vBlock => {
+        // GetItem returns <VariationSpecifics>; the revise call needs <VariationSpecificsRevise>
+        const content = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+        const specificsRevise = content ? `<VariationSpecificsRevise>${content}</VariationSpecificsRevise>` : '';
+        return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice>${specificsRevise}</InventoryStatus>`;
+      });
+
+      for (let i = 0; i < inventoryItems.length; i += 4) {
+        const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}${inventoryItems.slice(i, i + 4).join('')}</ReviseInventoryStatusRequest>`;
+        const { data: reviseXml } = await tradingPost('ReviseInventoryStatus', body);
+        console.log(`listing/price: batch ${Math.floor(i / 4) + 1} response:`, reviseXml.slice(0, 400));
+        const err = checkFailure(reviseXml);
+        if (err) return res.status(400).json({ error: err });
+      }
     }
-
-    console.log(`listing/price: id=${cleanId} price=${priceStr} variations=${varBlocks.length}`);
-    const { data: reviseXml } = await tradingPost('ReviseFixedPriceItem', reviseBody);
-    console.log('listing/price: response:', reviseXml.slice(0, 400));
-
-    const reviseErr = checkFailure(reviseXml);
-    if (reviseErr) return res.status(400).json({ error: reviseErr });
 
     res.json({ ok: true, variations: varBlocks.length });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
     res.status(500).json({ error: err.message || 'Failed to update price' });
+  }
+});
+
+// ── Get live prices for a listing (Shopping API — no user auth needed) ─
+router.get('/listing/:id/prices', async (req, res) => {
+  if (!process.env.EBAY_APP_ID) return res.status(500).json({ error: 'EBAY_APP_ID not set' });
+  const cleanId = String(req.params.id).replace(/\D/g, '');
+  if (!cleanId) return res.status(400).json({ error: 'Invalid listing ID' });
+  try {
+    const { data } = await axios.get('https://open.api.ebay.com/shopping', {
+      params: {
+        callname: 'GetSingleItem',
+        responseencoding: 'JSON',
+        appid: process.env.EBAY_APP_ID,
+        version: '967',
+        ItemID: cleanId,
+        IncludeSelector: 'Variations',
+      },
+    });
+    const item = data.Item;
+    if (!item) return res.status(404).json({ error: 'Listing not found' });
+
+    const base = parseFloat(item.ConvertedCurrentPrice?.Value || item.StartPrice?.Value || 0);
+
+    const rawVars = item.Variations?.Variation || [];
+    const variations = (Array.isArray(rawVars) ? rawVars : [rawVars]).map(v => {
+      const price = parseFloat(v.StartPrice?.Value || 0);
+      const rawList = v.VariationSpecifics?.NameValueList || [];
+      const list = Array.isArray(rawList) ? rawList : [rawList];
+      const specs = {};
+      list.forEach(nv => { if (nv.Name) specs[nv.Name.toLowerCase()] = String(nv.Value).toLowerCase(); });
+      return { price, specs };
+    });
+
+    res.json({ base, variations });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
