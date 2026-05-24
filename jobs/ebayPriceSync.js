@@ -43,7 +43,8 @@ async function getAccessToken() {
 async function syncEbayPrice(listingId, price) {
   const token = await getAccessToken();
   const cleanId = String(listingId).trim().replace(/\D/g, '');
-  const priceStr = Number(price).toFixed(2);
+  const ebayPrice = Math.floor(Number(price) * 1.45) + 0.99;
+  const priceStr = ebayPrice.toFixed(2);
   const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
   const body = `<?xml version="1.0" encoding="utf-8"?><ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`;
   const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body, {
