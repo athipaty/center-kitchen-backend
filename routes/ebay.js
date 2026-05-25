@@ -1373,39 +1373,49 @@ router.get('/listing/:id/raw', async (req, res) => {
   }
 });
 
-// ── Get live prices for a listing (Shopping API — no user auth needed) ─
+// ── Get live prices for a listing (Trading API GetItem) ───────────────
 router.get('/listing/:id/prices', async (req, res) => {
-  if (!process.env.EBAY_APP_ID) return res.status(500).json({ error: 'EBAY_APP_ID not set' });
   const cleanId = String(req.params.id).replace(/\D/g, '');
   if (!cleanId) return res.status(400).json({ error: 'Invalid listing ID' });
   try {
-    const { data } = await axios.get('https://open.api.ebay.com/shopping', {
-      params: {
-        callname: 'GetSingleItem',
-        responseencoding: 'JSON',
-        appid: process.env.EBAY_APP_ID,
-        version: '967',
-        ItemID: cleanId,
-        IncludeSelector: 'Variations',
-      },
-    });
-    const item = data.Item;
-    if (!item) return res.status(404).json({ error: data.Errors?.[0]?.LongMessage || data.Errors?.[0]?.ShortMessage || 'Listing not found' });
+    const token = await getAccessToken();
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ItemID>${cleanId}</ItemID><IncludeItemSpecifics>true</IncludeItemSpecifics></GetItemRequest>`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+    );
 
-    const base = parseFloat(item.ConvertedCurrentPrice?.Value || item.StartPrice?.Value || 0);
+    if (/<Ack>Failure<\/Ack>/.test(xml)) {
+      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+      return res.status(400).json({ error: msg });
+    }
 
-    const rawVars = item.Variations?.Variation || [];
-    const variations = (Array.isArray(rawVars) ? rawVars : [rawVars]).map(v => {
-      const price = parseFloat(v.StartPrice?.Value || 0);
-      const rawList = v.VariationSpecifics?.NameValueList || [];
-      const list = Array.isArray(rawList) ? rawList : [rawList];
+    // Parse base price
+    const baseMatch = xml.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+    const base = baseMatch ? parseFloat(baseMatch[1]) : 0;
+
+    // Parse variations
+    const variations = [];
+    const varRe = /<Variation>([\s\S]*?)<\/Variation>/g;
+    let m;
+    while ((m = varRe.exec(xml)) !== null) {
+      const block = m[1];
+      const priceMatch = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+      const price = priceMatch ? parseFloat(priceMatch[1]) : base;
       const specs = {};
-      list.forEach(nv => { if (nv.Name) specs[nv.Name.toLowerCase()] = String(nv.Value).toLowerCase(); });
-      return { price, specs };
-    });
+      const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+      let nv;
+      while ((nv = nvRe.exec(block)) !== null) {
+        const name = nv[1].match(/<Name>([\s\S]*?)<\/Name>/)?.[1]?.toLowerCase();
+        const value = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase();
+        if (name && value) specs[name] = value;
+      }
+      variations.push({ price, specs });
+    }
 
     res.json({ base, variations });
   } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
     res.status(500).json({ error: err.message });
   }
 });
