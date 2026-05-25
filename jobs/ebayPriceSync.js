@@ -40,25 +40,82 @@ async function getAccessToken() {
   return tokens.access_token;
 }
 
-async function syncEbayPrice(listingId, price) {
+function tradingPost(token, callName, body) {
+  return axios.post('https://api.ebay.com/ws/api.dll',
+    `<?xml version="1.0" encoding="utf-8"?>${body}`,
+    {
+      headers: {
+        'X-EBAY-API-SITEID': '0',
+        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+        'X-EBAY-API-CALL-NAME': callName,
+        'X-EBAY-API-IAF-TOKEN': token,
+        'Content-Type': 'text/xml',
+      },
+    }
+  );
+}
+
+function checkFailure(xml) {
+  if (!/<Ack>Failure<\/Ack>/.test(xml)) return null;
+  return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+}
+
+// variantLabel — the color/variant name from Amazon (e.g. "purple"), used to match the right eBay variation
+async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
   const token = await getAccessToken();
   const cleanId = String(listingId).trim().replace(/\D/g, '');
-  const ebayPrice = Math.floor(Number(price) * 1.45) + 0.99;
+  const ebayPrice = Math.floor(Number(amazonPrice) * 1.45) + 0.99;
   const priceStr = ebayPrice.toFixed(2);
   const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
-  const body = `<?xml version="1.0" encoding="utf-8"?><ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`;
-  const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body, {
-    headers: {
-      'X-EBAY-API-SITEID': '0',
-      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-      'X-EBAY-API-CALL-NAME': 'ReviseInventoryStatus',
-      'X-EBAY-API-IAF-TOKEN': token,
-      'Content-Type': 'text/xml',
-    },
-  });
-  if (/<Ack>Failure<\/Ack>/.test(xml)) {
-    const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
-    throw new Error(msg);
+
+  // Step 1: GetItem to check if this is a multi-variation listing
+  const { data: getItemXml } = await tradingPost(token, 'GetItem',
+    `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+  );
+  const getErr = checkFailure(getItemXml);
+  if (getErr) throw new Error(getErr);
+
+  const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+
+  let inventoryItems;
+
+  if (varBlocks.length === 0) {
+    // Single listing — straightforward update
+    inventoryItems = [`<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus>`];
+  } else if (variantLabel) {
+    // Multi-variation: update only the matching color variation
+    const label = variantLabel.toLowerCase();
+    const matchedBlock = varBlocks.find(block => {
+      const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
+      return valueMatch && valueMatch[1].toLowerCase().includes(label);
+    });
+
+    if (matchedBlock) {
+      const specificsContent = matchedBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+      inventoryItems = [`<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice><VariationSpecificsRevise>${specificsContent}</VariationSpecificsRevise></InventoryStatus>`];
+    } else {
+      // No match found — update all variations
+      inventoryItems = varBlocks.map(block => {
+        const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+        return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice><VariationSpecificsRevise>${specificsContent}</VariationSpecificsRevise></InventoryStatus>`;
+      });
+    }
+  } else {
+    // No variant label — update all variations to same price
+    inventoryItems = varBlocks.map(block => {
+      const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+      return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice><VariationSpecificsRevise>${specificsContent}</VariationSpecificsRevise></InventoryStatus>`;
+    });
+  }
+
+  // Step 2: ReviseInventoryStatus (batched 4 at a time)
+  for (let i = 0; i < inventoryItems.length; i += 4) {
+    const batch = inventoryItems.slice(i, i + 4).join('');
+    const { data: reviseXml } = await tradingPost(token, 'ReviseInventoryStatus',
+      `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}${batch}</ReviseInventoryStatusRequest>`
+    );
+    const err = checkFailure(reviseXml);
+    if (err) throw new Error(err);
   }
 }
 

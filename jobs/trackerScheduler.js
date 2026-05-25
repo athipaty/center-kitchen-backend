@@ -33,8 +33,8 @@ async function checkProduct(p) {
 
       if (p.ebayListingId) {
         try {
-          await syncEbayPrice(p.ebayListingId, info.price);
-          console.log(`eBay price synced: listing ${p.ebayListingId} → $${info.price}`);
+          await syncEbayPrice(p.ebayListingId, info.price, p.variant);
+          console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" → $${info.price}`);
         } catch (ebayErr) {
           console.error(`eBay price sync failed for listing ${p.ebayListingId}:`, ebayErr.message);
         }
