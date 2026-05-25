@@ -1353,6 +1353,26 @@ router.post('/listing/price', async (req, res) => {
   }
 });
 
+// ── Debug: raw Shopping API response ──────────────────────────────────
+router.get('/listing/:id/raw', async (req, res) => {
+  const cleanId = String(req.params.id).replace(/\D/g, '');
+  try {
+    const { data } = await axios.get('https://open.api.ebay.com/shopping', {
+      params: {
+        callname: 'GetSingleItem',
+        responseencoding: 'JSON',
+        appid: process.env.EBAY_APP_ID,
+        version: '967',
+        ItemID: cleanId,
+        IncludeSelector: 'Variations',
+      },
+    });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message, response: err.response?.data });
+  }
+});
+
 // ── Get live prices for a listing (Shopping API — no user auth needed) ─
 router.get('/listing/:id/prices', async (req, res) => {
   if (!process.env.EBAY_APP_ID) return res.status(500).json({ error: 'EBAY_APP_ID not set' });
