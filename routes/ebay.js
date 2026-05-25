@@ -1370,7 +1370,7 @@ router.get('/listing/:id/prices', async (req, res) => {
       },
     });
     const item = data.Item;
-    if (!item) return res.status(404).json({ error: 'Listing not found' });
+    if (!item) return res.status(404).json({ error: data.Errors?.[0]?.LongMessage || data.Errors?.[0]?.ShortMessage || 'Listing not found' });
 
     const base = parseFloat(item.ConvertedCurrentPrice?.Value || item.StartPrice?.Value || 0);
 
