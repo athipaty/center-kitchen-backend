@@ -1353,6 +1353,32 @@ router.post('/listing/price', async (req, res) => {
   }
 });
 
+// ── API usage stats ────────────────────────────────────────────────────
+router.get('/api-usage', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?><GetApiAccessRulesRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials></GetApiAccessRulesRequest>`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetApiAccessRules', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+    );
+    const rules = [];
+    const re = /<ApiAccessRule>([\s\S]*?)<\/ApiAccessRule>/g;
+    let m;
+    while ((m = re.exec(xml)) !== null) {
+      const b = m[1];
+      const get = tag => b.match(new RegExp(`<${tag}[^>]*>([^<]+)<\/${tag}>`))?.[1];
+      const daily = get('DailyHardLimit');
+      const used = get('DailyUsage') || get('PerDayUsage');
+      if (daily && used) rules.push({ call: get('CallName'), dailyLimit: parseInt(daily), used: parseInt(used), remaining: parseInt(daily) - parseInt(used) });
+    }
+    rules.sort((a, b) => b.used - a.used);
+    res.json(rules);
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Debug: raw Shopping API response ──────────────────────────────────
 router.get('/listing/:id/raw', async (req, res) => {
   const cleanId = String(req.params.id).replace(/\D/g, '');
