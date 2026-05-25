@@ -1272,8 +1272,7 @@ router.patch('/offer/:offerId/price', async (req, res) => {
 router.post('/listing/price', async (req, res) => {
   try {
     const token = await getAccessToken();
-    const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Language': 'en-US' };
-    const { listingId, price } = req.body;
+    const { listingId, price, variantLabel } = req.body;
     if (!listingId || !price || isNaN(Number(price)) || Number(price) <= 0)
       return res.status(400).json({ error: 'listingId and price are required' });
 
@@ -1281,43 +1280,89 @@ router.post('/listing/price', async (req, res) => {
     if (!cleanId) return res.status(400).json({ error: 'Listing ID must be numeric' });
 
     const priceStr = Number(price).toFixed(2);
+    const label = (variantLabel || '').toLowerCase().trim();
 
-    // Find the offer(s) for this listing via Inventory API (uses sell.inventory scope)
-    const { data: offersData } = await axios.get('https://api.ebay.com/sell/inventory/v1/offer', {
-      headers: h,
-      params: { limit: 200 },
-    });
-    const offers = (offersData.offers || []).filter(o => o.listing?.listingId === cleanId);
-    console.log(`listing/price: listingId=${cleanId} matched ${offers.length} offer(s)`);
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
-    if (!offers.length) return res.status(404).json({ error: `No offer found for listing ${cleanId}` });
-
-    // Update price on each matched offer
-    for (const offer of offers) {
-      await axios.put(
-        `https://api.ebay.com/sell/inventory/v1/offer/${offer.offerId}`,
-        {
-          availableQuantity: offer.availableQuantity,
-          listingPolicies: offer.listingPolicies,
-          merchantLocationKey: offer.merchantLocationKey,
-          pricingSummary: { price: { value: priceStr, currency: offer.pricingSummary?.price?.currency || 'USD' } },
-          ...(offer.categoryId ? { categoryId: offer.categoryId } : {}),
-        },
-        { headers: h }
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
       );
-      console.log(`listing/price: updated offer ${offer.offerId} to ${priceStr}`);
+    }
+    function checkFailure(xml) {
+      if (!/<Ack>Failure<\/Ack>/.test(xml) && !/<Ack>PartialFailure<\/Ack>/.test(xml)) return null;
+      return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
+        || 'eBay returned an error';
     }
 
-    res.json({ ok: true, offers: offers.length });
+    // GetItem to read current variations
+    const { data: getItemXml } = await tradingPost('GetItem',
+      `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+    );
+    const getItemErr = checkFailure(getItemXml);
+    if (getItemErr) return res.status(400).json({ error: getItemErr });
+
+    const varBlocks = [];
+    const varRe = /<Variation>([\s\S]*?)<\/Variation>/g;
+    let vm;
+    while ((vm = varRe.exec(getItemXml)) !== null) varBlocks.push(vm[0]);
+
+    console.log(`listing/price: id=${cleanId} label="${label}" price=${priceStr} variations=${varBlocks.length}`);
+
+    if (varBlocks.length === 0) {
+      // Single listing — update the one price
+      const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`;
+      const { data: xml } = await tradingPost('ReviseInventoryStatus', body);
+      const err = checkFailure(xml);
+      if (err) return res.status(400).json({ error: err });
+    } else {
+      // Multi-variation — update only the matching color, or all if no label given
+      const toUpdate = label
+        ? varBlocks.filter(block => {
+            const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+            let nv;
+            while ((nv = nvRe.exec(block)) !== null) {
+              const val = (nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '').toLowerCase();
+              if (val === label || label.includes(val) || val.includes(label)) return true;
+            }
+            return false;
+          })
+        : varBlocks;
+
+      if (!toUpdate.length) {
+        // Label didn't match any variation — fall back to updating all
+        console.log(`listing/price: label "${label}" matched nothing, updating all ${varBlocks.length} variations`);
+      }
+
+      const blocks = toUpdate.length ? toUpdate : varBlocks;
+      const inventoryItems = blocks.map(vBlock => {
+        const content = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+        const specificsRevise = content ? `<VariationSpecificsRevise>${content}</VariationSpecificsRevise>` : '';
+        return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice>${specificsRevise}</InventoryStatus>`;
+      });
+
+      for (let i = 0; i < inventoryItems.length; i += 4) {
+        const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}${inventoryItems.slice(i, i + 4).join('')}</ReviseInventoryStatusRequest>`;
+        const { data: xml } = await tradingPost('ReviseInventoryStatus', body);
+        console.log(`listing/price: batch ${Math.floor(i / 4) + 1} response:`, xml.slice(0, 300));
+        const err = checkFailure(xml);
+        if (err) return res.status(400).json({ error: err });
+      }
+    }
+
+    res.json({ ok: true, variations: varBlocks.length });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
-    const ebayErrs = err.response?.data?.errors;
-    const detail = ebayErrs?.length
-      ? ebayErrs.map(e => e.longMessage || e.message).join(' | ')
-      : (err.message || 'Failed to update price');
-    console.error('listing/price error:', JSON.stringify(err.response?.data ?? err.message));
-    res.status(500).json({ error: detail });
+    res.status(500).json({ error: err.message || 'Failed to update price' });
   }
 });
 
