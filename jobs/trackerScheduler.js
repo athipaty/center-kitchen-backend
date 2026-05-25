@@ -35,8 +35,10 @@ async function checkProduct(p) {
         try {
           await syncEbayPrice(p.ebayListingId, info.price, p.variant);
           console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" → $${info.price}`);
+          if (io) io.emit('tracker:ebay:sync:ok', { productId: String(p._id) });
         } catch (ebayErr) {
           console.error(`eBay price sync failed for listing ${p.ebayListingId}:`, ebayErr.message);
+          if (io) io.emit('tracker:ebay:sync:fail', { productId: String(p._id), error: ebayErr.message });
         }
       }
     }
