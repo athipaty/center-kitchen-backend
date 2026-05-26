@@ -73,8 +73,20 @@ async function fetchProduct(url) {
       );
 
       const title = data.name || "Unknown product";
-      const price = parsePrice(data.pricing || data.original_price);
 
+      // Detect out-of-stock before attempting price parse
+      const availability = (data.availability || '').toLowerCase();
+      if (availability && (
+        availability.includes('out of stock') ||
+        availability.includes('currently unavailable') ||
+        availability.includes('unavailable')
+      )) {
+        const err = new Error(`Out of stock: ${data.availability}`);
+        err.code = 'OUT_OF_STOCK';
+        throw err;
+      }
+
+      const price = parsePrice(data.pricing || data.original_price);
       if (!price) throw new Error("Price not found in ScraperAPI response.");
 
       const currency = data.currency === "USD" ? "$"
@@ -151,6 +163,12 @@ async function fetchProduct(url) {
     if (price) break;
   }
 
+  const bodyText = $.text().toLowerCase();
+  if (!price && (bodyText.includes('currently unavailable') || bodyText.includes('out of stock'))) {
+    const err = new Error('Out of stock');
+    err.code = 'OUT_OF_STOCK';
+    throw err;
+  }
   if (!price) throw new Error("Price not found. The product may be out of stock or the URL is unsupported.");
 
   let currency = "$";

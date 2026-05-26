@@ -24,6 +24,8 @@ const productSchema = new mongoose.Schema(
     groupId: { type: String, default: null, index: true },
     specs: { type: mongoose.Schema.Types.Mixed, default: {} },
     ebayListingId: { type: String, default: null },
+    status: { type: String, enum: ['active', 'out_of_stock', 'unavailable', 'error'], default: 'active' },
+    failCount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -14,6 +14,11 @@ function nextCheckDate() {
   return new Date(Date.now() + randomInterval());
 }
 
+function slowRetryDate() {
+  // 24h retry for persistently unavailable products
+  return new Date(Date.now() + 24 * 3600 * 1000);
+}
+
 async function checkProduct(p) {
   try {
     const info = await fetchProduct(p.url);
@@ -31,6 +36,10 @@ async function checkProduct(p) {
       p.history.push({ price: info.price });
       if (p.history.length > 200) p.history = p.history.slice(-200);
     }
+
+    // Reset failure tracking on successful fetch
+    p.status = 'active';
+    p.failCount = 0;
 
     if (p.ebayListingId) {
       try {
@@ -51,10 +60,22 @@ async function checkProduct(p) {
 
     return { id: p._id, success: true, dropped, newPrice: info.price, oldPrice };
   } catch (err) {
-    // Still reschedule even on failure
-    p.nextCheck = nextCheckDate();
+    p.failCount = (p.failCount || 0) + 1;
+
+    if (err.code === 'OUT_OF_STOCK') {
+      p.status = 'out_of_stock';
+      // After 3 consecutive OOS checks, slow down retries to 24h
+      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate();
+    } else {
+      // Generic error — mark unavailable after 3 consecutive failures, slow retry
+      p.status = p.failCount >= 3 ? 'unavailable' : 'error';
+      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate();
+    }
+
+    if (io) io.emit('tracker:product:status', { productId: String(p._id), status: p.status, failCount: p.failCount });
+
     await p.save();
-    return { id: p._id, success: false, error: err.message };
+    return { id: p._id, success: false, status: p.status, failCount: p.failCount, error: err.message };
   }
 }
 
