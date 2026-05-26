@@ -79,6 +79,16 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
 
   let inventoryItems;
 
+  function buildInventoryItem(block) {
+    const sku = block.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1];
+    if (sku) {
+      return `<InventoryStatus><ItemID>${cleanId}</ItemID><SKU>${sku}</SKU><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus>`;
+    }
+    const specifics = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+    const specificsRevise = specifics ? `<VariationSpecificsRevise>${specifics}</VariationSpecificsRevise>` : '';
+    return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice>${specificsRevise}</InventoryStatus>`;
+  }
+
   if (varBlocks.length === 0) {
     // Single listing — straightforward update
     inventoryItems = [`<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus>`];
@@ -91,21 +101,14 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
     });
 
     if (matchedBlock) {
-      const specificsContent = matchedBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
-      inventoryItems = [`<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice><VariationSpecificsRevise>${specificsContent}</VariationSpecificsRevise></InventoryStatus>`];
+      inventoryItems = [buildInventoryItem(matchedBlock)];
     } else {
       // No match found — update all variations
-      inventoryItems = varBlocks.map(block => {
-        const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
-        return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice><VariationSpecificsRevise>${specificsContent}</VariationSpecificsRevise></InventoryStatus>`;
-      });
+      inventoryItems = varBlocks.map(buildInventoryItem);
     }
   } else {
     // No variant label — update all variations to same price
-    inventoryItems = varBlocks.map(block => {
-      const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
-      return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice><VariationSpecificsRevise>${specificsContent}</VariationSpecificsRevise></InventoryStatus>`;
-    });
+    inventoryItems = varBlocks.map(buildInventoryItem);
   }
 
   // Step 2: ReviseInventoryStatus (batched 4 at a time)

@@ -1344,6 +1344,11 @@ router.post('/listing/price', async (req, res) => {
 
       const blocks = toUpdate.length ? toUpdate : varBlocks;
       const inventoryItems = blocks.map(vBlock => {
+        const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1];
+        if (sku) {
+          // SKU-based multi-variation listing — eBay requires SKU, not VariationSpecificsRevise
+          return `<InventoryStatus><ItemID>${cleanId}</ItemID><SKU>${sku}</SKU><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus>`;
+        }
         const content = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
         const specificsRevise = content ? `<VariationSpecificsRevise>${content}</VariationSpecificsRevise>` : '';
         return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice>${specificsRevise}</InventoryStatus>`;
