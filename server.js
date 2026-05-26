@@ -98,7 +98,7 @@ mongoose
 /* =====================
    HEALTH CHECK
 ===================== */
-app.get("/", (req, res) => res.send("API is running 🚀"));
+app.get("/", (req, res) => res.send("API is running 🚀")); // health check
 
 /* =====================
    START SERVER
