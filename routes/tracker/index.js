@@ -144,4 +144,37 @@ router.get("/status", (req, res) => {
   res.json({ nextCheck: scheduler.getNextCheck() });
 });
 
+// POST generate SEO-optimized eBay listing title using Claude
+router.post("/ebay-title", async (req, res) => {
+  const { title, specs, variant, upc } = req.body;
+  if (!title) return res.status(400).json({ error: "title is required" });
+  try {
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const specsText = specs
+      ? Object.entries(specs)
+          .filter(([k, v]) => v != null && k !== 'asin')
+          .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v)}`)
+          .join(', ')
+      : '';
+
+    const msg = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 100,
+      messages: [{
+        role: "user",
+        content: `Write a single SEO-optimized eBay listing title for this product. Max 80 characters. Include brand, model number, key specs buyers search for. No trademark symbols (® ™), no promotional words (Free Shipping, Best Price, etc.). Output ONLY the title, nothing else.
+
+Amazon title: ${title}${variant ? `\nVariant: ${variant}` : ''}${specsText ? `\nSpecs: ${specsText}` : ''}${upc ? `\nUPC: ${upc}` : ''}`,
+      }],
+    });
+
+    const generated = msg.content[0].text.trim().replace(/^["'`]+|["'`]+$/g, '');
+    res.json({ title: generated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
