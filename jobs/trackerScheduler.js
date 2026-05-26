@@ -6,8 +6,8 @@ const { syncEbayPrice } = require("./ebayPriceSync");
 let io = null;
 
 function randomInterval() {
-  // Random ms between 1 and 3 hours
-  return (Math.random() * 2 + 1) * 3600 * 1000;
+  // Random ms between 2 and 4 hours
+  return (Math.random() * 2 + 2) * 3600 * 1000;
 }
 
 function nextCheckDate() {
