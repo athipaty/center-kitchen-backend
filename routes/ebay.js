@@ -1318,49 +1318,43 @@ router.post('/listing/price', async (req, res) => {
     console.log(`listing/price: id=${cleanId} label="${label}" price=${priceStr} variations=${varBlocks.length}`);
 
     if (varBlocks.length === 0) {
-      // Single listing — update the one price
+      // Single listing — ReviseInventoryStatus is fine here
       const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`;
       const { data: xml } = await tradingPost('ReviseInventoryStatus', body);
       const err = checkFailure(xml);
       if (err) return res.status(400).json({ error: err });
     } else {
-      // Multi-variation — update only the matching color, or all if no label given
-      const toUpdate = label
-        ? varBlocks.filter(block => {
-            const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
-            let nv;
-            while ((nv = nvRe.exec(block)) !== null) {
-              const val = (nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '').toLowerCase();
-              if (val === label || label.includes(val) || val.includes(label)) return true;
-            }
-            return false;
-          })
-        : varBlocks;
+      // Multi-variation — use ReviseFixedPriceItem which works for both SKU-based and
+      // non-SKU listings (ReviseInventoryStatus requires the variation SKU for SKU-based
+      // listings and fails with "Variation level SKU should be supplied" otherwise).
+      // We send ALL variations: update price for matching ones, keep current price for others.
+      const variationXml = varBlocks.map(vBlock => {
+        const currentPriceM = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+        const currentPrice = currentPriceM ? parseFloat(currentPriceM[1]).toFixed(2) : priceStr;
 
-      if (!toUpdate.length) {
-        // Label didn't match any variation — fall back to updating all
-        console.log(`listing/price: label "${label}" matched nothing, updating all ${varBlocks.length} variations`);
-      }
-
-      const blocks = toUpdate.length ? toUpdate : varBlocks;
-      const inventoryItems = blocks.map(vBlock => {
-        const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1];
-        if (sku) {
-          // SKU-based multi-variation listing — eBay requires SKU, not VariationSpecificsRevise
-          return `<InventoryStatus><ItemID>${cleanId}</ItemID><SKU>${sku}</SKU><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus>`;
+        let isMatch = !label; // no label → update all
+        if (label) {
+          const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+          let nv;
+          while ((nv = nvRe.exec(vBlock)) !== null) {
+            const val = (nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '').toLowerCase();
+            if (val === label || label.includes(val) || val.includes(label)) { isMatch = true; break; }
+          }
         }
-        const content = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
-        const specificsRevise = content ? `<VariationSpecificsRevise>${content}</VariationSpecificsRevise>` : '';
-        return `<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice>${specificsRevise}</InventoryStatus>`;
-      });
 
-      for (let i = 0; i < inventoryItems.length; i += 4) {
-        const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}${inventoryItems.slice(i, i + 4).join('')}</ReviseInventoryStatusRequest>`;
-        const { data: xml } = await tradingPost('ReviseInventoryStatus', body);
-        console.log(`listing/price: batch ${Math.floor(i / 4) + 1} response:`, xml.slice(0, 300));
-        const err = checkFailure(xml);
-        if (err) return res.status(400).json({ error: err });
-      }
+        const thisPrice = isMatch ? priceStr : currentPrice;
+        const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+        const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+        const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+        return `<Variation>${skuXml}<StartPrice currencyID="USD">${thisPrice}</StartPrice><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
+      }).join('');
+
+      console.log(`listing/price: id=${cleanId} label="${label}" → ReviseFixedPriceItem (${varBlocks.length} variations)`);
+      const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+      const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
+      console.log('listing/price: ReviseFixedPriceItem response:', xml.slice(0, 500));
+      const err = checkFailure(xml);
+      if (err) return res.status(400).json({ error: err });
     }
 
     res.json({ ok: true, variations: varBlocks.length });
