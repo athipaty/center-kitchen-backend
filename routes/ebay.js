@@ -1337,7 +1337,8 @@ router.post('/listing/price', async (req, res) => {
           const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
           let nv;
           while ((nv = nvRe.exec(vBlock)) !== null) {
-            const val = (nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '').toLowerCase();
+            const raw = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+            const val = raw.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").toLowerCase();
             if (val === label || label.includes(val) || val.includes(label)) { isMatch = true; break; }
           }
         }
@@ -1444,7 +1445,8 @@ router.get('/listing/:id/prices', async (req, res) => {
       let nv;
       while ((nv = nvRe.exec(block)) !== null) {
         const name = nv[1].match(/<Name>([\s\S]*?)<\/Name>/)?.[1]?.toLowerCase();
-        const value = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase();
+        const rawVal = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+        const value = rawVal.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").toLowerCase();
         if (name && value) specs[name] = value;
       }
       variations.push({ price, specs });
