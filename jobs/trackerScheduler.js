@@ -46,8 +46,8 @@ async function checkProduct(p) {
         await syncEbayPrice(p.ebayListingId, info.price, p.variant);
         // Restore qty to 1 if it was previously OOS (coming back in stock)
         if (p.status === 'out_of_stock' || p.status === 'unavailable') {
-          await syncEbayQty(p.ebayListingId, p.variant, 1);
-          console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1`);
+          await syncEbayQty(p.ebayListingId, p.variant, 3);
+          console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 3`);
         }
         console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" → $${info.price}`);
         if (io) io.emit('tracker:ebay:sync:ok', { productId: String(p._id) });
