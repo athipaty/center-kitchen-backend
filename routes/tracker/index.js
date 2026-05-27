@@ -131,9 +131,47 @@ router.post("/check/:id", async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ error: "Product not found" });
+
+    // Proactively push qty=0 if already OOS/unavailable before re-scraping
+    if (product.ebayListingId && (product.status === 'out_of_stock' || product.status === 'unavailable')) {
+      try {
+        const { syncEbayQty } = require("../../jobs/ebayPriceSync");
+        await syncEbayQty(product.ebayListingId, product.variant, 0);
+        console.log(`proactive qty=0: listing ${product.ebayListingId} variant="${product.variant}"`);
+      } catch (e) {
+        console.error('proactive syncEbayQty failed:', e.message);
+      }
+    }
+
     await scheduler.checkOne(product);
     const updated = await Product.findById(req.params.id);
     res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST immediately push qty=0 to eBay for all currently OOS / unavailable variants
+router.post("/fix-oos-qty", async (req, res) => {
+  try {
+    const { syncEbayQty } = require("../../jobs/ebayPriceSync");
+    const oosProducts = await Product.find({
+      status: { $in: ['out_of_stock', 'unavailable'] },
+      ebayListingId: { $exists: true, $ne: null },
+    });
+
+    const results = [];
+    for (const p of oosProducts) {
+      try {
+        await syncEbayQty(p.ebayListingId, p.variant, 0);
+        results.push({ id: p._id, variant: p.variant, ok: true });
+        console.log(`fix-oos-qty: qty=0 pushed for listing ${p.ebayListingId} variant="${p.variant}"`);
+      } catch (e) {
+        results.push({ id: p._id, variant: p.variant, ok: false, error: e.message });
+        console.error(`fix-oos-qty failed for ${p._id}:`, e.message);
+      }
+    }
+    res.json({ fixed: results.length, results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
