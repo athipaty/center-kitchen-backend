@@ -106,8 +106,9 @@ async function fetchProduct(url) {
 
       const variants = parseVariants(data);
 
-      const isPrime = typeof data.ships_from === 'string' &&
-        data.ships_from.toLowerCase().includes('amazon');
+      const shipsFromAmazon = typeof data.ships_from === 'string' && data.ships_from.toLowerCase().includes('amazon');
+      const soldByAmazon   = typeof data.sold_by    === 'string' && data.sold_by.toLowerCase().includes('amazon');
+      const isPrime = !!(data.prime || data.is_prime || shipsFromAmazon || soldByAmazon);
 
       // Build variant label from all selected customization options (color, size, style, etc.)
       const selectedParts = [];
