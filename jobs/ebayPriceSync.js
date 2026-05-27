@@ -60,6 +60,55 @@ function checkFailure(xml) {
   return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
 }
 
+function decodeEntities(str) {
+  return (str || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+
+function labelMatch(blockVal, label) {
+  const v = decodeEntities(blockVal).toLowerCase();
+  const l = (label || '').toLowerCase();
+  return v === l || l.includes(v) || v.includes(l);
+}
+
+// Set eBay variation quantity to 0 (OOS) or back to qty (in-stock)
+async function syncEbayQty(listingId, variantLabel, qty) {
+  const token = await getAccessToken();
+  const cleanId = String(listingId).trim().replace(/\D/g, '');
+  const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+  const { data: getItemXml } = await tradingPost(token, 'GetItem',
+    `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+  );
+  const getErr = checkFailure(getItemXml);
+  if (getErr) throw new Error(getErr);
+
+  const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+  if (varBlocks.length === 0) return; // single listing — qty not applicable here
+
+  const label = (variantLabel || '').toLowerCase();
+  const variationXml = varBlocks.map(block => {
+    const currentPriceM = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+    const currentPrice = currentPriceM ? parseFloat(currentPriceM[1]).toFixed(2) : '0.00';
+    const currentQtyM  = block.match(/<Quantity>([\d]+)<\/Quantity>/);
+    const currentQty   = currentQtyM ? currentQtyM[1] : '1';
+
+    const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
+    const isMatch = label ? labelMatch(valueMatch?.[1] || '', label) : false;
+
+    const thisQty = isMatch ? String(qty) : currentQty;
+    const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+    const sku = block.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+    const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+    return `<Variation>${skuXml}<StartPrice currencyID="USD">${currentPrice}</StartPrice><Quantity>${thisQty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
+  }).join('');
+
+  const { data: reviseXml } = await tradingPost(token, 'ReviseFixedPriceItem',
+    `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`
+  );
+  const err = checkFailure(reviseXml);
+  if (err) throw new Error(err);
+}
+
 // variantLabel — the color/variant name from Amazon (e.g. "purple"), used to match the right eBay variation
 async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
   const token = await getAccessToken();
@@ -94,8 +143,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
       let isMatch = !label;
       if (label) {
         const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
-        const val = (valueMatch?.[1] || '').toLowerCase();
-        isMatch = val === label || label.includes(val) || val.includes(label);
+        isMatch = labelMatch(valueMatch?.[1] || '', label);
       }
 
       const thisPrice = isMatch ? priceStr : currentPrice;
@@ -113,4 +161,4 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
   }
 }
 
-module.exports = { syncEbayPrice };
+module.exports = { syncEbayPrice, syncEbayQty };

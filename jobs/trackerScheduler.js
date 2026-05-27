@@ -1,7 +1,7 @@
 const cron = require("node-cron");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
-const { syncEbayPrice } = require("./ebayPriceSync");
+const { syncEbayPrice, syncEbayQty } = require("./ebayPriceSync");
 
 let io = null;
 
@@ -44,6 +44,11 @@ async function checkProduct(p) {
     if (p.ebayListingId) {
       try {
         await syncEbayPrice(p.ebayListingId, info.price, p.variant);
+        // Restore qty to 1 if it was previously OOS (coming back in stock)
+        if (p.status === 'out_of_stock' || p.status === 'unavailable') {
+          await syncEbayQty(p.ebayListingId, p.variant, 1);
+          console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1`);
+        }
         console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" → $${info.price}`);
         if (io) io.emit('tracker:ebay:sync:ok', { productId: String(p._id) });
       } catch (ebayErr) {
@@ -64,12 +69,20 @@ async function checkProduct(p) {
 
     if (err.code === 'OUT_OF_STOCK') {
       p.status = 'out_of_stock';
-      // After 3 consecutive OOS checks, slow down retries to 24h
       p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate();
     } else {
-      // Generic error — mark unavailable after 3 consecutive failures, slow retry
       p.status = p.failCount >= 3 ? 'unavailable' : 'error';
       p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate();
+    }
+
+    // Push qty=0 to eBay so the variant shows as Out of Stock
+    if (p.ebayListingId && (p.status === 'out_of_stock' || p.status === 'unavailable')) {
+      try {
+        await syncEbayQty(p.ebayListingId, p.variant, 0);
+        console.log(`eBay qty set to 0: listing ${p.ebayListingId} variant="${p.variant}" (${p.status})`);
+      } catch (qtyErr) {
+        console.error(`eBay qty sync failed for listing ${p.ebayListingId}:`, qtyErr.message);
+      }
     }
 
     if (io) io.emit('tracker:product:status', { productId: String(p._id), status: p.status, failCount: p.failCount });
