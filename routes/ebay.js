@@ -1614,7 +1614,7 @@ router.post('/trading-create-listing', async (req, res) => {
 
     if (/<Ack>Failure<\/Ack>/.test(xml) || /<Ack>PartialFailure<\/Ack>/.test(xml)) {
       const allMsgs = [];
-      const errRe = /<Error>([\s\S]*?)<\/Error>/g;
+      const errRe = /<Errors>([\s\S]*?)<\/Errors>/g;
       let em;
       while ((em = errRe.exec(xml)) !== null) {
         const code = em[1].match(/<ErrorCode>([^<]+)<\/ErrorCode>/)?.[1] || '';
