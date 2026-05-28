@@ -371,6 +371,29 @@ router.get('/account-info', async (req, res) => {
   }
 });
 
+// Fetch valid values for all aspects of an eBay category (uses app token — no user auth needed)
+async function getValidAspectValues(catId) {
+  if (!catId) return {};
+  try {
+    const { data: appToken } = await axios.post(
+      'https://api.ebay.com/identity/v1/oauth2/token',
+      new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' }),
+      { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+    const h = { Authorization: `Bearer ${appToken.access_token}` };
+    const { data: tree } = await axios.get('https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id', { headers: h, params: { marketplace_id: 'EBAY_US' } });
+    const { data: specs } = await axios.get(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${tree.categoryTreeId}/get_item_aspects_for_category?category_id=${catId}`,
+      { headers: h }
+    );
+    const result = {};
+    for (const aspect of (specs.aspects || [])) {
+      if (aspect.aspectValues?.length) result[aspect.localizedAspectName] = aspect.aspectValues.map(v => v.localizedValue);
+    }
+    return result;
+  } catch { return {}; }
+}
+
 // ── Create listing ─────────────────────────────────────────────────
 function buildAspects(specs) {
   const MAP = {
@@ -1630,8 +1653,21 @@ router.post('/trading-create-listing', async (req, res) => {
         }
       }
       if (missingFields.length) {
-        for (const f of missingFields) aspects[f] = f === 'Brand' ? ['Unbranded'] : ['Other'];
-        console.log('trading-create-listing: retrying with added specifics:', missingFields);
+        const validVals = await getValidAspectValues(catId);
+        for (const f of missingFields) {
+          if (f === 'Brand') {
+            aspects[f] = ['Unbranded'];
+          } else {
+            const allowed = validVals[f] || [];
+            const tl = safeTitle.toLowerCase();
+            const matched = allowed.find(v => tl.includes(v.toLowerCase()));
+            if (matched) aspects[f] = [matched];
+            else if (allowed.includes('Other')) aspects[f] = ['Other'];
+            else if (allowed.length) aspects[f] = [allowed[0]];
+            // else: don't add — invalid value would cause another 21919303
+          }
+        }
+        console.log('trading-create-listing: retrying with added specifics:', JSON.stringify(Object.fromEntries(missingFields.map(f => [f, aspects[f]]))));
         ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
       }
     }
