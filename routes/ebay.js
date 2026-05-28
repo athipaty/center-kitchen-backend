@@ -1510,10 +1510,11 @@ router.post('/trading-create-listing', async (req, res) => {
     }
     if (!catId) return res.status(400).json({ error: 'Could not auto-detect eBay category. Please provide categoryId.' });
 
-    // Build item specifics — always include Brand (eBay requires it for most categories)
+    // Build item specifics — always use 'Unbranded' for Brand
+    // (avoids 21919303 for brand names not in eBay's accepted list, which would trigger retry + Type='Other')
     const aspects = buildAspects(specs);
     if (upc && !aspects['UPC']) aspects['UPC'] = [upc];
-    if (!aspects['Brand']) aspects['Brand'] = [specs.brand_name || 'Unbranded'];
+    aspects['Brand'] = ['Unbranded'];
 
     // Proactively inject aspects that can be matched from the title (avoids 21919303 on first attempt)
     await injectTitleAspects(catId, aspects, safeTitle);
