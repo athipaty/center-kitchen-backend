@@ -372,26 +372,44 @@ router.get('/account-info', async (req, res) => {
 });
 
 // Fetch valid values for all aspects of an eBay category (uses app token — no user auth needed)
+// EBAY_US category tree ID is always 0 — hardcoded to avoid an extra round-trip
 async function getValidAspectValues(catId) {
   if (!catId) return {};
   try {
     const { data: appToken } = await axios.post(
       'https://api.ebay.com/identity/v1/oauth2/token',
       new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' }),
-      { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
+      { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 8000 }
     );
     const h = { Authorization: `Bearer ${appToken.access_token}` };
-    const { data: tree } = await axios.get('https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id', { headers: h, params: { marketplace_id: 'EBAY_US' } });
     const { data: specs } = await axios.get(
-      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${tree.categoryTreeId}/get_item_aspects_for_category?category_id=${catId}`,
-      { headers: h }
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${catId}`,
+      { headers: h, timeout: 8000 }
     );
     const result = {};
     for (const aspect of (specs.aspects || [])) {
       if (aspect.aspectValues?.length) result[aspect.localizedAspectName] = aspect.aspectValues.map(v => v.localizedValue);
     }
     return result;
-  } catch { return {}; }
+  } catch (e) {
+    console.log('getValidAspectValues failed:', e.message);
+    return {};
+  }
+}
+
+// Fill in item specifics that can be inferred from the title (runs before first attempt)
+async function injectTitleAspects(catId, aspects, title) {
+  const catAspects = await getValidAspectValues(catId);
+  if (!Object.keys(catAspects).length) return;
+  const tl = title.toLowerCase();
+  for (const [name, vals] of Object.entries(catAspects)) {
+    if (aspects[name]) continue; // already set
+    const matched = vals.find(v => v && tl.includes(v.toLowerCase()));
+    if (matched) {
+      aspects[name] = [matched];
+      console.log(`injectTitleAspects: added ${name}="${matched}" from title`);
+    }
+  }
 }
 
 // ── Create listing ─────────────────────────────────────────────────
@@ -1479,6 +1497,9 @@ router.post('/trading-create-listing', async (req, res) => {
     const aspects = buildAspects(specs);
     if (upc && !aspects['UPC']) aspects['UPC'] = [upc];
     if (!aspects['Brand']) aspects['Brand'] = [specs.brand_name || 'Unbranded'];
+
+    // Proactively inject aspects that can be matched from the title (avoids 21919303 on first attempt)
+    await injectTitleAspects(catId, aspects, safeTitle);
 
     const buildSpecXml = (asp) => Object.entries(asp)
       .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
