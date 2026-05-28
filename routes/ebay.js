@@ -1452,10 +1452,12 @@ router.post('/trading-create-listing', async (req, res) => {
     }
     if (!catId) return res.status(400).json({ error: 'Could not auto-detect eBay category. Please provide categoryId.' });
 
-    // Build item specifics XML
+    // Build item specifics — always include Brand (eBay requires it for most categories)
     const aspects = buildAspects(specs);
     if (upc && !aspects['UPC']) aspects['UPC'] = [upc];
-    const itemSpecificsXml = Object.entries(aspects)
+    if (!aspects['Brand']) aspects['Brand'] = [specs.brand_name || 'Unbranded'];
+
+    const buildSpecXml = (asp) => Object.entries(asp)
       .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
       .join('');
 
@@ -1534,9 +1536,9 @@ router.post('/trading-create-listing', async (req, res) => {
       );
     }
 
-    let xml;
+    // Multi-variation XML block (built once, reused in buildBody)
+    let varSpecsXml = '';
     if (variants?.length) {
-      // Multi-variation listing
       const variationsXml = variants.map(v => {
         const varPrice = v.price || price;
         return `<Variation>
@@ -1547,8 +1549,7 @@ router.post('/trading-create-listing', async (req, res) => {
           </VariationSpecifics>
         </Variation>`;
       }).join('');
-
-      const varSpecsXml = `<Variations>
+      varSpecsXml = `<Variations>
         ${variationsXml}
         <VariationSpecificsSet>
           <NameValueList>
@@ -1557,59 +1558,82 @@ router.post('/trading-create-listing', async (req, res) => {
           </NameValueList>
         </VariationSpecificsSet>
       </Variations>`;
+    }
 
-      const body = `<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-        ${creds}
-        <Item>
-          <Title>${escXml(safeTitle)}</Title>
-          <Description><![CDATA[${desc}]]></Description>
-          <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
-          <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
-          <ConditionID>${conditionId}</ConditionID>
-          <Country>${escXml(sellerCountry)}</Country>
-          <Currency>USD</Currency>
-          <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
-          <ListingDuration>GTC</ListingDuration>
-          <ListingType>FixedPriceItem</ListingType>
-          ${picturesXml}
-          ${itemSpecificsXml ? `<ItemSpecifics>${itemSpecificsXml}</ItemSpecifics>` : ''}
-          ${varSpecsXml}
-          <Location>${escXml(sellerLocation)}</Location>
-          ${sellerProfilesXml}
-          ${inlineShippingXml}
-          ${inlineReturnXml}
-          ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
-        </Item>
-      </AddFixedPriceItemRequest>`;
+    // Build AddFixedPriceItem body — accepts current item specifics so we can retry
+    const buildBody = (iSpecXml) => {
+      const iSpecBlock = iSpecXml ? `<ItemSpecifics>${iSpecXml}</ItemSpecifics>` : '';
+      if (variants?.length) {
+        return `<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+          ${creds}
+          <Item>
+            <Title>${escXml(safeTitle)}</Title>
+            <Description><![CDATA[${desc}]]></Description>
+            <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
+            <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
+            <ConditionID>${conditionId}</ConditionID>
+            <Country>${escXml(sellerCountry)}</Country>
+            <Currency>USD</Currency>
+            <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
+            <ListingDuration>GTC</ListingDuration>
+            <ListingType>FixedPriceItem</ListingType>
+            ${picturesXml}
+            ${iSpecBlock}
+            ${varSpecsXml}
+            <Location>${escXml(sellerLocation)}</Location>
+            ${sellerProfilesXml}
+            ${inlineShippingXml}
+            ${inlineReturnXml}
+            ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
+          </Item>
+        </AddFixedPriceItemRequest>`;
+      } else {
+        return `<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+          ${creds}
+          <Item>
+            <Title>${escXml(safeTitle)}</Title>
+            <Description><![CDATA[${desc}]]></Description>
+            <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
+            <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
+            <ConditionID>${conditionId}</ConditionID>
+            <Country>${escXml(sellerCountry)}</Country>
+            <Currency>USD</Currency>
+            <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
+            <ListingDuration>GTC</ListingDuration>
+            <ListingType>FixedPriceItem</ListingType>
+            <Quantity>${Number(quantity)}</Quantity>
+            <Location>${escXml(sellerLocation)}</Location>
+            ${picturesXml}
+            ${iSpecBlock}
+            ${sellerProfilesXml}
+            ${inlineShippingXml}
+            ${inlineReturnXml}
+            ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
+          </Item>
+        </AddFixedPriceItemRequest>`;
+      }
+    };
 
-      ({ data: xml } = await tradingPost('AddFixedPriceItem', body));
-    } else {
-      // Single listing
-      const body = `<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-        ${creds}
-        <Item>
-          <Title>${escXml(safeTitle)}</Title>
-          <Description><![CDATA[${desc}]]></Description>
-          <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
-          <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
-          <ConditionID>${conditionId}</ConditionID>
-          <Country>${escXml(sellerCountry)}</Country>
-          <Currency>USD</Currency>
-          <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
-          <ListingDuration>GTC</ListingDuration>
-          <ListingType>FixedPriceItem</ListingType>
-          <Quantity>${Number(quantity)}</Quantity>
-          <Location>${escXml(sellerLocation)}</Location>
-          ${picturesXml}
-          ${itemSpecificsXml ? `<ItemSpecifics>${itemSpecificsXml}</ItemSpecifics>` : ''}
-          ${sellerProfilesXml}
-          ${inlineShippingXml}
-          ${inlineReturnXml}
-          ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
-        </Item>
-      </AddFixedPriceItemRequest>`;
+    // First attempt
+    let xml;
+    ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
 
-      ({ data: xml } = await tradingPost('AddFixedPriceItem', body));
+    // Retry once if eBay reports missing item specifics (21919303) and no ItemID yet
+    if (!/<ItemID>\d+<\/ItemID>/.test(xml)) {
+      const missingFields = [];
+      const r21 = /<Errors>([\s\S]*?)<\/Errors>/g;
+      let m21;
+      while ((m21 = r21.exec(xml)) !== null) {
+        if (/<ErrorCode>21919303<\/ErrorCode>/.test(m21[1])) {
+          const f = m21[1].match(/item specific ([^\s.]+) is missing/i)?.[1];
+          if (f && !aspects[f]) missingFields.push(f);
+        }
+      }
+      if (missingFields.length) {
+        for (const f of missingFields) aspects[f] = f === 'Brand' ? ['Unbranded'] : ['Other'];
+        console.log('trading-create-listing: retrying with added specifics:', missingFields);
+        ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
+      }
     }
 
     // Extract ItemID first — present on Success, Warning, and PartialFailure (warnings-only)
