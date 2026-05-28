@@ -1116,6 +1116,23 @@ router.post('/create-group-listing', async (req, res) => {
   }
 });
 
+// ── Debug: test aspect injection for a title ─────────────────────
+router.get('/debug/aspects', async (req, res) => {
+  const { title, catId: qCatId } = req.query;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  const safeT = sanitizeTitle(title);
+  const catId = qCatId || await lookupCategory(safeT, null);
+  const aspects = {};
+  const catAspects = await getValidAspectValues(catId);
+  const tl = safeT.toLowerCase();
+  const injected = {};
+  for (const [name, vals] of Object.entries(catAspects)) {
+    const matched = vals.find(v => v && tl.includes(v.toLowerCase()));
+    if (matched) injected[name] = matched;
+  }
+  res.json({ safeTitle: safeT, catId, aspectsApiWorked: Object.keys(catAspects).length > 0, injected });
+});
+
 // ── Diagnose eBay listing readiness ───────────────────────────────
 router.get('/diagnose', async (req, res) => {
   const report = {};
