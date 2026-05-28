@@ -1626,7 +1626,7 @@ router.post('/trading-create-listing', async (req, res) => {
       while ((m21 = r21.exec(xml)) !== null) {
         if (/<ErrorCode>21919303<\/ErrorCode>/.test(m21[1])) {
           const f = m21[1].match(/item specific ([^\s.]+) is missing/i)?.[1];
-          if (f && !aspects[f]) missingFields.push(f);
+          if (f && !missingFields.includes(f)) missingFields.push(f);
         }
       }
       if (missingFields.length) {
