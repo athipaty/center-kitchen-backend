@@ -1612,11 +1612,16 @@ router.post('/trading-create-listing', async (req, res) => {
       ({ data: xml } = await tradingPost('AddFixedPriceItem', body));
     }
 
-    if (/<Ack>Failure<\/Ack>/.test(xml) || /<Ack>PartialFailure<\/Ack>/.test(xml)) {
+    // Extract ItemID first — present on Success, Warning, and PartialFailure (warnings-only)
+    const listingId = xml.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+
+    if (/<Ack>Failure<\/Ack>/.test(xml) || (/<Ack>PartialFailure<\/Ack>/.test(xml) && !listingId)) {
       const allMsgs = [];
       const errRe = /<Errors>([\s\S]*?)<\/Errors>/g;
       let em;
       while ((em = errRe.exec(xml)) !== null) {
+        const sev = em[1].match(/<SeverityCode>([^<]+)<\/SeverityCode>/)?.[1] || '';
+        if (sev === 'Warning') continue; // skip non-fatal warnings
         const code = em[1].match(/<ErrorCode>([^<]+)<\/ErrorCode>/)?.[1] || '';
         const long = em[1].match(/<LongMessage>([^<]+)<\/LongMessage>/)?.[1] || '';
         const short = em[1].match(/<ShortMessage>([^<]+)<\/ShortMessage>/)?.[1] || '';
@@ -1627,7 +1632,6 @@ router.post('/trading-create-listing', async (req, res) => {
       return res.status(400).json({ error: msg });
     }
 
-    const listingId = xml.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
     if (!listingId) return res.status(500).json({ error: 'Listing created but could not extract ItemID', raw: xml.slice(0, 500) });
 
     res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}` });
