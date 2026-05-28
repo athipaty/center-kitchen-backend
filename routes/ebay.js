@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
+const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const EbayToken = require('../models/shared/EbayToken');
 
@@ -43,6 +44,60 @@ router.get('/img/:key', (req, res) => {
   }
   res.setHeader('Content-Type', entry.contentType);
   res.send(entry.buffer);
+});
+
+// ── Upload Amazon images to Cloudinary permanently ─────────────────
+router.post('/upload-images', async (req, res) => {
+  const { imageUrls, slug } = req.body;
+  if (!imageUrls?.length || !slug) return res.status(400).json({ error: 'imageUrls and slug required' });
+
+  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+
+  const cloudinaryUrls = [];
+  for (let i = 0; i < imageUrls.length; i++) {
+    const url = imageUrls[i];
+    try {
+      const { data: imgBuffer } = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 15000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      });
+
+      const folder = `ebay-listings/${slug}`;
+      const publicId = `${slug}-${String(i + 1).padStart(2, '0')}`;
+      const timestamp = Math.floor(Date.now() / 1000);
+
+      const toSign = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+      const signature = crypto.createHash('sha1').update(toSign).digest('hex');
+
+      const b64 = Buffer.from(imgBuffer).toString('base64');
+      const contentType = 'image/jpeg';
+      const dataUri = `data:${contentType};base64,${b64}`;
+
+      const uploadParams = new URLSearchParams({
+        file: dataUri,
+        api_key: apiKey,
+        timestamp: String(timestamp),
+        signature,
+        folder,
+        public_id: publicId,
+      });
+
+      const { data: uploaded } = await axios.post(
+        `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
+        uploadParams.toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
+      );
+      cloudinaryUrls.push(uploaded.secure_url);
+    } catch (e) {
+      console.error(`upload-images: failed for ${url}:`, e.response?.data || e.message);
+    }
+  }
+
+  if (!cloudinaryUrls.length) return res.status(500).json({ error: 'All image uploads failed' });
+  res.json({ cloudinaryUrls });
 });
 
 function getCached(key) {
@@ -1365,6 +1420,196 @@ router.post('/listing/price', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to update price' });
   }
 });
+
+// ── Create listing via Trading API (AddFixedPriceItem) ─────────────────
+// More reliable than Inventory API for accounts that haven't been approved
+// for programmatic listing creation via the Inventory API.
+router.post('/trading-create-listing', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const {
+      title, price, currency = 'USD', quantity = 1,
+      condition = 'NEW', categoryId,
+      imageUrls = [], upc, specs = {}, description,
+      variants, // [{ label, price, quantity }] for multi-variation
+      variantDimension = 'Color', // e.g. 'Color', 'Size', 'Style'
+      shipping = { free: true, carrier: 'FedExStandardOvernight', handlingDays: 1 },
+      returns = { accepted: true, days: 30, buyerPays: true },
+      // Seller location — defaults match account registered location
+      sellerCountry = 'TH',
+      sellerLocation = 'Phayao',
+    } = req.body;
+
+    if (!title || !price) return res.status(400).json({ error: 'title and price are required' });
+
+    const safeTitle = sanitizeTitle(title);
+    const conditionId = condition === 'NEW' ? '1000' : '3000';
+
+    // Auto-detect category if not provided
+    let catId = categoryId ? String(categoryId) : null;
+    if (!catId) {
+      catId = await lookupCategory(safeTitle, upc);
+    }
+    if (!catId) return res.status(400).json({ error: 'Could not auto-detect eBay category. Please provide categoryId.' });
+
+    // Build item specifics XML
+    const aspects = buildAspects(specs);
+    if (upc && !aspects['UPC']) aspects['UPC'] = [upc];
+    const itemSpecificsXml = Object.entries(aspects)
+      .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
+      .join('');
+
+    // Build pictures XML (max 12)
+    const pics = imageUrls.slice(0, 12);
+    const picturesXml = pics.length
+      ? `<PictureDetails>${pics.map(u => `<PictureURL>${escXml(u)}</PictureURL>`).join('')}</PictureDetails>`
+      : '';
+
+    // Shipping
+    const shipCost = shipping.free ? '0.00' : Number(shipping.cost || 0).toFixed(2);
+    const shippingXml = `<ShippingDetails>
+      <ShippingType>Flat</ShippingType>
+      <ShippingServiceOptions>
+        <ShippingServicePriority>1</ShippingServicePriority>
+        <ShippingService>${escXml(shipping.carrier || 'FedExStandardOvernight')}</ShippingService>
+        <ShippingServiceCost currencyID="USD">${shipCost}</ShippingServiceCost>
+      </ShippingServiceOptions>
+    </ShippingDetails>`;
+
+    // Return policy
+    const returnXml = returns.accepted
+      ? `<ReturnPolicy>
+          <ReturnsAcceptedOption>ReturnsAccepted</ReturnsAcceptedOption>
+          <RefundOption>MoneyBack</RefundOption>
+          <ReturnsWithinOption>Days_${returns.days || 30}</ReturnsWithinOption>
+          <ShippingCostPaidByOption>${returns.buyerPays ? 'Buyer' : 'Seller'}</ShippingCostPaidByOption>
+        </ReturnPolicy>`
+      : `<ReturnPolicy><ReturnsAcceptedOption>ReturnsNotAccepted</ReturnsAcceptedOption></ReturnPolicy>`;
+
+    // Description
+    const desc = description || buildDescription();
+
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
+      );
+    }
+
+    let xml;
+    if (variants?.length) {
+      // Multi-variation listing
+      const variationsXml = variants.map(v => {
+        const varPrice = v.price || price;
+        return `<Variation>
+          <StartPrice currencyID="USD">${Number(varPrice).toFixed(2)}</StartPrice>
+          <Quantity>${Number(v.quantity) || 1}</Quantity>
+          <VariationSpecifics>
+            <NameValueList><Name>${escXml(variantDimension)}</Name><Value>${escXml(v.label)}</Value></NameValueList>
+          </VariationSpecifics>
+        </Variation>`;
+      }).join('');
+
+      const varSpecsXml = `<Variations>
+        ${variationsXml}
+        <VariationSpecificsSet>
+          <NameValueList>
+            <Name>${escXml(variantDimension)}</Name>
+            ${variants.map(v => `<Value>${escXml(v.label)}</Value>`).join('')}
+          </NameValueList>
+        </VariationSpecificsSet>
+      </Variations>`;
+
+      const body = `<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+        ${creds}
+        <Item>
+          <Title>${escXml(safeTitle)}</Title>
+          <Description><![CDATA[${desc}]]></Description>
+          <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
+          <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
+          <ConditionID>${conditionId}</ConditionID>
+          <Country>US</Country>
+          <Currency>USD</Currency>
+          <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
+          <ListingDuration>GTC</ListingDuration>
+          <ListingType>FixedPriceItem</ListingType>
+          ${picturesXml}
+          ${itemSpecificsXml ? `<ItemSpecifics>${itemSpecificsXml}</ItemSpecifics>` : ''}
+          ${varSpecsXml}
+          <Country>${escXml(sellerCountry)}</Country>
+          <Location>${escXml(sellerLocation)}</Location>
+          ${shippingXml}
+          ${returnXml}
+          ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
+        </Item>
+      </AddFixedPriceItemRequest>`;
+
+      ({ data: xml } = await tradingPost('AddFixedPriceItem', body));
+    } else {
+      // Single listing
+      const body = `<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+        ${creds}
+        <Item>
+          <Title>${escXml(safeTitle)}</Title>
+          <Description><![CDATA[${desc}]]></Description>
+          <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
+          <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
+          <ConditionID>${conditionId}</ConditionID>
+          <Country>${escXml(sellerCountry)}</Country>
+          <Currency>USD</Currency>
+          <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
+          <ListingDuration>GTC</ListingDuration>
+          <ListingType>FixedPriceItem</ListingType>
+          <Quantity>${Number(quantity)}</Quantity>
+          <Location>${escXml(sellerLocation)}</Location>
+          ${picturesXml}
+          ${itemSpecificsXml ? `<ItemSpecifics>${itemSpecificsXml}</ItemSpecifics>` : ''}
+          ${shippingXml}
+          ${returnXml}
+          ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
+        </Item>
+      </AddFixedPriceItemRequest>`;
+
+      ({ data: xml } = await tradingPost('AddFixedPriceItem', body));
+    }
+
+    if (/<Ack>Failure<\/Ack>/.test(xml) || /<Ack>PartialFailure<\/Ack>/.test(xml)) {
+      const allMsgs = [];
+      const errRe = /<Error>([\s\S]*?)<\/Error>/g;
+      let em;
+      while ((em = errRe.exec(xml)) !== null) {
+        const code = em[1].match(/<ErrorCode>([^<]+)<\/ErrorCode>/)?.[1] || '';
+        const long = em[1].match(/<LongMessage>([^<]+)<\/LongMessage>/)?.[1] || '';
+        const short = em[1].match(/<ShortMessage>([^<]+)<\/ShortMessage>/)?.[1] || '';
+        allMsgs.push(`[${code}] ${long || short}`);
+      }
+      const msg = allMsgs.join(' | ') || xml.slice(0, 600);
+      console.error('trading-create-listing failure XML:\n', xml.slice(0, 1200));
+      return res.status(400).json({ error: msg });
+    }
+
+    const listingId = xml.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+    if (!listingId) return res.status(500).json({ error: 'Listing created but could not extract ItemID', raw: xml.slice(0, 500) });
+
+    res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}` });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message || 'Failed to create listing' });
+  }
+});
+
+function escXml(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
 
 // ── API usage stats ────────────────────────────────────────────────────
 router.get('/api-usage', async (req, res) => {
