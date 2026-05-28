@@ -1465,9 +1465,42 @@ router.post('/trading-create-listing', async (req, res) => {
       ? `<PictureDetails>${pics.map(u => `<PictureURL>${escXml(u)}</PictureURL>`).join('')}</PictureDetails>`
       : '';
 
-    // Shipping
+    // Fetch seller's business policies (required when seller has opted into policy management)
+    const h = { Authorization: `Bearer ${token}` };
+    const mid = 'EBAY_US';
+    let fulfillmentPolicyId = null;
+    let returnPolicyId = null;
+    let paymentPolicyId = null;
+    try {
+      const [fulRes, retRes, payRes] = await Promise.all([
+        axios.get(`https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=${mid}`, { headers: h }),
+        axios.get(`https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=${mid}`, { headers: h }),
+        axios.get(`https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=${mid}`, { headers: h }),
+      ]);
+      // Prefer the "USA Buyer" fulfillment policy, else fall back to first available
+      const fuls = fulRes.data.fulfillmentPolicies || [];
+      const usaBuyer = fuls.find(p => /usa.?buyer/i.test(p.name));
+      fulfillmentPolicyId = (usaBuyer || fuls[0])?.fulfillmentPolicyId || null;
+
+      const rets = retRes.data.returnPolicies || [];
+      const returnsAccepted = rets.find(p => /return.*accept|30d/i.test(p.name));
+      returnPolicyId = (returnsAccepted || rets[0])?.returnPolicyId || null;
+
+      const pays = payRes.data.paymentPolicies || [];
+      paymentPolicyId = pays[0]?.paymentPolicyId || null;
+    } catch { /* proceed without business policies — eBay may accept inline */ }
+
+    const sellerProfilesXml = fulfillmentPolicyId
+      ? `<SellerProfiles>
+          <SellerShippingProfile><ShippingProfileID>${fulfillmentPolicyId}</ShippingProfileID></SellerShippingProfile>
+          <SellerReturnProfile>${returnPolicyId ? `<ReturnProfileID>${returnPolicyId}</ReturnProfileID>` : ''}</SellerReturnProfile>
+          ${paymentPolicyId ? `<SellerPaymentProfile><PaymentProfileID>${paymentPolicyId}</PaymentProfileID></SellerPaymentProfile>` : ''}
+        </SellerProfiles>`
+      : '';
+
+    // Inline shipping/return as fallback when no business policies found
     const shipCost = shipping.free ? '0.00' : Number(shipping.cost || 0).toFixed(2);
-    const shippingXml = `<ShippingDetails>
+    const inlineShippingXml = fulfillmentPolicyId ? '' : `<ShippingDetails>
       <ShippingType>Flat</ShippingType>
       <ShippingServiceOptions>
         <ShippingServicePriority>1</ShippingServicePriority>
@@ -1476,15 +1509,12 @@ router.post('/trading-create-listing', async (req, res) => {
       </ShippingServiceOptions>
     </ShippingDetails>`;
 
-    // Return policy
-    const returnXml = returns.accepted
-      ? `<ReturnPolicy>
-          <ReturnsAcceptedOption>ReturnsAccepted</ReturnsAcceptedOption>
-          <RefundOption>MoneyBack</RefundOption>
-          <ReturnsWithinOption>Days_${returns.days || 30}</ReturnsWithinOption>
-          <ShippingCostPaidByOption>${returns.buyerPays ? 'Buyer' : 'Seller'}</ShippingCostPaidByOption>
-        </ReturnPolicy>`
-      : `<ReturnPolicy><ReturnsAcceptedOption>ReturnsNotAccepted</ReturnsAcceptedOption></ReturnPolicy>`;
+    const inlineReturnXml = (fulfillmentPolicyId || !returns.accepted) ? '' : `<ReturnPolicy>
+      <ReturnsAcceptedOption>ReturnsAccepted</ReturnsAcceptedOption>
+      <RefundOption>MoneyBack</RefundOption>
+      <ReturnsWithinOption>Days_${returns.days || 30}</ReturnsWithinOption>
+      <ShippingCostPaidByOption>${returns.buyerPays ? 'Buyer' : 'Seller'}</ShippingCostPaidByOption>
+    </ReturnPolicy>`;
 
     // Description
     const desc = description || buildDescription();
@@ -1536,7 +1566,7 @@ router.post('/trading-create-listing', async (req, res) => {
           <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
           <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
           <ConditionID>${conditionId}</ConditionID>
-          <Country>US</Country>
+          <Country>${escXml(sellerCountry)}</Country>
           <Currency>USD</Currency>
           <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
           <ListingDuration>GTC</ListingDuration>
@@ -1544,10 +1574,10 @@ router.post('/trading-create-listing', async (req, res) => {
           ${picturesXml}
           ${itemSpecificsXml ? `<ItemSpecifics>${itemSpecificsXml}</ItemSpecifics>` : ''}
           ${varSpecsXml}
-          <Country>${escXml(sellerCountry)}</Country>
           <Location>${escXml(sellerLocation)}</Location>
-          ${shippingXml}
-          ${returnXml}
+          ${sellerProfilesXml}
+          ${inlineShippingXml}
+          ${inlineReturnXml}
           ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
         </Item>
       </AddFixedPriceItemRequest>`;
@@ -1572,8 +1602,9 @@ router.post('/trading-create-listing', async (req, res) => {
           <Location>${escXml(sellerLocation)}</Location>
           ${picturesXml}
           ${itemSpecificsXml ? `<ItemSpecifics>${itemSpecificsXml}</ItemSpecifics>` : ''}
-          ${shippingXml}
-          ${returnXml}
+          ${sellerProfilesXml}
+          ${inlineShippingXml}
+          ${inlineReturnXml}
           ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
         </Item>
       </AddFixedPriceItemRequest>`;
