@@ -1640,6 +1640,10 @@ router.post('/trading-create-listing', async (req, res) => {
     // Proactively inject aspects that can be matched from the title (avoids 21919303 on first attempt)
     await injectTitleAspects(catId, aspects, safeTitle);
 
+    // For multi-variation listings, the variantDimension (Color/Size/Style) MUST NOT appear
+    // in ItemSpecifics — eBay error 21916626 fires if the same name appears in both.
+    if (variants?.length && variantDimension) delete aspects[variantDimension];
+
     const buildSpecXml = (asp) => Object.entries(asp)
       .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
       .join('');
@@ -1844,6 +1848,8 @@ router.post('/trading-create-listing', async (req, res) => {
             }
           }
         }
+        // Never let variantDimension sneak back into ItemSpecifics during retry
+        if (variants?.length && variantDimension) delete aspects[variantDimension];
         console.log('trading-create-listing: retry specifics:', JSON.stringify(Object.fromEntries(missingFields.map(f => [f, aspects[f]]))));
         ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
       }
