@@ -371,8 +371,7 @@ router.get('/account-info', async (req, res) => {
   }
 });
 
-// Fetch valid values for all aspects of an eBay category (uses app token — no user auth needed)
-// EBAY_US category tree ID is always 0 — hardcoded to avoid an extra round-trip
+// Fetch valid values + metadata for all aspects of an eBay category
 async function getValidAspectValues(catId) {
   if (!catId) return {};
   try {
@@ -388,7 +387,10 @@ async function getValidAspectValues(catId) {
     );
     const result = {};
     for (const aspect of (specs.aspects || [])) {
-      if (aspect.aspectValues?.length) result[aspect.localizedAspectName] = aspect.aspectValues.map(v => v.localizedValue);
+      result[aspect.localizedAspectName] = {
+        required: aspect.aspectConstraint?.aspectRequired === true,
+        values: (aspect.aspectValues || []).map(v => v.localizedValue),
+      };
     }
     return result;
   } catch (e) {
@@ -397,17 +399,52 @@ async function getValidAspectValues(catId) {
   }
 }
 
-// Fill in item specifics that can be inferred from the title (runs before first attempt)
+// Word-boundary match: avoids "SK" matching inside "skimmer", etc.
+function matchAspectValue(vals, title) {
+  return vals.find(v => {
+    if (!v) return false;
+    const esc = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${esc}\\b`, 'i').test(title);
+  }) || null;
+}
+
+// Use Claude to pick the best Type value when title matching fails
+async function pickBestAspectValue(fieldName, validValues, title) {
+  if (!validValues.length) return null;
+  if (validValues.length === 1) return validValues[0];
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 30,
+      messages: [{ role: 'user', content: `Product: "${title}"\nBest eBay "${fieldName}" from list: ${validValues.join(', ')}\nReply with ONLY the exact value from the list.` }],
+    });
+    const chosen = (msg.content[0]?.text || '').trim().replace(/^["']|["']$/g, '');
+    return validValues.find(v => v.toLowerCase() === chosen.toLowerCase()) || validValues[0];
+  } catch {
+    return validValues[0];
+  }
+}
+
+// Inject required item specifics before the first listing attempt
+// Skips Brand (handled separately) and uses word-boundary matching + Claude fallback
 async function injectTitleAspects(catId, aspects, title) {
   const catAspects = await getValidAspectValues(catId);
   if (!Object.keys(catAspects).length) return;
-  const tl = title.toLowerCase();
-  for (const [name, vals] of Object.entries(catAspects)) {
-    if (aspects[name]) continue; // already set
-    const matched = vals.find(v => v && tl.includes(v.toLowerCase()));
+  for (const [name, info] of Object.entries(catAspects)) {
+    if (aspects[name]) continue;
+    if (name === 'Brand') continue; // Brand is set from specs, skip to avoid false title matches
+    const matched = matchAspectValue(info.values, title);
     if (matched) {
       aspects[name] = [matched];
-      console.log(`injectTitleAspects: added ${name}="${matched}" from title`);
+      console.log(`injectTitleAspects: matched ${name}="${matched}"`);
+    } else if (info.required && info.values.length) {
+      // Required field with no title match — use Claude to pick the best valid value
+      const best = await pickBestAspectValue(name, info.values, title);
+      if (best) {
+        aspects[name] = [best];
+        console.log(`injectTitleAspects: Claude picked ${name}="${best}"`);
+      }
     }
   }
 }
@@ -1122,13 +1159,13 @@ router.get('/debug/aspects', async (req, res) => {
   if (!title) return res.status(400).json({ error: 'title is required' });
   const safeT = sanitizeTitle(title);
   const catId = qCatId || await lookupCategory(safeT, null);
-  const aspects = {};
   const catAspects = await getValidAspectValues(catId);
-  const tl = safeT.toLowerCase();
   const injected = {};
-  for (const [name, vals] of Object.entries(catAspects)) {
-    const matched = vals.find(v => v && tl.includes(v.toLowerCase()));
+  for (const [name, info] of Object.entries(catAspects)) {
+    if (name === 'Brand') continue;
+    const matched = matchAspectValue(info.values, safeT);
     if (matched) injected[name] = matched;
+    else if (info.required && info.values.length) injected[`${name}(claude-needed)`] = info.values.slice(0, 3).join(' / ');
   }
   res.json({ safeTitle: safeT, catId, aspectsApiWorked: Object.keys(catAspects).length > 0, injected });
 });
@@ -1691,18 +1728,19 @@ router.post('/trading-create-listing', async (req, res) => {
         }
       }
       if (missingFields.length) {
-        const validVals = await getValidAspectValues(catId);
-        const tl = safeTitle.toLowerCase();
+        const catAspects = await getValidAspectValues(catId);
         for (const f of missingFields) {
           if (f === 'Brand') {
-            aspects[f] = ['Unbranded']; // fall back from rejected real brand
+            aspects[f] = ['Unbranded'];
           } else {
-            const allowed = validVals[f] || [];
-            // Match valid value from title, or use first valid value — never 'Other' unless it's actually valid
-            const matched = allowed.find(v => v && tl.includes(v.toLowerCase()));
-            if (matched) aspects[f] = [matched];
-            else if (allowed.length) aspects[f] = [allowed[0]];
-            // else: skip — sending an invalid value causes another 21919303
+            const info = catAspects[f] || { values: [] };
+            const matched = matchAspectValue(info.values, safeTitle);
+            if (matched) {
+              aspects[f] = [matched];
+            } else if (info.values.length) {
+              const best = await pickBestAspectValue(f, info.values, safeTitle);
+              if (best) aspects[f] = [best];
+            }
           }
         }
         console.log('trading-create-listing: retry specifics:', JSON.stringify(Object.fromEntries(missingFields.map(f => [f, aspects[f]]))));
