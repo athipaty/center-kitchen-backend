@@ -287,6 +287,11 @@ router.delete('/procurement/:id', requireAuth, async (req, res) => {
 // e-GP RSS proxy — with in-memory cache so stale data shows when feed is down
 const _egpCache = {}  // keyed by anounceType ('' = all)
 
+// Detect maintenance/error text that e-GP embeds as fake RSS items
+function isMaintenanceText(str) {
+  return /ไม่พร้อมให้บริการ|ปิดปรับปรุง|not available|maintenance/i.test(str || '')
+}
+
 router.get('/egp-rss', async (req, res) => {
   const axios   = require('axios')
   const cheerio = require('cheerio')
@@ -296,8 +301,13 @@ router.get('/egp-rss', async (req, res) => {
   try {
     const params = { deptsubId: DEPT_SUB_ID }
     if (req.query.anounceType) params.anounceType = req.query.anounceType
-    const { data: xml } = await axios.get(BASE_URL, { params, timeout: 15000, maxRedirects: 5 })
+    const { data: xml } = await axios.get(BASE_URL, { params, timeout: 20000, maxRedirects: 5 })
     const $ = cheerio.load(xml, { xmlMode: true })
+
+    // Check the channel title/description for maintenance notices
+    const channelTitle = $('channel > title').first().text()
+    const channelDesc  = $('channel > description').first().text()
+
     const items = []
     $('item').each((_, el) => {
       items.push({
@@ -307,11 +317,25 @@ router.get('/egp-rss', async (req, res) => {
         desc:  $(el).find('description').text(),
       })
     })
+
+    // Detect maintenance: e-GP returns fake items with maintenance text as their titles
+    const allText = [channelTitle, channelDesc, ...items.map(i => i.title)].join(' ')
+    if (isMaintenanceText(allText) || items.every(i => isMaintenanceText(i.title))) {
+      // Build a human-readable message from whatever e-GP sent back
+      const notice = items.map(i => i.title).filter(Boolean).join(' — ') || channelTitle || 'ระบบ e-GP ไม่พร้อมให้บริการในขณะนี้'
+      // Serve stale cache so the page still shows old data during maintenance
+      if (_egpCache[cacheKey]?.items?.length > 0) {
+        return res.json({ items: _egpCache[cacheKey].items, stale: true, staleAt: _egpCache[cacheKey].cachedAt, notice })
+      }
+      return res.status(503).json({ maintenance: true, notice, hours: '17:01–08:59 น.' })
+    }
+
+    // Real data — update cache and return
     _egpCache[cacheKey] = { items, cachedAt: new Date().toISOString() }
-    res.json(items)
+    res.json({ items })
   } catch (err) {
-    if (_egpCache[cacheKey]) {
-      return res.json(_egpCache[cacheKey].items)
+    if (_egpCache[cacheKey]?.items?.length > 0) {
+      return res.json({ items: _egpCache[cacheKey].items, stale: true, staleAt: _egpCache[cacheKey].cachedAt })
     }
     res.status(502).json({ error: 'ไม่สามารถเชื่อมต่อระบบ e-GP ได้: ' + err.message })
   }
