@@ -57,9 +57,47 @@ function parseVariants(data) {
   }).filter(Boolean);
 }
 
-async function fetchProduct(url) {
+// Lightweight direct price check — no ScraperAPI credits used.
+// Returns { price, currency } or null if blocked/failed.
+async function tryDirectPrice(url) {
+  try {
+    const { data: html } = await axios.get(url, {
+      timeout: 12000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    if (html.includes('validateCaptcha') || html.includes('robot')) return null;
+    const $ = require('cheerio').load(html);
+    let price = null;
+    for (const sel of ['.priceToPay .a-offscreen', '.apexPriceToPay .a-offscreen', '#priceblock_ourprice', '#price_inside_buybox', '.a-price .a-offscreen']) {
+      price = parsePrice($(sel).first().attr('content') || $(sel).first().text());
+      if (price) break;
+    }
+    if (!price) return null;
+    let currency = '$';
+    for (const sym of ['฿', '£', '€', '$']) {
+      if (html.slice(0, 8000).includes(sym)) { currency = sym; break; }
+    }
+    return { price, currency };
+  } catch { return null; }
+}
+
+async function fetchProduct(url, { priceOnly = false } = {}) {
   const scraperKey = process.env.SCRAPER_API_KEY;
   const asin = extractAsin(url);
+
+  // Price-only mode: try direct curl first to save ScraperAPI credits
+  if (priceOnly && scraperKey && asin) {
+    const direct = await tryDirectPrice(url);
+    if (direct) {
+      console.log(`scraper: direct price OK for ${asin} ($${direct.price}) — no ScraperAPI credit used`);
+      return { title: null, price: direct.price, currency: direct.currency, image: null, images: [], upc: null, variants: [], isPrime: null, variant: null, specs: {} };
+    }
+    console.log(`scraper: direct fetch blocked for ${asin} — falling back to ScraperAPI`);
+  }
 
   // Use ScraperAPI structured endpoint when key + ASIN available
   if (scraperKey && asin) {

@@ -5,13 +5,21 @@ const { syncEbayPrice, syncEbayQty } = require("./ebayPriceSync");
 
 let io = null;
 
-function randomInterval() {
-  // Random ms between 2 and 4 hours
-  return (Math.random() * 2 + 2) * 3600 * 1000;
+// Adaptive interval based on price stability:
+// - Recently changed (last 3 days)  → 3–6h  (watch actively)
+// - Unchanged 3–7 days              → 8–14h (moderate)
+// - Unchanged 7+ days               → 20–28h (slow — saves ~4× ScraperAPI calls)
+function adaptiveInterval(product) {
+  const daysSinceChange = product.history?.length >= 2
+    ? (Date.now() - new Date(product.history[product.history.length - 1].createdAt || 0)) / 86400000
+    : 0;
+  if (daysSinceChange >= 7)  return (Math.random() * 8  + 20) * 3600 * 1000; // 20–28h
+  if (daysSinceChange >= 3)  return (Math.random() * 6  + 8)  * 3600 * 1000; // 8–14h
+  return                            (Math.random() * 3  + 3)  * 3600 * 1000; // 3–6h
 }
 
-function nextCheckDate() {
-  return new Date(Date.now() + randomInterval());
+function nextCheckDate(product) {
+  return new Date(Date.now() + adaptiveInterval(product));
 }
 
 function slowRetryDate() {
@@ -21,15 +29,19 @@ function slowRetryDate() {
 
 async function checkProduct(p) {
   try {
-    const info = await fetchProduct(p.url);
+    // Use price-only direct fetch for routine checks — saves ScraperAPI credits.
+    // Full scrape (priceOnly=false) only when metadata is missing or on first check.
+    const needsFullScrape = !p.title || !p.image || !p.upc || (p.failCount || 0) > 0;
+    const info = await fetchProduct(p.url, { priceOnly: !needsFullScrape });
     const oldPrice = p.current;
     const dropped = info.price < oldPrice;
 
     p.current = info.price;
     if (info.price < p.lowest) p.lowest = info.price;
-    if (info.image && !p.image) p.image = info.image;
-    if (info.upc && !p.upc) p.upc = info.upc;
-    if (info.isPrime !== undefined) p.isPrime = info.isPrime;
+    if (info.image  && !p.image)  p.image  = info.image;
+    if (info.images?.length && (!p.images?.length)) p.images = info.images;
+    if (info.upc    && !p.upc)    p.upc    = info.upc;
+    if (info.isPrime !== null && info.isPrime !== undefined) p.isPrime = info.isPrime;
     if (info.variant) p.variant = info.variant;
     if (info.specs && Object.keys(info.specs).length) p.specs = info.specs;
     if (info.price !== oldPrice) {
@@ -56,7 +68,7 @@ async function checkProduct(p) {
         if (io) io.emit('tracker:ebay:sync:fail', { productId: String(p._id), error: ebayErr.message });
       }
     }
-    p.nextCheck = nextCheckDate();
+    p.nextCheck = nextCheckDate(p);
     await p.save();
 
     if (dropped && io) {
@@ -69,10 +81,10 @@ async function checkProduct(p) {
 
     if (err.code === 'OUT_OF_STOCK') {
       p.status = 'out_of_stock';
-      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate();
+      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate(p);
     } else {
       p.status = p.failCount >= 3 ? 'unavailable' : 'error';
-      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate();
+      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate(p);
     }
 
     // Push qty=0 to eBay so the variant shows as Out of Stock
@@ -129,7 +141,7 @@ async function triggerNow() {
 
 // Set nextCheck on a newly added product
 function scheduleNew(product) {
-  product.nextCheck = nextCheckDate();
+  product.nextCheck = nextCheckDate(product);
 }
 
 function getNextCheck() {
