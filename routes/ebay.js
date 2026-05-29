@@ -1301,7 +1301,12 @@ Rules for content: NO competitor names (amazon/ebay/walmart), NO fake reviews, N
 
     let content;
     try {
-      content = JSON.parse(msg.content[0]?.text?.trim() || '{}');
+      // Strip markdown code fences Claude sometimes adds (```json ... ```)
+      const raw = (msg.content[0]?.text || '{}')
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/i, '')
+        .trim();
+      content = JSON.parse(raw);
     } catch {
       return res.status(500).json({ error: 'Failed to parse AI response' });
     }
