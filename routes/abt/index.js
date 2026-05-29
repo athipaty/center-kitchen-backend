@@ -304,16 +304,35 @@ async function egpCacheWrite(key, items) {
   )
 }
 
+async function fetchEgpXml(params) {
+  const axios = require('axios')
+  // Try up to 2 times — first request often wakes up the Render server + e-GP
+  let lastErr
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { data } = await require('axios').get(
+        'https://process.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml',
+        { params, timeout: 30000, maxRedirects: 5,
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' } }
+      )
+      return data
+    } catch (err) {
+      lastErr = err
+      if (attempt === 0) await new Promise(r => setTimeout(r, 2000)) // brief pause before retry
+    }
+  }
+  throw lastErr
+}
+
 router.get('/egp-rss', async (req, res) => {
-  const axios   = require('axios')
-  const cheerio = require('cheerio')
+  const cheerio  = require('cheerio')
   const DEPT_SUB_ID = '6560105'
-  const BASE_URL = 'https://process.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml'
   const cacheKey = req.query.anounceType || ''
+  const now      = new Date().toISOString()
   try {
     const params = { deptsubId: DEPT_SUB_ID }
     if (req.query.anounceType) params.anounceType = req.query.anounceType
-    const { data: xml } = await axios.get(BASE_URL, { params, timeout: 20000, maxRedirects: 5 })
+    const xml = await fetchEgpXml(params)
     const $ = cheerio.load(xml, { xmlMode: true })
 
     const channelTitle = $('channel > title').first().text()
@@ -344,7 +363,7 @@ router.get('/egp-rss', async (req, res) => {
 
     // Real data — persist to MongoDB so it survives server restarts
     await egpCacheWrite(cacheKey, items)
-    res.json({ items })
+    res.json({ items, fetchedAt: now, live: true })
   } catch (err) {
     const cached = await egpCacheRead(cacheKey).catch(() => null)
     if (cached?.items?.length > 0) {
