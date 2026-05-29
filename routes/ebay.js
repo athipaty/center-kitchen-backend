@@ -1417,6 +1417,70 @@ router.patch('/offer/:offerId/price', async (req, res) => {
   }
 });
 
+// ── Update variation photos on an existing multi-variation listing ──
+router.post('/listing/variation-photos', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { listingId, variantDimension, variants } = req.body;
+    // variants: [{ label, image }]
+    if (!listingId || !variants?.length)
+      return res.status(400).json({ error: 'listingId and variants required' });
+
+    const cleanId = String(listingId).trim().replace(/\D/g, '');
+    if (!cleanId) return res.status(400).json({ error: 'Invalid listing ID' });
+
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    const withImages = variants.filter(v => v.image);
+    if (!withImages.length) return res.status(400).json({ error: 'No variant images provided' });
+
+    const dimName = variantDimension || 'Style';
+    const pictureSets = withImages.map(v => `
+      <VariationSpecificPictureSet>
+        <VariationSpecificValue>${escXml(v.label)}</VariationSpecificValue>
+        <PictureURL>${escXml(v.image)}</PictureURL>
+      </VariationSpecificPictureSet>`).join('');
+
+    const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      ${creds}
+      <Item>
+        <ItemID>${cleanId}</ItemID>
+        <Variations>
+          <Pictures>
+            <VariationSpecificName>${escXml(dimName)}</VariationSpecificName>
+            ${pictureSets}
+          </Pictures>
+        </Variations>
+      </Item>
+    </ReviseFixedPriceItemRequest>`;
+
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?>${body}`,
+      { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem' } }
+    );
+
+    if (/<Ack>Failure<\/Ack>/.test(xml)) {
+      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
+        || 'eBay error';
+      return res.status(400).json({ error: msg });
+    }
+
+    console.log(`variation-photos: updated ${withImages.length} variants on listing ${cleanId}`);
+    res.json({ ok: true, updated: withImages.length });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message || 'Failed to update variation photos' });
+  }
+});
+
 // ── Update price — any listing via Trading API ─────────────────────
 // Handles both single listings and multi-variation (size/color) listings.
 router.post('/listing/price', async (req, res) => {
