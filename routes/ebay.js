@@ -210,6 +210,7 @@ router.get('/auth/login', (req, res) => {
     'https://api.ebay.com/oauth/api_scope/sell.account',
     'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
     'https://api.ebay.com/oauth/api_scope/sell.finances',
+    'https://api.ebay.com/oauth/api_scope/sell.analytics.readonly',
   ].join(' ');
   const url = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(process.env.EBAY_APP_ID)}&redirect_uri=${encodeURIComponent(process.env.EBAY_RUNAME)}&response_type=code&scope=${encodeURIComponent(scope)}`;
   res.redirect(url);
@@ -2356,9 +2357,9 @@ router.get('/listing/:id/prices', async (req, res) => {
   }
 });
 
-// ── Get eBay listing view count (HitCount via Trading API GetItem) ───
+// ── Get eBay listing view count (Analytics API — real Seller Hub views) ──
 const viewsCache = new Map(); // listingId → { count, expiresAt }
-const VIEWS_TTL = 60 * 60 * 1000; // 1 hour — eBay updates HitCount ~daily
+const VIEWS_TTL = 60 * 60 * 1000; // 1 hour cache
 
 router.get('/listing/:id/views', async (req, res) => {
   const cleanId = String(req.params.id).replace(/\D/g, '');
@@ -2371,25 +2372,34 @@ router.get('/listing/:id/views', async (req, res) => {
 
   try {
     const token = await getAccessToken();
-    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
-      `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ItemID>${cleanId}</ItemID><DetailLevel>ReturnAll</DetailLevel></GetItemRequest>`,
-      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
-    );
 
-    if (/<Ack>Failure<\/Ack>/.test(xml)) {
-      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
-      return res.status(400).json({ error: msg });
+    // Query last 90 days — enough to capture lifetime views for recent listings
+    const now = new Date();
+    const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+
+    const { data } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
+      headers: { Authorization: `Bearer ${token}` },
+      params: {
+        dimension: 'DAY',
+        metric: 'LISTING_VIEWS_TOTAL',
+        filter: `listing_id:{${cleanId}},date_range:[${fmt(start)}..${fmt(now)}]`,
+      },
+    });
+
+    // Sum daily view counts across all records
+    let views = 0;
+    for (const record of (data.records || [])) {
+      const m = (record.metricData || []).find(x => x.metricKey === 'LISTING_VIEWS_TOTAL');
+      if (m?.value) views += Number(m.value);
     }
 
-    const hitMatch = xml.match(/<HitCount>(\d+)<\/HitCount>/);
-    const count = hitMatch ? parseInt(hitMatch[1], 10) : 0;
-
-    viewsCache.set(cleanId, { count, expiresAt: Date.now() + VIEWS_TTL });
-    res.json({ listingId: cleanId, views: count });
+    viewsCache.set(cleanId, { count: views, expiresAt: Date.now() + VIEWS_TTL });
+    res.json({ listingId: cleanId, views });
   } catch (err) {
     if (err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, detail: err.response?.data });
   }
 });
 
