@@ -105,6 +105,45 @@ router.patch("/:id/ebay", async (req, res) => {
   }
 });
 
+// POST re-fetch all hi-res images for a product directly from Amazon page
+// Uses a lightweight regex extraction (no ScraperAPI needed) and updates the DB
+router.post("/:id/refresh-images", async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    const axios = require("axios");
+    const { data: html } = await axios.get(product.url, {
+      timeout: 15000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    });
+
+    // Extract all hiRes image URLs from Amazon page JS data
+    const hiResMatches = [...html.matchAll(/"hiRes"\s*:\s*"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/g)];
+    const hiResUrls = [...new Set(hiResMatches.map(m => m[1]))];
+
+    // Fallback: large images from img tags
+    let images = hiResUrls;
+    if (!images.length) {
+      const largMatches = [...html.matchAll(/https:\/\/m\.media-amazon\.com\/images\/I\/[A-Za-z0-9]+\._[A-Z_0-9]+_\.jpg/g)];
+      images = [...new Set(largMatches.map(m => m[0]))];
+    }
+
+    if (images.length) {
+      await Product.findByIdAndUpdate(product._id, { images });
+      product.images = images;
+    }
+
+    res.json({ ok: true, count: images.length, images });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // DELETE remove a product
 router.delete("/:id", async (req, res) => {
   try {
