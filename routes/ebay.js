@@ -1363,11 +1363,11 @@ router.get('/selling-limits', async (req, res) => {
 
     const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
-    // Get active count + sold list (last 31 days)
+    // Fetch all active listings (full data) + sold list
     const xml = `<?xml version="1.0" encoding="utf-8"?>
       <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
         ${creds}
-        <ActiveList><Include>true</Include><Pagination><EntriesPerPage>1</EntriesPerPage></Pagination></ActiveList>
+        <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList>
         <SoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
       </GetMyeBaySellingRequest>`;
 
@@ -1376,44 +1376,43 @@ router.get('/selling-limits', async (req, res) => {
         'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' },
     });
 
-    // Active count from pagination
-    const activeCount = parseInt(xmlResp.match(/<ActiveList>[\s\S]*?<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/)?.[1] || '0');
-
-    // Sold items — parse order transactions for revenue
-    let soldCount = 0;
+    // eBay counts total QUANTITY across all listing variations (not just number of listings)
+    // For each item: sum(variation.Quantity + variation.QuantitySold) across all variations
+    let totalQtyListed = 0;
     let soldRevenueUsd = 0;
-    const orderRe = /<Order>([\s\S]*?)<\/Order>/g;
-    let om;
-    while ((om = orderRe.exec(xmlResp)) !== null) {
-      const block = om[1];
-      const qty = parseInt(block.match(/<QuantityPurchased>(\d+)<\/QuantityPurchased>/)?.[1] || '1');
-      const priceMatch = block.match(/<AmountPaid[^>]*>([\d.]+)<\/AmountPaid>/)
-        || block.match(/<Total[^>]*>([\d.]+)<\/Total>/);
-      const priceUsd = parseFloat(priceMatch?.[1] || '0');
-      soldCount += qty;
-      soldRevenueUsd += priceUsd;
-    }
-    // Fallback: count via Item blocks if no Order blocks
-    if (!soldCount) {
-      const itemRe2 = /<Item>([\s\S]*?)<\/Item>/g;
-      let im2;
-      while ((im2 = itemRe2.exec(xmlResp)) !== null) {
-        const b = im2[1];
-        const qty = parseInt(b.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
-        if (!qty) continue;
-        const priceMatch = b.match(/<ConvertedAmountPaid[^>]*>([\d.]+)<\/ConvertedAmountPaid>/)
-          || b.match(/<AmountPaid[^>]*>([\d.]+)<\/AmountPaid>/)
-          || b.match(/<SalePrice[^>]*>([\d.]+)<\/SalePrice>/)
-          || b.match(/<CurrentPrice[^>]*>([\d.]+)<\/CurrentPrice>/);
-        soldRevenueUsd += parseFloat(priceMatch?.[1] || '0') * qty;
-        soldCount += qty;
+    let soldCount = 0;
+    const itemBlocks = [...xmlResp.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
+    for (const [, block] of itemBlocks) {
+      const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
+      if (varBlocks.length) {
+        for (const [, vb] of varBlocks) {
+          const qty  = parseInt(vb.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
+          const sold = parseInt(vb.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+          totalQtyListed += qty + sold;
+          soldCount += sold;
+          // Revenue: sold qty × listing price (USD)
+          if (sold) {
+            const price = parseFloat(vb.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
+            soldRevenueUsd += price * sold;
+          }
+        }
+      } else {
+        const qty  = parseInt(block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
+        const sold = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+        totalQtyListed += qty + sold;
+        soldCount += sold;
+        if (sold) {
+          const price = parseFloat(block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
+          soldRevenueUsd += price * sold;
+        }
       }
     }
 
-    // eBay limits count: active + sold this month
-    const usedItems = activeCount + soldCount;
-    const usedRevUsd = soldRevenueUsd; // revenue only from sold items
+    const usedItems  = totalQtyListed;
+    const usedRevUsd = soldRevenueUsd;
     const revLimitUsd = revLimitSgd * sgdToUsd;
+
+    console.log(`selling-limits: ${usedItems} items listed, ${soldCount} sold, $${usedRevUsd.toFixed(2)} revenue`);
 
     res.json({
       items:   { used: usedItems,   limit: itemLimit,    remaining: Math.max(0, itemLimit - usedItems) },
