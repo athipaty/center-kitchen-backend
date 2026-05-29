@@ -88,7 +88,11 @@ async function fetchAndCache(anounceType) {
   const fresh      = items.filter(i => !knownLinks.has(i.link))
   if (fresh.length === 0) return { ok: true, added: 0, total: oldItems.length }
 
-  const merged = [...fresh, ...oldItems]
+  const merged = [...fresh, ...oldItems].sort((a, b) => {
+    const da = a.date ? new Date(a.date) : new Date(0)
+    const db = b.date ? new Date(b.date) : new Date(0)
+    return db - da
+  })
   await AbtSettings.findOneAndUpdate(
     { key: `egp_cache_${anounceType}` },
     { value: { items: merged, cachedAt: new Date().toISOString() } },

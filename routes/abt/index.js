@@ -414,6 +414,14 @@ async function enrichEgpItem(item) {
   }
 }
 
+function sortByDateDesc(items) {
+  return [...items].sort((a, b) => {
+    const da = a.date ? new Date(a.date) : new Date(0)
+    const db = b.date ? new Date(b.date) : new Date(0)
+    return db - da
+  })
+}
+
 async function egpCacheWrite(key, newItems) {
   // Merge with existing cache so we accumulate all announcements over time.
   const existing   = await egpCacheRead(key)
@@ -430,7 +438,7 @@ async function egpCacheWrite(key, newItems) {
   }
   const rest = fresh.slice(5)  // unenriched tail (will be enriched next cron run)
 
-  const merged = [...enriched, ...rest, ...oldItems]
+  const merged = sortByDateDesc([...enriched, ...rest, ...oldItems])
 
   await AbtSettings.findOneAndUpdate(
     { key: `egp_cache_${key}` },
