@@ -1703,6 +1703,42 @@ router.patch('/offer/:offerId/price', async (req, res) => {
   }
 });
 
+// ── Revise description on an existing listing ──────────────────────
+router.post('/listing/:id/revise-description', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    const { description } = req.body;
+    if (!cleanId) return res.status(400).json({ error: 'Invalid listing ID' });
+    if (!description) return res.status(400).json({ error: 'description is required' });
+
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      ${creds}
+      <Item>
+        <ItemID>${cleanId}</ItemID>
+        <Description><![CDATA[${description}]]></Description>
+      </Item>
+    </ReviseFixedPriceItemRequest>`;
+
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?>${body}`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem', 'Content-Type': 'text/xml' } }
+    );
+
+    if (/<Ack>Failure<\/Ack>/.test(xml)) {
+      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+      return res.status(400).json({ error: msg });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Update variation photos on an existing multi-variation listing ──
 router.post('/listing/variation-photos', async (req, res) => {
   try {
