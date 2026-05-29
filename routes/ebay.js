@@ -1345,6 +1345,88 @@ router.get('/sold', async (req, res) => {
   }
 });
 
+// ── Monthly selling limits usage ──────────────────────────────────
+router.get('/selling-limits', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+
+    // Fetch SGD → USD rate (Frankfurter is free, no key needed)
+    let sgdToUsd = 0.74;
+    try {
+      const { data: fx } = await axios.get('https://api.frankfurter.app/latest?from=SGD&to=USD', { timeout: 5000 });
+      sgdToUsd = fx.rates?.USD || 0.74;
+    } catch {}
+
+    // Monthly limits (configurable via env, sensible defaults from user's account)
+    const itemLimit    = parseInt(process.env.EBAY_ITEM_LIMIT       || '200');
+    const revLimitSgd  = parseFloat(process.env.EBAY_REVENUE_LIMIT_SGD || '8958.60');
+
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    // Get active count + sold list (last 31 days)
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+      <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+        ${creds}
+        <ActiveList><Include>true</Include><Pagination><EntriesPerPage>1</EntriesPerPage></Pagination></ActiveList>
+        <SoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
+      </GetMyeBaySellingRequest>`;
+
+    const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
+      headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+        'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' },
+    });
+
+    // Active count from pagination
+    const activeCount = parseInt(xmlResp.match(/<ActiveList>[\s\S]*?<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/)?.[1] || '0');
+
+    // Sold items — parse order transactions for revenue
+    let soldCount = 0;
+    let soldRevenueUsd = 0;
+    const orderRe = /<Order>([\s\S]*?)<\/Order>/g;
+    let om;
+    while ((om = orderRe.exec(xmlResp)) !== null) {
+      const block = om[1];
+      const qty = parseInt(block.match(/<QuantityPurchased>(\d+)<\/QuantityPurchased>/)?.[1] || '1');
+      const priceMatch = block.match(/<AmountPaid[^>]*>([\d.]+)<\/AmountPaid>/)
+        || block.match(/<Total[^>]*>([\d.]+)<\/Total>/);
+      const priceUsd = parseFloat(priceMatch?.[1] || '0');
+      soldCount += qty;
+      soldRevenueUsd += priceUsd;
+    }
+    // Fallback: count via Item blocks if no Order blocks
+    if (!soldCount) {
+      const itemRe2 = /<Item>([\s\S]*?)<\/Item>/g;
+      let im2;
+      while ((im2 = itemRe2.exec(xmlResp)) !== null) {
+        const b = im2[1];
+        const qty = parseInt(b.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+        if (!qty) continue;
+        const priceMatch = b.match(/<ConvertedAmountPaid[^>]*>([\d.]+)<\/ConvertedAmountPaid>/)
+          || b.match(/<AmountPaid[^>]*>([\d.]+)<\/AmountPaid>/)
+          || b.match(/<SalePrice[^>]*>([\d.]+)<\/SalePrice>/)
+          || b.match(/<CurrentPrice[^>]*>([\d.]+)<\/CurrentPrice>/);
+        soldRevenueUsd += parseFloat(priceMatch?.[1] || '0') * qty;
+        soldCount += qty;
+      }
+    }
+
+    // eBay limits count: active + sold this month
+    const usedItems = activeCount + soldCount;
+    const usedRevUsd = soldRevenueUsd; // revenue only from sold items
+    const revLimitUsd = revLimitSgd * sgdToUsd;
+
+    res.json({
+      items:   { used: usedItems,   limit: itemLimit,    remaining: Math.max(0, itemLimit - usedItems) },
+      revenue: { usedUsd: Math.round(usedRevUsd * 100) / 100, limitUsd: Math.round(revLimitUsd * 100) / 100,
+                 remaining: Math.round(Math.max(0, revLimitUsd - usedRevUsd) * 100) / 100, rate: sgdToUsd },
+    });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── All active listings via Trading API (includes manually created) ─
 router.get('/all-active-listings', async (req, res) => {
   try {
