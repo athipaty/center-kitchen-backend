@@ -1,5 +1,6 @@
 ﻿const express = require('express')
-const router = express.Router()
+const crypto  = require('crypto')
+const router  = express.Router()
 const multer = require('multer')
 const cloudinary = require('cloudinary').v2
 const { CloudinaryStorage } = require('multer-storage-cloudinary')
@@ -177,7 +178,7 @@ router.post('/news', requireAuth, async (req, res) => {
 
 router.put('/news/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtNews.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtNews.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -187,7 +188,8 @@ router.put('/news/:id', requireAuth, async (req, res) => {
 
 router.delete('/news/:id', requireAuth, async (req, res) => {
   try {
-    await AbtNews.findByIdAndDelete(req.params.id)
+    const item = await AbtNews.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -220,7 +222,7 @@ router.post('/announcements', requireAuth, async (req, res) => {
 
 router.put('/announcements/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtAnnouncement.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtAnnouncement.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -230,7 +232,8 @@ router.put('/announcements/:id', requireAuth, async (req, res) => {
 
 router.delete('/announcements/:id', requireAuth, async (req, res) => {
   try {
-    await AbtAnnouncement.findByIdAndDelete(req.params.id)
+    const item = await AbtAnnouncement.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -263,7 +266,7 @@ router.post('/procurement', requireAuth, async (req, res) => {
 
 router.put('/procurement/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtProcurement.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtProcurement.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -273,7 +276,8 @@ router.put('/procurement/:id', requireAuth, async (req, res) => {
 
 router.delete('/procurement/:id', requireAuth, async (req, res) => {
   try {
-    await AbtProcurement.findByIdAndDelete(req.params.id)
+    const item = await AbtProcurement.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -341,7 +345,7 @@ router.post('/staff', requireAuth, async (req, res) => {
 
 router.put('/staff/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtStaff.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtStaff.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -351,7 +355,8 @@ router.put('/staff/:id', requireAuth, async (req, res) => {
 
 router.delete('/staff/:id', requireAuth, async (req, res) => {
   try {
-    await AbtStaff.findByIdAndDelete(req.params.id)
+    const item = await AbtStaff.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -395,7 +400,7 @@ router.post('/travel', requireAuth, async (req, res) => {
 
 router.put('/travel/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtTravel.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtTravel.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -405,7 +410,8 @@ router.put('/travel/:id', requireAuth, async (req, res) => {
 
 router.delete('/travel/:id', requireAuth, async (req, res) => {
   try {
-    await AbtTravel.findByIdAndDelete(req.params.id)
+    const item = await AbtTravel.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -449,7 +455,7 @@ router.post('/products', requireAuth, async (req, res) => {
 
 router.put('/products/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtProduct.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtProduct.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -459,7 +465,8 @@ router.put('/products/:id', requireAuth, async (req, res) => {
 
 router.delete('/products/:id', requireAuth, async (req, res) => {
   try {
-    await AbtProduct.findByIdAndDelete(req.params.id)
+    const item = await AbtProduct.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -519,7 +526,7 @@ router.post('/procurement-plans', requireAuth, async (req, res) => {
 
 router.put('/procurement-plans/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtProcurementPlan.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtProcurementPlan.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -529,7 +536,8 @@ router.put('/procurement-plans/:id', requireAuth, async (req, res) => {
 
 router.delete('/procurement-plans/:id', requireAuth, async (req, res) => {
   try {
-    await AbtProcurementPlan.findByIdAndDelete(req.params.id)
+    const item = await AbtProcurementPlan.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -575,7 +583,7 @@ router.post('/oit', requireAuth, async (req, res) => {
 
 router.put('/oit/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtOIT.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtOIT.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -585,7 +593,8 @@ router.put('/oit/:id', requireAuth, async (req, res) => {
 
 router.delete('/oit/:id', requireAuth, async (req, res) => {
   try {
-    await AbtOIT.findByIdAndDelete(req.params.id)
+    const item = await AbtOIT.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -631,7 +640,7 @@ router.post('/eservice-types', requireAuth, async (req, res) => {
 
 router.put('/eservice-types/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtEServiceType.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtEServiceType.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -641,7 +650,8 @@ router.put('/eservice-types/:id', requireAuth, async (req, res) => {
 
 router.delete('/eservice-types/:id', requireAuth, async (req, res) => {
   try {
-    await AbtEServiceType.findByIdAndDelete(req.params.id)
+    const item = await AbtEServiceType.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -656,7 +666,7 @@ function genRequestNo(prefix) {
   const now = new Date()
   const y = String(now.getFullYear() + 543).slice(2)
   const m = String(now.getMonth() + 1).padStart(2, '0')
-  const rand = String(Math.floor(Math.random() * 9000) + 1000)
+  const rand = String(crypto.randomInt(1000, 10000))
   return `${prefix}${y}${m}${rand}`
 }
 
@@ -696,7 +706,7 @@ router.put('/eservice/:id', requireAuth, async (req, res) => {
   try {
     const update = { ...req.body }
     if (update.status === 'done' || update.status === 'rejected') update.closedAt = new Date()
-    const item = await AbtEService.findByIdAndUpdate(req.params.id, update, { new: true })
+    const item = await AbtEService.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -744,7 +754,7 @@ router.put('/complaints/:id', requireAuth, async (req, res) => {
   try {
     const update = { ...req.body }
     if (update.status === 'done' || update.status === 'rejected') update.closedAt = new Date()
-    const item = await AbtComplaint.findByIdAndUpdate(req.params.id, update, { new: true })
+    const item = await AbtComplaint.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -779,7 +789,7 @@ router.post('/documents', requireAuth, async (req, res) => {
 
 router.put('/documents/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtDocument.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtDocument.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -789,7 +799,8 @@ router.put('/documents/:id', requireAuth, async (req, res) => {
 
 router.delete('/documents/:id', requireAuth, async (req, res) => {
   try {
-    await AbtDocument.findByIdAndDelete(req.params.id)
+    const item = await AbtDocument.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -868,7 +879,7 @@ router.post('/pages', requireAuth, async (req, res) => {
 
 router.put('/pages/:id', requireAuth, async (req, res) => {
   try {
-    const page = await AbtPage.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const page = await AbtPage.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!page) return res.status(404).json({ error: 'Not found' })
     res.json(page)
   } catch (err) {
@@ -1005,7 +1016,7 @@ router.post('/banners', requireAuth, async (req, res) => {
 
 router.put('/banners/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtBanner.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const item = await AbtBanner.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json(item)
   } catch (err) {
@@ -1015,7 +1026,8 @@ router.put('/banners/:id', requireAuth, async (req, res) => {
 
 router.delete('/banners/:id', requireAuth, async (req, res) => {
   try {
-    await AbtBanner.findByIdAndDelete(req.params.id)
+    const item = await AbtBanner.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })

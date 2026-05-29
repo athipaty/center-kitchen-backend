@@ -1,11 +1,12 @@
 ﻿const express = require("express");
-const router = express.Router();
-const Token = require("../../models/shared/Token");
+const crypto  = require("crypto");
+const router  = express.Router();
+const Token   = require("../../models/shared/Token");
 
 const TOKEN_VALID_DAYS = 7;
 
 function generateToken() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return crypto.randomBytes(32).toString("hex");
 }
 
 function getClientIp(req) {
@@ -14,10 +15,8 @@ function getClientIp(req) {
   );
 }
 
-const ADMIN_PASSWORD = "555";
-
 function getTodayPassword() {
-  return ADMIN_PASSWORD;
+  return process.env.ADMIN_PASSWORD || "555";
 }
 
 router.post("/login", async (req, res) => {
