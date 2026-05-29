@@ -23,8 +23,8 @@ function nextCheckDate(product) {
 }
 
 function slowRetryDate() {
-  // 24h retry for persistently unavailable products
-  return new Date(Date.now() + 24 * 3600 * 1000);
+  // 5–15 min retry so unavailable/OOS variants are rechecked quickly
+  return new Date(Date.now() + (Math.random() * 10 + 5) * 60 * 1000);
 }
 
 async function checkProduct(p) {
