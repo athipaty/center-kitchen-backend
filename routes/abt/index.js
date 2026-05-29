@@ -326,7 +326,9 @@ async function fetchEgpXml(params) {
 
 router.get('/egp-rss', async (req, res) => {
   const cheerio  = require('cheerio')
-  const DEPT_SUB_ID = '6560105'
+  // Read dept ID from settings so admin can change it without redeploying
+  const deptSetting = await AbtSettings.findOne({ key: 'egpDeptSubId' })
+  const DEPT_SUB_ID = deptSetting?.value || '6560105'
   const cacheKey = req.query.anounceType || ''
   const now      = new Date().toISOString()
   try {
