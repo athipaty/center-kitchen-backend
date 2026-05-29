@@ -1251,6 +1251,160 @@ router.get('/category-suggestions', async (req, res) => {
   res.json([]);
 });
 
+// ── Auto-generate HTML listing description ─────────────────────────
+router.post('/generate-description', async (req, res) => {
+  const { title, specs = {}, imageUrls = [] } = req.body;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    // Build spec summary for Claude
+    const specLines = Object.entries(specs)
+      .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews'].includes(k))
+      .slice(0, 10)
+      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+      .join('\n');
+
+    const prompt = `You are writing eBay listing description content for a product.
+
+Product title: ${title}
+${specLines ? `Key specs:\n${specLines}` : ''}
+
+Generate a JSON object with this EXACT structure (no markdown, raw JSON only):
+{
+  "tagline": "One punchy subtitle (max 12 words)",
+  "heroSub": "One sentence covering the top 3 selling points (max 20 words)",
+  "trustItems": ["item1","item2","item3","item4","item5"],
+  "features": [
+    {"icon":"emoji","title":"Short title","desc":"2 sentences about this feature"},
+    {"icon":"emoji","title":"Short title","desc":"2 sentences about this feature"},
+    {"icon":"emoji","title":"Short title","desc":"2 sentences about this feature"}
+  ],
+  "photoRows": [
+    {"label":"Feature 01","heading":"Heading text","body":"2 sentences","bullets":["point","point","point","point"]},
+    {"label":"Feature 02","heading":"Heading text","body":"2 sentences","bullets":["point","point","point","point"]}
+  ],
+  "ctaHeading":"Call to action headline",
+  "ctaSub":"One line encouraging purchase",
+  "theme":"blue"
+}
+
+Rules for theme: use "green" for natural/bamboo/organic, "orange" for pest/zapper/bug, "blue" for water/pool/fans/cooling, "navy" for car/travel/tech, "teal" for bathroom/home/storage
+Rules for content: NO competitor names (amazon/ebay/walmart), NO fake reviews, NO false urgency ("only X left"), NO external links, NO HTML tags inside strings`;
+
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1200,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    let content;
+    try {
+      content = JSON.parse(msg.content[0]?.text?.trim() || '{}');
+    } catch {
+      return res.status(500).json({ error: 'Failed to parse AI response' });
+    }
+
+    // Color themes
+    const themes = {
+      blue:   { primary:'#0069b4', dk:'#004f8a', accent:'#00a8d4', light:'#e8f5fb', dark:'#0a1f2e', border:'#cde4f0' },
+      green:  { primary:'#1a6c1a', dk:'#0f4a0f', accent:'#3aac3a', light:'#e8f8e8', dark:'#0a200a', border:'#b8d8b8' },
+      orange: { primary:'#c04010', dk:'#8c2c08', accent:'#e05c1a', light:'#fdf0e8', dark:'#1c0c04', border:'#f0c8a8' },
+      navy:   { primary:'#1a2c5a', dk:'#0f1c3a', accent:'#3c6ab4', light:'#eef2fb', dark:'#080e20', border:'#c8d4ea' },
+      teal:   { primary:'#0d6e6e', dk:'#084848', accent:'#2a9090', light:'#e5f4f4', dark:'#041c1c', border:'#a8d8d8' },
+    };
+    const t = themes[content.theme] || themes.blue;
+
+    // Pick images
+    const heroImg   = imageUrls[0] || '';
+    const row1Img   = imageUrls[1] || imageUrls[0] || '';
+    const row2Img   = imageUrls[2] || imageUrls[0] || '';
+    const galleryImgs = imageUrls.slice(3, 7);
+
+    // Spec table rows
+    const specMap = {
+      brand_name:'Brand', material:'Material', color:'Color', size:'Size',
+      item_weight:'Weight', model_number:'Item Model Number', wattage:'Wattage',
+      voltage:'Voltage', country_of_origin:'Country of Manufacture',
+    };
+    const specRows = Object.entries(specMap)
+      .filter(([k]) => specs[k])
+      .map(([k, label]) => `<tr><td class="sk">${label}</td><td>${String(specs[k]).replace(/[<>&"]/g,'')}</td></tr>`)
+      .join('');
+
+    const esc = s => String(s||'').replace(/[<>&"]/g,'');
+    const f = content.features || [];
+    const pr = content.photoRows || [];
+    const tr = content.trustItems || [];
+
+    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background:#fff;max-width:900px;margin:0 auto}
+.hero{background:${t.dark};text-align:center;padding:0 0 32px}
+.hero img{width:100%;max-height:500px;object-fit:contain;background:${t.dark};display:block}
+.hero-text{padding:24px 24px 0}
+.hero-tag{display:inline-block;background:${t.accent};color:#fff;font-family:Georgia,serif;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:5px 16px;border-radius:20px;margin-bottom:12px}
+.hero-title{font-family:Georgia,serif;font-size:26px;font-weight:bold;color:#fff;line-height:1.3;margin-bottom:10px}
+.hero-sub{font-size:14px;color:rgba(255,255,255,0.7);line-height:1.6;max-width:660px;margin:0 auto}
+.trust-bar{background:${t.primary};display:flex;flex-wrap:wrap;justify-content:center}
+.ti{display:flex;align-items:center;gap:6px;color:#fff;font-size:12px;font-weight:bold;padding:12px 18px;border-right:1px solid rgba(255,255,255,0.2)}
+.ti:last-child{border-right:none}
+.sh{text-align:center;padding:34px 20px 12px}
+.sh h2{font-family:Georgia,serif;font-size:21px;color:${t.dk};margin-bottom:6px}
+.sh p{font-size:14px;color:#555}
+.div{width:44px;height:3px;background:${t.accent};margin:8px auto 0;border-radius:2px}
+.fg{display:flex;flex-wrap:wrap;gap:14px;padding:18px 16px 32px;justify-content:center}
+.fc{flex:1 1 230px;max-width:270px;background:${t.light};border:1px solid ${t.border};border-radius:10px;padding:20px 16px;text-align:center}
+.fi{font-size:32px;margin-bottom:8px;display:block}
+.fc h3{font-family:Georgia,serif;font-size:14px;color:${t.dk};margin-bottom:6px}
+.fc p{font-size:13px;color:#555;line-height:1.5}
+.pr{display:flex;flex-wrap:wrap;align-items:center;border-bottom:1px solid ${t.border}}
+.pr:nth-child(even){flex-direction:row-reverse}
+.pc{flex:1 1 300px}
+.pc img{width:100%;height:300px;object-fit:contain;background:${t.light};display:block}
+.tc{flex:1 1 280px;padding:28px 24px}
+.lbl{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${t.accent};font-weight:bold;margin-bottom:6px}
+.tc h3{font-family:Georgia,serif;font-size:19px;color:${t.dk};margin-bottom:10px;line-height:1.3}
+.tc p{font-size:14px;color:#555;line-height:1.6;margin-bottom:8px}
+.tc ul{padding-left:16px;margin-top:6px}
+.tc ul li{font-size:13px;color:#555;line-height:1.55;margin-bottom:4px}
+.gal{display:flex;flex-wrap:wrap;gap:5px;padding:14px;background:${t.light}}
+.gal img{flex:1 1 150px;height:140px;object-fit:contain;background:#fff;border:1px solid ${t.border};border-radius:6px}
+.ss{padding:0 14px 30px}
+.st{width:100%;border-collapse:collapse;font-size:14px}
+.st th{background:${t.dk};color:#fff;font-family:Georgia,serif;padding:11px 14px;text-align:left}
+.st td{padding:9px 14px;border-bottom:1px solid ${t.border}}
+.st tr:nth-child(even) td{background:${t.light}}
+.sk{color:#555;width:40%;font-weight:bold}
+.cta{background:linear-gradient(135deg,${t.dk},${t.primary},${t.accent});text-align:center;padding:38px 20px}
+.cta h2{font-family:Georgia,serif;font-size:23px;color:#fff;margin-bottom:9px}
+.cta p{font-size:14px;color:rgba(255,255,255,0.8);margin-bottom:18px;line-height:1.55}
+.cb{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+.cbb{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.3);color:#fff;font-size:12px;font-weight:bold;padding:8px 18px;border-radius:22px}
+.ft{background:#f4f4f4;border-top:2px solid ${t.border};padding:16px;text-align:center;font-size:12px;color:#888;line-height:1.6}
+</style></head><body>
+<div class="hero">${heroImg ? `<img src="${heroImg}" alt="${esc(title)}">` : ''}
+<div class="hero-text"><span class="hero-tag">${esc(content.tagline||title.split(' ').slice(0,4).join(' '))}</span>
+<h1 class="hero-title" style="font-size:22px">${esc(title)}</h1>
+<p class="hero-sub">${esc(content.heroSub||'')}</p></div></div>
+<div class="trust-bar">${tr.map(t=>`<div class="ti">&#9989; ${esc(t)}</div>`).join('')}</div>
+<div class="sh"><h2>Why Choose This Product?</h2><div class="div"></div></div>
+<div class="fg">${f.map(x=>`<div class="fc"><span class="fi">${x.icon||'&#10003;'}</span><h3>${esc(x.title)}</h3><p>${esc(x.desc)}</p></div>`).join('')}</div>
+${pr[0] ? `<div class="pr"><div class="pc">${row1Img?`<img src="${row1Img}" alt="">`:''}</div><div class="tc"><p class="lbl">${esc(pr[0].label)}</p><h3>${esc(pr[0].heading)}</h3><p>${esc(pr[0].body)}</p><ul>${(pr[0].bullets||[]).map(b=>`<li>${esc(b)}</li>`).join('')}</ul></div></div>` : ''}
+${pr[1] ? `<div class="pr"><div class="pc">${row2Img?`<img src="${row2Img}" alt="">`:''}</div><div class="tc"><p class="lbl">${esc(pr[1].label)}</p><h3>${esc(pr[1].heading)}</h3><p>${esc(pr[1].body)}</p><ul>${(pr[1].bullets||[]).map(b=>`<li>${esc(b)}</li>`).join('')}</ul></div></div>` : ''}
+${galleryImgs.length ? `<div class="gal">${galleryImgs.map(u=>`<img src="${u}" alt="">`).join('')}</div>` : ''}
+${specRows ? `<div class="sh"><h2>Specifications</h2><div class="div"></div></div><div class="ss"><table class="st"><tr><th colspan="2">Technical Details</th></tr>${specRows}<tr><td class="sk">Condition</td><td>New</td></tr></table></div>` : ''}
+<div class="cta"><h2>${esc(content.ctaHeading||'Order Today')}</h2><p>${esc(content.ctaSub||'')}</p><div class="cb">${tr.slice(0,4).map(t=>`<span class="cbb">&#10003; ${esc(t)}</span>`).join('')}</div></div>
+<div class="ft"><p>All images shown are of the actual item. Minor colour variation may occur due to monitor settings.</p></div>
+</body></html>`;
+
+    res.json({ html });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── SEO title generation ───────────────────────────────────────────
 router.post('/seo-title', async (req, res) => {
   const { title, specs } = req.body;
