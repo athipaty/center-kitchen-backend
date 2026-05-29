@@ -46,15 +46,21 @@ async function fetchAndCache(anounceType) {
     return { ok: false, reason: 'maintenance' }
   }
 
-  // Only overwrite cache when we actually received items — never blank out old data
   if (items.length === 0) return { ok: true, count: 0, skipped: 'empty feed' }
+
+  // Merge new items into the existing cache — accumulate all announcements forever
+  const existing   = await AbtSettings.findOne({ key: `egp_cache_${anounceType}` })
+  const oldItems   = existing?.value?.items || []
+  const knownLinks = new Set(oldItems.map(i => i.link).filter(Boolean))
+  const fresh      = items.filter(i => !knownLinks.has(i.link))
+  const merged     = [...fresh, ...oldItems]
 
   await AbtSettings.findOneAndUpdate(
     { key: `egp_cache_${anounceType}` },
-    { value: { items, cachedAt: new Date().toISOString() } },
+    { value: { items: merged, cachedAt: new Date().toISOString() } },
     { upsert: true }
   )
-  return { ok: true, count: items.length }
+  return { ok: true, added: fresh.length, total: merged.length }
 }
 
 async function refreshAll() {

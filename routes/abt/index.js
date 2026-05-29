@@ -296,10 +296,19 @@ async function egpCacheRead(key) {
   return doc?.value || null
 }
 
-async function egpCacheWrite(key, items) {
+async function egpCacheWrite(key, newItems) {
+  // Merge with existing cache so we accumulate all announcements over time.
+  // e-GP RSS only returns the last 20 items (~7 days), so without merging
+  // old announcements would be lost every time the feed scrolls past them.
+  const existing   = await egpCacheRead(key)
+  const oldItems   = existing?.items || []
+  const knownLinks = new Set(oldItems.map(i => i.link).filter(Boolean))
+  const fresh      = newItems.filter(i => !knownLinks.has(i.link))
+  const merged     = [...fresh, ...oldItems]   // newest first
+
   await AbtSettings.findOneAndUpdate(
     { key: `egp_cache_${key}` },
-    { value: { items, cachedAt: new Date().toISOString() } },
+    { value: { items: merged, cachedAt: new Date().toISOString() } },
     { upsert: true }
   )
 }
