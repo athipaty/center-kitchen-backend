@@ -2158,6 +2158,42 @@ router.post('/trading-create-listing', async (req, res) => {
     let xml;
     ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
 
+    // 21916564 — category doesn't support multi-variation: strip variants and retry as single listing
+    if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21916564<\/ErrorCode>/.test(xml) && variants?.length) {
+      console.log(`trading-create-listing: 21916564 for "${safeTitle}" — retrying as single listing (no variants)`);
+      varSpecsXml = ''; // remove multi-variation structure
+      const firstVariant = variants[0];
+      const singleQty = Number(firstVariant?.quantity || quantity);
+      // Rebuild body without variants
+      const buildSingleBody = (iSpecXml) => {
+        const iSpecBlock = iSpecXml ? `<ItemSpecifics>${iSpecXml}</ItemSpecifics>` : '';
+        return `<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+          ${creds}
+          <Item>
+            <Title>${escXml(safeTitle)}</Title>
+            <Description><![CDATA[${desc}]]></Description>
+            <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
+            <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
+            <ConditionID>${conditionId}</ConditionID>
+            <Country>${escXml(sellerCountry)}</Country>
+            <Currency>USD</Currency>
+            <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
+            <ListingDuration>GTC</ListingDuration>
+            <ListingType>FixedPriceItem</ListingType>
+            <Quantity>${singleQty}</Quantity>
+            <Location>${escXml(sellerLocation)}</Location>
+            ${picturesXml}
+            ${iSpecBlock}
+            ${sellerProfilesXml}
+            ${inlineShippingXml}
+            ${inlineReturnXml}
+            ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
+          </Item>
+        </AddFixedPriceItemRequest>`;
+      };
+      ({ data: xml } = await tradingPost('AddFixedPriceItem', buildSingleBody(buildSpecXml(aspects))));
+    }
+
     // Retry once if eBay reports missing item specifics (21919303) and no ItemID yet
     if (!/<ItemID>\d+<\/ItemID>/.test(xml)) {
       const missingFields = [];
