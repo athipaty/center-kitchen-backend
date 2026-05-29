@@ -1510,11 +1510,10 @@ router.post('/trading-create-listing', async (req, res) => {
     }
     if (!catId) return res.status(400).json({ error: 'Could not auto-detect eBay category. Please provide categoryId.' });
 
-    // Build item specifics — always use 'Unbranded' for Brand
-    // (avoids 21919303 for brand names not in eBay's accepted list, which would trigger retry + Type='Other')
+    // Build item specifics — use real brand name; retry will fall back to Unbranded if eBay rejects it
     const aspects = buildAspects(specs);
     if (upc && !aspects['UPC']) aspects['UPC'] = [upc];
-    aspects['Brand'] = ['Unbranded'];
+    if (!aspects['Brand']) aspects['Brand'] = [specs.brand_name || 'Unbranded'];
 
     // Proactively inject aspects that can be matched from the title (avoids 21919303 on first attempt)
     await injectTitleAspects(catId, aspects, safeTitle);
@@ -1693,20 +1692,20 @@ router.post('/trading-create-listing', async (req, res) => {
       }
       if (missingFields.length) {
         const validVals = await getValidAspectValues(catId);
+        const tl = safeTitle.toLowerCase();
         for (const f of missingFields) {
           if (f === 'Brand') {
-            aspects[f] = ['Unbranded'];
+            aspects[f] = ['Unbranded']; // fall back from rejected real brand
           } else {
             const allowed = validVals[f] || [];
-            const tl = safeTitle.toLowerCase();
-            const matched = allowed.find(v => tl.includes(v.toLowerCase()));
+            // Match valid value from title, or use first valid value — never 'Other' unless it's actually valid
+            const matched = allowed.find(v => v && tl.includes(v.toLowerCase()));
             if (matched) aspects[f] = [matched];
-            else if (allowed.includes('Other')) aspects[f] = ['Other'];
             else if (allowed.length) aspects[f] = [allowed[0]];
-            // else: don't add — invalid value would cause another 21919303
+            // else: skip — sending an invalid value causes another 21919303
           }
         }
-        console.log('trading-create-listing: retrying with added specifics:', JSON.stringify(Object.fromEntries(missingFields.map(f => [f, aspects[f]]))));
+        console.log('trading-create-listing: retry specifics:', JSON.stringify(Object.fromEntries(missingFields.map(f => [f, aspects[f]]))));
         ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
       }
     }
