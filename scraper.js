@@ -161,7 +161,13 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
 
       const specs = data.product_information || {};
 
-      return { title, price, currency, image, images, upc, variants, isPrime, variant, specs };
+      // Capture bullet point features (Amazon "About this item")
+      const bullets = Array.isArray(data.feature_bullets) ? data.feature_bullets
+        : Array.isArray(data.features) ? data.features
+        : Array.isArray(data.about_this_item) ? data.about_this_item
+        : [];
+
+      return { title, price, currency, image, images, upc, variants, isPrime, variant, specs, bullets };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }

@@ -44,6 +44,7 @@ async function checkProduct(p) {
     if (info.isPrime !== null && info.isPrime !== undefined) p.isPrime = info.isPrime;
     if (info.variant) p.variant = info.variant;
     if (info.specs && Object.keys(info.specs).length) p.specs = info.specs;
+    if (info.bullets?.length && !p.bullets?.length) p.bullets = info.bullets;
     if (info.price !== oldPrice) {
       p.history.push({ price: info.price });
       if (p.history.length > 200) p.history = p.history.slice(-200);

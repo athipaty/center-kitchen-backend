@@ -1251,113 +1251,147 @@ router.get('/category-suggestions', async (req, res) => {
   res.json([]);
 });
 
-// ── Auto-generate HTML listing description ─────────────────────────
+// ── Auto-generate HTML listing description (fully dynamic) ───────────
 router.post('/generate-description', async (req, res) => {
-  const { title, specs = {}, imageUrls = [] } = req.body;
+  const { title, specs = {}, imageUrls = [], bullets = [], upc, variant } = req.body;
   if (!title) return res.status(400).json({ error: 'title is required' });
 
   try {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-    // Build spec summary for Claude
-    const specLines = Object.entries(specs)
-      .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews'].includes(k))
-      .slice(0, 10)
-      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
-      .join('\n');
+    // ── Data richness assessment ──────────────────────────────────────
+    const cleanSpecs = Object.entries(specs)
+      .filter(([k, v]) => v && !['asin','best_sellers_rank','customer_reviews','unspsc_code'].includes(k) && String(v).trim().length > 0)
+      .map(([k, v]) => ({ key: k, label: k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()), value: String(v).trim() }));
 
-    const prompt = `You are writing eBay listing description content for a product.
+    const cleanBullets = bullets
+      .map(b => String(b).replace(/[^\x20-\x7E]/g,' ').replace(/<[^>]+>/g,'').trim())
+      .filter(b => b.length > 20).slice(0, 8);
+
+    const imgCount   = imageUrls.length;
+    const photoRowTarget = Math.min(4, Math.max(2, Math.floor(imgCount / 2)));
+    const specCount  = cleanSpecs.length;
+    const hasBullets = cleanBullets.length > 0;
+
+    // ── Build Claude prompt with ALL available data ──────────────────
+    const specSection = cleanSpecs.length
+      ? `\nProduct Specifications (ALL of these must appear in the spec table):\n${cleanSpecs.map(s=>`• ${s.label}: ${s.value}`).join('\n')}`
+      : '';
+    const bulletSection = hasBullets
+      ? `\nAmazon Product Features (USE these as the basis for photo rows and feature cards):\n${cleanBullets.map((b,i)=>`${i+1}. ${b}`).join('\n')}`
+      : '';
+    const extraSection = [
+      upc ? `UPC/Barcode: ${upc}` : '',
+      variant ? `Variant: ${variant}` : '',
+    ].filter(Boolean).join('\n');
+
+    const prompt = `You are writing eBay listing HTML description content for a product. Use EVERY piece of data provided — show buyers as much useful information as possible.
 
 Product title: ${title}
-${specLines ? `Key specs:\n${specLines}` : ''}
+Images available: ${imgCount}${extraSection ? `\n${extraSection}` : ''}${specSection}${bulletSection}
 
-Generate a JSON object with this EXACT structure (no markdown, raw JSON only):
+Generate a JSON object (raw JSON only, no markdown fences):
 {
-  "tagline": "One punchy subtitle (max 12 words)",
-  "heroSub": "One sentence covering the top 3 selling points (max 20 words)",
-  "trustItems": ["item1","item2","item3","item4","item5"],
+  "tagline": "Short punchy tagline (max 10 words)",
+  "heroSub": "1-2 sentences summarising top benefits (max 25 words)",
+  "trustItems": ["badge1","badge2","badge3","badge4","badge5"],
   "features": [
-    {"icon":"emoji","title":"Short title","desc":"2 sentences about this feature"},
-    {"icon":"emoji","title":"Short title","desc":"2 sentences about this feature"},
-    {"icon":"emoji","title":"Short title","desc":"2 sentences about this feature"}
+    {"icon":"emoji","title":"Feature name","desc":"2 sentences using real product data"},
+    {"icon":"emoji","title":"Feature name","desc":"2 sentences using real product data"},
+    {"icon":"emoji","title":"Feature name","desc":"2 sentences using real product data"}
   ],
   "photoRows": [
-    {"label":"Feature 01","heading":"Heading text","body":"2 sentences","bullets":["point","point","point","point"]},
-    {"label":"Feature 02","heading":"Heading text","body":"2 sentences","bullets":["point","point","point","point"]}
+    {"label":"Feature 01","heading":"Heading","body":"2–3 sentences from product data","bullets":["specific point","specific point","specific point","specific point"]},
+    ... generate exactly ${photoRowTarget} photo rows total
   ],
-  "ctaHeading":"Call to action headline",
-  "ctaSub":"One line encouraging purchase",
-  "theme":"blue"
+  "ctaHeading": "Compelling CTA headline",
+  "ctaSub": "One encouraging sentence",
+  "theme": "blue|green|orange|navy|teal|red|purple"
 }
 
-Rules for theme: use "green" for natural/bamboo/organic, "orange" for pest/zapper/bug, "blue" for water/pool/fans/cooling, "navy" for car/travel/tech, "teal" for bathroom/home/storage
-Rules for content: NO competitor names (amazon/ebay/walmart), NO fake reviews, NO false urgency ("only X left"), NO external links, NO HTML tags inside strings`;
+CRITICAL rules:
+- Generate EXACTLY ${photoRowTarget} photoRows
+- If Amazon features are provided, base photo rows DIRECTLY on those features — don't invent new ones
+- Use SPECIFIC data (numbers, materials, dimensions) not vague language
+- theme: green=natural/bamboo/organic, orange=pest/bug/zapper, blue=fans/water/cooling, navy=car/travel/tech, teal=bathroom/home, red=pest/insect, purple=garden/outdoor
+- FORBIDDEN: competitor names, fake reviews, false urgency, external links, HTML tags inside string values`;
 
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1200,
+      max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
     });
 
     let content;
     try {
-      // Strip markdown code fences Claude sometimes adds (```json ... ```)
       const raw = (msg.content[0]?.text || '{}')
-        .replace(/^```(?:json)?\s*/i, '')
-        .replace(/\s*```\s*$/i, '')
-        .trim();
+        .replace(/^```(?:json)?\s*/i,'').replace(/\s*```\s*$/i,'').trim();
       content = JSON.parse(raw);
     } catch {
       return res.status(500).json({ error: 'Failed to parse AI response' });
     }
 
-    // Color themes
+    // ── Color themes ─────────────────────────────────────────────────
     const themes = {
       blue:   { primary:'#0069b4', dk:'#004f8a', accent:'#00a8d4', light:'#e8f5fb', dark:'#0a1f2e', border:'#cde4f0' },
       green:  { primary:'#1a6c1a', dk:'#0f4a0f', accent:'#3aac3a', light:'#e8f8e8', dark:'#0a200a', border:'#b8d8b8' },
       orange: { primary:'#c04010', dk:'#8c2c08', accent:'#e05c1a', light:'#fdf0e8', dark:'#1c0c04', border:'#f0c8a8' },
       navy:   { primary:'#1a2c5a', dk:'#0f1c3a', accent:'#3c6ab4', light:'#eef2fb', dark:'#080e20', border:'#c8d4ea' },
       teal:   { primary:'#0d6e6e', dk:'#084848', accent:'#2a9090', light:'#e5f4f4', dark:'#041c1c', border:'#a8d8d8' },
+      red:    { primary:'#b01020', dk:'#800010', accent:'#e05060', light:'#fdf0f0', dark:'#1c0408', border:'#f0b8c0' },
+      purple: { primary:'#5a2090', dk:'#3c1468', accent:'#8a40d0', light:'#f4eeff', dark:'#100820', border:'#d0b8f0' },
     };
     const t = themes[content.theme] || themes.blue;
 
-    // Pick images
-    const heroImg   = imageUrls[0] || '';
-    const row1Img   = imageUrls[1] || imageUrls[0] || '';
-    const row2Img   = imageUrls[2] || imageUrls[0] || '';
-    const galleryImgs = imageUrls.slice(3, 7);
-
-    // Spec table rows
-    const specMap = {
-      brand_name:'Brand', material:'Material', color:'Color', size:'Size',
-      item_weight:'Weight', model_number:'Item Model Number', wattage:'Wattage',
-      voltage:'Voltage', country_of_origin:'Country of Manufacture',
-    };
-    const specRows = Object.entries(specMap)
-      .filter(([k]) => specs[k])
-      .map(([k, label]) => `<tr><td class="sk">${label}</td><td>${String(specs[k]).replace(/[<>&"]/g,'')}</td></tr>`)
-      .join('');
-
-    const esc = s => String(s||'').replace(/[<>&"]/g,'');
-    const f = content.features || [];
+    const f  = content.features  || [];
     const pr = content.photoRows || [];
     const tr = content.trustItems || [];
 
+    // ── Dynamic photo rows (use sequential images) ────────────────────
+    const photoRowsHtml = pr.map((row, i) => {
+      const imgUrl = imageUrls[i + 1] || imageUrls[i] || '';
+      const even = i % 2 === 1;
+      return `<div class="pr"${even ? ' style="flex-direction:row-reverse"' : ''}>
+<div class="pc">${imgUrl ? `<img src="${imgUrl}" alt="${esc(row.heading||'')}">` : ''}</div>
+<div class="tc"><p class="lbl">${esc(row.label||`Feature 0${i+1}`)}</p>
+<h3>${esc(row.heading||'')}</h3><p>${esc(row.body||'')}</p>
+${(row.bullets||[]).length ? `<ul>${row.bullets.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>` : ''}
+</div></div>`;
+    }).join('');
+
+    // ── Gallery: images not used in photo rows ────────────────────────
+    const galleryImgs = imageUrls.slice(pr.length + 1);
+    const galleryHtml = galleryImgs.length
+      ? `<div class="gal">${galleryImgs.map(u=>`<img src="${u}" alt="">`).join('')}</div>` : '';
+
+    // ── Complete spec table — ALL specs + UPC + variant + condition ───
+    const allSpecRows = [
+      ...cleanSpecs.map(s => `<tr><td class="sk">${esc(s.label)}</td><td>${esc(s.value)}</td></tr>`),
+      upc     ? `<tr><td class="sk">UPC / Barcode</td><td>${esc(upc)}</td></tr>` : '',
+      variant ? `<tr><td class="sk">Variant</td><td>${esc(variant)}</td></tr>` : '',
+      `<tr><td class="sk">Condition</td><td>New</td></tr>`,
+    ].filter(Boolean).join('');
+
+    const specTableHtml = allSpecRows
+      ? `<div class="sh"><h2>Full Product Specifications</h2><div class="div"></div></div>
+<div class="ss"><table class="st"><tr><th colspan="2">Technical Details</th></tr>${allSpecRows}</table></div>` : '';
+
+    // ── HTML ──────────────────────────────────────────────────────────
     const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background:#fff;max-width:900px;margin:0 auto}
 .hero{background:${t.dark};text-align:center;padding:0 0 32px}
-.hero img{width:100%;max-height:500px;object-fit:contain;background:${t.dark};display:block}
-.hero-text{padding:24px 24px 0}
-.hero-tag{display:inline-block;background:${t.accent};color:#fff;font-family:Georgia,serif;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:5px 16px;border-radius:20px;margin-bottom:12px}
-.hero-title{font-family:Georgia,serif;font-size:26px;font-weight:bold;color:#fff;line-height:1.3;margin-bottom:10px}
-.hero-sub{font-size:14px;color:rgba(255,255,255,0.7);line-height:1.6;max-width:660px;margin:0 auto}
+.hero img{width:100%;max-height:520px;object-fit:contain;background:${t.dark};display:block}
+.hero-text{padding:26px 24px 0}
+.hero-tag{display:inline-block;background:${t.accent};color:#fff;font-family:Georgia,serif;font-size:11px;letter-spacing:2.5px;text-transform:uppercase;padding:5px 16px;border-radius:20px;margin-bottom:14px}
+.hero-title{font-family:Georgia,serif;font-size:24px;font-weight:bold;color:#fff;line-height:1.35;margin-bottom:10px}
+.hero-sub{font-size:14px;color:rgba(255,255,255,0.72);line-height:1.65;max-width:660px;margin:0 auto}
 .trust-bar{background:${t.primary};display:flex;flex-wrap:wrap;justify-content:center}
 .ti{display:flex;align-items:center;gap:6px;color:#fff;font-size:12px;font-weight:bold;padding:12px 18px;border-right:1px solid rgba(255,255,255,0.2)}
 .ti:last-child{border-right:none}
 .sh{text-align:center;padding:34px 20px 12px}
 .sh h2{font-family:Georgia,serif;font-size:21px;color:${t.dk};margin-bottom:6px}
-.sh p{font-size:14px;color:#555}
 .div{width:44px;height:3px;background:${t.accent};margin:8px auto 0;border-radius:2px}
 .fg{display:flex;flex-wrap:wrap;gap:14px;padding:18px 16px 32px;justify-content:center}
 .fc{flex:1 1 230px;max-width:270px;background:${t.light};border:1px solid ${t.border};border-radius:10px;padding:20px 16px;text-align:center}
@@ -1365,7 +1399,6 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background
 .fc h3{font-family:Georgia,serif;font-size:14px;color:${t.dk};margin-bottom:6px}
 .fc p{font-size:13px;color:#555;line-height:1.5}
 .pr{display:flex;flex-wrap:wrap;align-items:center;border-bottom:1px solid ${t.border}}
-.pr:nth-child(even){flex-direction:row-reverse}
 .pc{flex:1 1 300px}
 .pc img{width:100%;height:300px;object-fit:contain;background:${t.light};display:block}
 .tc{flex:1 1 280px;padding:28px 24px}
@@ -1375,35 +1408,36 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background
 .tc ul{padding-left:16px;margin-top:6px}
 .tc ul li{font-size:13px;color:#555;line-height:1.55;margin-bottom:4px}
 .gal{display:flex;flex-wrap:wrap;gap:5px;padding:14px;background:${t.light}}
-.gal img{flex:1 1 150px;height:140px;object-fit:contain;background:#fff;border:1px solid ${t.border};border-radius:6px}
+.gal img{flex:1 1 150px;height:145px;object-fit:contain;background:#fff;border:1px solid ${t.border};border-radius:6px}
 .ss{padding:0 14px 30px}
 .st{width:100%;border-collapse:collapse;font-size:14px}
-.st th{background:${t.dk};color:#fff;font-family:Georgia,serif;padding:11px 14px;text-align:left}
-.st td{padding:9px 14px;border-bottom:1px solid ${t.border}}
+.st th{background:${t.dk};color:#fff;font-family:Georgia,serif;padding:11px 14px;text-align:left;font-size:15px}
+.st td{padding:9px 14px;border-bottom:1px solid ${t.border};vertical-align:top}
 .st tr:nth-child(even) td{background:${t.light}}
-.sk{color:#555;width:40%;font-weight:bold}
+.sk{color:#555;width:38%;font-weight:bold}
 .cta{background:linear-gradient(135deg,${t.dk},${t.primary},${t.accent});text-align:center;padding:38px 20px}
 .cta h2{font-family:Georgia,serif;font-size:23px;color:#fff;margin-bottom:9px}
-.cta p{font-size:14px;color:rgba(255,255,255,0.8);margin-bottom:18px;line-height:1.55}
+.cta p{font-size:14px;color:rgba(255,255,255,0.82);margin-bottom:18px;line-height:1.55}
 .cb{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
 .cbb{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.3);color:#fff;font-size:12px;font-weight:bold;padding:8px 18px;border-radius:22px}
-.ft{background:#f4f4f4;border-top:2px solid ${t.border};padding:16px;text-align:center;font-size:12px;color:#888;line-height:1.6}
+.ft{background:#f4f4f4;border-top:2px solid ${t.border};padding:16px;text-align:center;font-size:12px;color:#888;line-height:1.65}
 </style></head><body>
-<div class="hero">${heroImg ? `<img src="${heroImg}" alt="${esc(title)}">` : ''}
-<div class="hero-text"><span class="hero-tag">${esc(content.tagline||title.split(' ').slice(0,4).join(' '))}</span>
-<h1 class="hero-title" style="font-size:22px">${esc(title)}</h1>
+<div class="hero">${imageUrls[0]?`<img src="${imageUrls[0]}" alt="${esc(title)}">`:''}<div class="hero-text">
+<span class="hero-tag">${esc(content.tagline||'')}</span>
+<h1 class="hero-title">${esc(title)}</h1>
 <p class="hero-sub">${esc(content.heroSub||'')}</p></div></div>
-<div class="trust-bar">${tr.map(t=>`<div class="ti">&#9989; ${esc(t)}</div>`).join('')}</div>
+<div class="trust-bar">${tr.map(x=>`<div class="ti">&#9989; ${esc(x)}</div>`).join('')}</div>
 <div class="sh"><h2>Why Choose This Product?</h2><div class="div"></div></div>
 <div class="fg">${f.map(x=>`<div class="fc"><span class="fi">${x.icon||'&#10003;'}</span><h3>${esc(x.title)}</h3><p>${esc(x.desc)}</p></div>`).join('')}</div>
-${pr[0] ? `<div class="pr"><div class="pc">${row1Img?`<img src="${row1Img}" alt="">`:''}</div><div class="tc"><p class="lbl">${esc(pr[0].label)}</p><h3>${esc(pr[0].heading)}</h3><p>${esc(pr[0].body)}</p><ul>${(pr[0].bullets||[]).map(b=>`<li>${esc(b)}</li>`).join('')}</ul></div></div>` : ''}
-${pr[1] ? `<div class="pr"><div class="pc">${row2Img?`<img src="${row2Img}" alt="">`:''}</div><div class="tc"><p class="lbl">${esc(pr[1].label)}</p><h3>${esc(pr[1].heading)}</h3><p>${esc(pr[1].body)}</p><ul>${(pr[1].bullets||[]).map(b=>`<li>${esc(b)}</li>`).join('')}</ul></div></div>` : ''}
-${galleryImgs.length ? `<div class="gal">${galleryImgs.map(u=>`<img src="${u}" alt="">`).join('')}</div>` : ''}
-${specRows ? `<div class="sh"><h2>Specifications</h2><div class="div"></div></div><div class="ss"><table class="st"><tr><th colspan="2">Technical Details</th></tr>${specRows}<tr><td class="sk">Condition</td><td>New</td></tr></table></div>` : ''}
-<div class="cta"><h2>${esc(content.ctaHeading||'Order Today')}</h2><p>${esc(content.ctaSub||'')}</p><div class="cb">${tr.slice(0,4).map(t=>`<span class="cbb">&#10003; ${esc(t)}</span>`).join('')}</div></div>
-<div class="ft"><p>All images shown are of the actual item. Minor colour variation may occur due to monitor settings.</p></div>
+${photoRowsHtml}
+${galleryHtml}
+${specTableHtml}
+<div class="cta"><h2>${esc(content.ctaHeading||'Order Today')}</h2><p>${esc(content.ctaSub||'')}</p>
+<div class="cb">${tr.slice(0,4).map(x=>`<span class="cbb">&#10003; ${esc(x)}</span>`).join('')}</div></div>
+<div class="ft"><p>All images shown are of the actual item. Colour may vary slightly due to monitor settings.</p></div>
 </body></html>`;
 
+    console.log(`generate-description: ${pr.length} photo rows, ${cleanSpecs.length} specs, ${cleanBullets.length} bullets, ${imgCount} images`);
     res.json({ html });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -79,6 +79,7 @@ router.post("/", async (req, res) => {
       variant: info.variant || null,
       groupId: groupId || null,
       specs: info.specs || {},
+      bullets: info.bullets || [],
     });
 
     scheduler.scheduleNew(product);
