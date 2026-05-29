@@ -46,6 +46,14 @@ router.get('/img/:key', (req, res) => {
   res.send(entry.buffer);
 });
 
+// Upgrade Amazon CDN image URL to full resolution by removing size qualifiers.
+// e.g. "717NzLPWXhL._AC_SL1500_.jpg" → "717NzLPWXhL.jpg" (original full-res)
+// Falls back to the original URL if the upgraded version fails to download.
+function upgradeAmazonImageUrl(url) {
+  if (!url || !url.includes('m.media-amazon.com/images/I/')) return url;
+  return url.replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
+}
+
 // ── Upload Amazon images to Cloudinary permanently ─────────────────
 router.post('/upload-images', async (req, res) => {
   const { imageUrls, slug } = req.body;
@@ -59,11 +67,22 @@ router.post('/upload-images', async (req, res) => {
   for (let i = 0; i < imageUrls.length; i++) {
     const url = imageUrls[i];
     try {
-      const { data: imgBuffer } = await axios.get(url, {
-        responseType: 'arraybuffer',
-        timeout: 15000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-      });
+      // Try full-resolution first, fall back to original URL if it fails
+      const fullResUrl = upgradeAmazonImageUrl(url);
+      let imgBuffer;
+      try {
+        ({ data: imgBuffer } = await axios.get(fullResUrl, {
+          responseType: 'arraybuffer', timeout: 15000,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+        }));
+        if (fullResUrl !== url) console.log(`upload-images: upgraded ${url.split('/').pop()} → full-res (${(imgBuffer.length / 1024).toFixed(0)} KB)`);
+      } catch {
+        // Full-res not available — fall back to original
+        ({ data: imgBuffer } = await axios.get(url, {
+          responseType: 'arraybuffer', timeout: 15000,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+        }));
+      }
 
       const folder = `ebay-listings/${slug}`;
       const publicId = `${slug}-${String(i + 1).padStart(2, '0')}`;
