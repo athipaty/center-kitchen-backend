@@ -374,21 +374,94 @@ async function egpCacheRead(key) {
   return doc?.value || null
 }
 
+// ── Enrich one e-GP item by fetching its announcement page ───────────────────
+function thaiToNum(str) {
+  if (!str) return null
+  const thai = '๐๑๒๓๔๕๖๗๘๙'
+  const arabic = str.split('').map(c => { const i = thai.indexOf(c); return i >= 0 ? String(i) : c }).join('')
+  const n = parseFloat(arabic.replace(/,/g, ''))
+  return isNaN(n) ? null : n
+}
+
+async function enrichEgpItem(item) {
+  if (!item.link || item.winner != null) return item  // already enriched or no link
+  try {
+    const { data: buf } = await require('axios').get(item.link, {
+      responseType: 'arraybuffer', timeout: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' },
+    })
+    const text = new TextDecoder('windows-874').decode(buf)
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+
+    // ชื่อโครงการ — text after "ประกาศผู้ชนะ..." up to "นั้น|โดย|ตาม"
+    const titleM  = text.match(/ประกาศผู้ชนะการเสนอราคา\s+(.+?)\s+(?:นั้น|โดย|ตาม)/)
+    // ผู้ชนะ — "ผู้ได้รับการคัดเลือก ได้แก่ X โดยเสนอ..."
+    const winnerM = text.match(/ผู้(?:ได้รับการคัดเลือก|ชนะการเสนอราคา)[^ก-๙]*ได้แก่\s+(.+?)\s+(?:โดยเสนอราคา|ซึ่งมี|งวด|เป็นเงิน)/)
+    // วงเงิน — "เป็นเงินทั้งสิ้น 111,670.00 บาท"
+    const amountM = text.match(/เป็นเงินทั้งสิ้น\s+([๐-๙\d,.]+)\s+บาท/)
+    // วิธีการ
+    const methodM = text.match(/โดย(วิธี[ก-๙a-zA-Z\s\-]+?)(?=\s|$|[,\.])/)
+
+    return {
+      ...item,
+      title:  titleM  ? titleM[1].trim()  : item.title,
+      winner: winnerM ? winnerM[1].trim() : null,
+      amount: amountM ? thaiToNum(amountM[1]) : null,
+      method: methodM ? methodM[1].trim() : null,
+    }
+  } catch {
+    return item
+  }
+}
+
 async function egpCacheWrite(key, newItems) {
   // Merge with existing cache so we accumulate all announcements over time.
-  // e-GP RSS only returns the last 20 items (~7 days), so without merging
-  // old announcements would be lost every time the feed scrolls past them.
   const existing   = await egpCacheRead(key)
   const oldItems   = existing?.items || []
   const knownLinks = new Set(oldItems.map(i => i.link).filter(Boolean))
   const fresh      = newItems.filter(i => !knownLinks.has(i.link))
-  const merged     = [...fresh, ...oldItems]   // newest first
+
+  // Auto-enrich fresh items by fetching their detail pages (max 5 at a time)
+  const toEnrich = fresh.slice(0, 5)
+  const enriched = []
+  for (const item of toEnrich) {
+    enriched.push(await enrichEgpItem(item))
+    if (toEnrich.length > 1) await new Promise(r => setTimeout(r, 500))
+  }
+  const rest = fresh.slice(5)  // unenriched tail (will be enriched next cron run)
+
+  const merged = [...enriched, ...rest, ...oldItems]
 
   await AbtSettings.findOneAndUpdate(
     { key: `egp_cache_${key}` },
     { value: { items: merged, cachedAt: new Date().toISOString() } },
     { upsert: true }
   )
+}
+
+// Re-enrich existing items that never got detail data (runs in background)
+async function enrichPending(key) {
+  const cached = await egpCacheRead(key)
+  if (!cached?.items?.length) return
+  let changed = false
+  const updated = []
+  for (const item of cached.items) {
+    if (!item.winner && item.link) {
+      const rich = await enrichEgpItem(item)
+      updated.push(rich)
+      changed = changed || rich.winner !== item.winner
+      await new Promise(r => setTimeout(r, 500))
+    } else {
+      updated.push(item)
+    }
+  }
+  if (changed) {
+    await AbtSettings.findOneAndUpdate(
+      { key: `egp_cache_${key}` },
+      { value: { items: updated, cachedAt: cached.cachedAt } },
+      { upsert: true }
+    )
+  }
 }
 
 // CGD manual specifies process3 as the correct hostname for RSS
@@ -469,9 +542,13 @@ router.get('/egp-rss', async (req, res) => {
       return res.json({ items: [], fetchedAt: now, live: true })
     }
 
-    // Real data — persist to MongoDB so it survives server restarts
+    // Real data — merge+enrich new items, persist to MongoDB
     await egpCacheWrite(cacheKey, items)
-    res.json({ items, fetchedAt: now, live: true })
+    const saved = await egpCacheRead(cacheKey)
+    res.json({ items: saved?.items || items, fetchedAt: now, live: true })
+
+    // Background: enrich any older items that still lack detail data
+    setImmediate(() => enrichPending(cacheKey).catch(() => {}))
   } catch (err) {
     const cached = await egpCacheRead(cacheKey).catch(() => null)
     if (cached?.items?.length > 0) {
