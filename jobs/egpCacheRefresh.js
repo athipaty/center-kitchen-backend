@@ -46,6 +46,9 @@ async function fetchAndCache(anounceType) {
     return { ok: false, reason: 'maintenance' }
   }
 
+  // Only overwrite cache when we actually received items — never blank out old data
+  if (items.length === 0) return { ok: true, count: 0, skipped: 'empty feed' }
+
   await AbtSettings.findOneAndUpdate(
     { key: `egp_cache_${anounceType}` },
     { value: { items, cachedAt: new Date().toISOString() } },

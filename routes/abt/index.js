@@ -361,6 +361,16 @@ router.get('/egp-rss', async (req, res) => {
       return res.status(503).json({ maintenance: true, notice, hours: '17:01–08:59 น.' })
     }
 
+    // Feed returned 0 items — serve last known cache rather than an empty page
+    if (items.length === 0) {
+      const cached = await egpCacheRead(cacheKey)
+      if (cached?.items?.length > 0) {
+        return res.json({ items: cached.items, stale: true, staleAt: cached.cachedAt,
+          notice: 'ยังไม่มีประกาศใหม่ในระบบ e-GP แสดงข้อมูลล่าสุดที่มี' })
+      }
+      return res.json({ items: [], fetchedAt: now, live: true })
+    }
+
     // Real data — persist to MongoDB so it survives server restarts
     await egpCacheWrite(cacheKey, items)
     res.json({ items, fetchedAt: now, live: true })
