@@ -208,6 +208,8 @@ router.get('/auth/login', (req, res) => {
   const scope = [
     'https://api.ebay.com/oauth/api_scope/sell.inventory',
     'https://api.ebay.com/oauth/api_scope/sell.account',
+    'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
+    'https://api.ebay.com/oauth/api_scope/sell.finances',
   ].join(' ');
   const url = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(process.env.EBAY_APP_ID)}&redirect_uri=${encodeURIComponent(process.env.EBAY_RUNAME)}&response_type=code&scope=${encodeURIComponent(scope)}`;
   res.redirect(url);
@@ -1408,16 +1410,41 @@ router.get('/selling-limits', async (req, res) => {
       }
     }
 
-    const usedItems  = totalQtyListed;
-    const usedRevUsd = soldRevenueUsd;
+    const usedItems = totalQtyListed;
     const revLimitUsd = revLimitSgd * sgdToUsd;
 
-    console.log(`selling-limits: ${usedItems} items listed, ${soldCount} sold, $${usedRevUsd.toFixed(2)} revenue`);
+    // Try Finances API for accurate revenue (requires sell.finances scope — granted after reconnect)
+    let usedRevUsd = soldRevenueUsd; // fallback: estimate from active listing QuantitySold
+    let revenueSource = 'estimated';
+    try {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const finRes = await axios.get(
+        `https://api.ebay.com/sell/finances/v1/transaction?transaction_type=SALE&transaction_date_range.from=${monthStart}&limit=200`,
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 8000 }
+      );
+      if (finRes.data?.transactions?.length >= 0) {
+        usedRevUsd = (finRes.data.transactions || []).reduce((sum, tx) => {
+          const amt = parseFloat(tx.amount?.value || '0');
+          // Convert to USD if in SGD
+          if (tx.amount?.currency === 'SGD') return sum + amt * sgdToUsd;
+          return sum + amt;
+        }, 0);
+        revenueSource = 'live';
+      }
+    } catch { /* sell.finances scope not yet granted — use estimate from QuantitySold */ }
+
+    console.log(`selling-limits: ${usedItems} items, $${usedRevUsd.toFixed(2)} revenue (${revenueSource})`);
 
     res.json({
-      items:   { used: usedItems,   limit: itemLimit,    remaining: Math.max(0, itemLimit - usedItems) },
-      revenue: { usedUsd: Math.round(usedRevUsd * 100) / 100, limitUsd: Math.round(revLimitUsd * 100) / 100,
-                 remaining: Math.round(Math.max(0, revLimitUsd - usedRevUsd) * 100) / 100, rate: sgdToUsd },
+      items:   { used: usedItems, limit: itemLimit, remaining: Math.max(0, itemLimit - usedItems) },
+      revenue: {
+        usedUsd: Math.round(usedRevUsd * 100) / 100,
+        limitUsd: Math.round(revLimitUsd * 100) / 100,
+        remaining: Math.round(Math.max(0, revLimitUsd - usedRevUsd) * 100) / 100,
+        rate: sgdToUsd,
+        source: revenueSource,
+      },
     });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
