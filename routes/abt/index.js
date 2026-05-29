@@ -304,14 +304,15 @@ async function egpCacheWrite(key, items) {
   )
 }
 
+// CGD manual specifies process3 as the correct hostname for RSS
+const EGP_RSS_URL = 'https://process3.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml'
+
 async function fetchEgpXml(params) {
-  const axios = require('axios')
   // Try up to 2 times — first request often wakes up the Render server + e-GP
   let lastErr
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { data } = await require('axios').get(
-        'https://process.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml',
+      const { data } = await require('axios').get(EGP_RSS_URL,
         { params, timeout: 30000, maxRedirects: 5,
           headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' } }
       )
@@ -327,12 +328,19 @@ async function fetchEgpXml(params) {
 router.get('/egp-rss', async (req, res) => {
   const cheerio  = require('cheerio')
   // Read dept ID from settings so admin can change it without redeploying
-  const deptSetting = await AbtSettings.findOne({ key: 'egpDeptSubId' })
-  const DEPT_SUB_ID = deptSetting?.value || '6560105'
+  // deptsubId = 10-digit sub-unit code (e.g. 0300400070)
+  // deptId    = 4-digit main dept code  (e.g. 0304)
+  const deptSetting    = await AbtSettings.findOne({ key: 'egpDeptSubId' })
+  const deptIdSetting  = await AbtSettings.findOne({ key: 'egpDeptId' })
+  const DEPT_SUB_ID    = deptSetting?.value   || ''
+  const DEPT_ID        = deptIdSetting?.value || ''
   const cacheKey = req.query.anounceType || ''
   const now      = new Date().toISOString()
   try {
-    const params = { deptsubId: DEPT_SUB_ID }
+    const params = {}
+    if (DEPT_SUB_ID) params.deptsubId = DEPT_SUB_ID
+    else if (DEPT_ID) params.deptId   = DEPT_ID
+    // Always specify anounceType — omitting it returns only D0 (ประกาศเชิญชวน)
     if (req.query.anounceType) params.anounceType = req.query.anounceType
     const xml = await fetchEgpXml(params)
     const $ = cheerio.load(xml, { xmlMode: true })
