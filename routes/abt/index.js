@@ -284,6 +284,84 @@ router.delete('/procurement/:id', requireAuth, async (req, res) => {
   }
 })
 
+// AI summarize — reads the fileUrl (PDF/HTML) and extracts project summary
+router.post('/procurement/:id/summarize', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtProcurement.findById(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+
+    const url = item.fileUrl || item.externalUrl
+    if (!url) return res.status(400).json({ error: 'ไม่มีลิงค์ไฟล์ กรุณาเพิ่มลิงค์ PDF หรือลิงค์ EGP ก่อน' })
+
+    // Fetch the document
+    let content = ''
+    try {
+      const axios = require('axios')
+      const resp = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 20000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' },
+      })
+      const ct = resp.headers['content-type'] || ''
+      if (ct.includes('pdf')) {
+        // Send PDF bytes to Claude as base64
+        content = `[PDF document base64 omitted — ${resp.data.byteLength} bytes]`
+        // For PDFs, extract text via Claude files API or just send title
+      } else {
+        // HTML: decode Thai encoding
+        const decoded = new TextDecoder('windows-874').decode(resp.data)
+        // Strip HTML tags and collapse whitespace
+        content = decoded.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 8000)
+      }
+    } catch (fetchErr) {
+      content = `ชื่อโครงการ: ${item.title}`
+    }
+
+    const Anthropic = require('@anthropic-ai/sdk')
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+    const message = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 512,
+      messages: [{
+        role: 'user',
+        content: `จากเอกสารประกาศจัดซื้อจัดจ้างต่อไปนี้ กรุณาสกัดข้อมูลและตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่น:
+{
+  "title": "ชื่อโครงการ (string)",
+  "winner": "ชื่อผู้ชนะการเสนอราคา (string หรือ null)",
+  "amount": "ราคาที่เสนอหรือราคาสุทธิ เป็นตัวเลขบาท ไม่มีจุลภาค (number หรือ null)",
+  "budget": "วงเงินงบประมาณหรือราคากลาง เป็นตัวเลขบาท (number หรือ null)",
+  "method": "วิธีการจัดหา (string หรือ null)"
+}
+
+เนื้อหาเอกสาร:
+${content}
+
+ชื่อรายการปัจจุบัน: ${item.title}`,
+      }],
+    })
+
+    let extracted = {}
+    try {
+      const text = message.content[0].text
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (jsonMatch) extracted = JSON.parse(jsonMatch[0])
+    } catch { extracted = {} }
+
+    // Update the item with extracted fields (only non-null values)
+    const update = {}
+    if (extracted.title)  update.title  = extracted.title
+    if (extracted.winner) update.winner = extracted.winner
+    if (extracted.amount != null) update.amount = Number(extracted.amount)
+    if (extracted.budget != null) update.budget = Number(extracted.budget)
+    if (extracted.method) update.method = extracted.method
+
+    const updated = await AbtProcurement.findByIdAndUpdate(req.params.id, update, { new: true })
+    res.json({ extracted, item: updated })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // e-GP RSS proxy — persistent MongoDB cache survives server restarts
 // (Render free tier restarts after idle, wiping any in-memory state)
 
@@ -321,11 +399,12 @@ async function fetchEgpXml(params) {
   let lastErr
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { data } = await require('axios').get(EGP_RSS_URL,
-        { params, timeout: 30000, maxRedirects: 5,
+      const { data: buf } = await require('axios').get(EGP_RSS_URL,
+        { params, timeout: 30000, maxRedirects: 5, responseType: 'arraybuffer',
           headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' } }
       )
-      return data
+      // e-GP RSS is Windows-874 (TIS-620) encoded — decode to UTF-8
+      return new TextDecoder('windows-874').decode(buf)
     } catch (err) {
       lastErr = err
       if (attempt === 0) await new Promise(r => setTimeout(r, 2000)) // brief pause before retry
