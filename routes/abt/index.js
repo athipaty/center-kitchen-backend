@@ -284,12 +284,24 @@ router.delete('/procurement/:id', requireAuth, async (req, res) => {
   }
 })
 
-// e-GP RSS proxy — with in-memory cache so stale data shows when feed is down
-const _egpCache = {}  // keyed by anounceType ('' = all)
+// e-GP RSS proxy — persistent MongoDB cache survives server restarts
+// (Render free tier restarts after idle, wiping any in-memory state)
 
-// Detect maintenance/error text that e-GP embeds as fake RSS items
 function isMaintenanceText(str) {
   return /ไม่พร้อมให้บริการ|ปิดปรับปรุง|not available|maintenance/i.test(str || '')
+}
+
+async function egpCacheRead(key) {
+  const doc = await AbtSettings.findOne({ key: `egp_cache_${key}` })
+  return doc?.value || null
+}
+
+async function egpCacheWrite(key, items) {
+  await AbtSettings.findOneAndUpdate(
+    { key: `egp_cache_${key}` },
+    { value: { items, cachedAt: new Date().toISOString() } },
+    { upsert: true }
+  )
 }
 
 router.get('/egp-rss', async (req, res) => {
@@ -304,7 +316,6 @@ router.get('/egp-rss', async (req, res) => {
     const { data: xml } = await axios.get(BASE_URL, { params, timeout: 20000, maxRedirects: 5 })
     const $ = cheerio.load(xml, { xmlMode: true })
 
-    // Check the channel title/description for maintenance notices
     const channelTitle = $('channel > title').first().text()
     const channelDesc  = $('channel > description').first().text()
 
@@ -318,24 +329,26 @@ router.get('/egp-rss', async (req, res) => {
       })
     })
 
-    // Detect maintenance: e-GP returns fake items with maintenance text as their titles
+    // e-GP returns fake items with maintenance text during downtime — detect it
     const allText = [channelTitle, channelDesc, ...items.map(i => i.title)].join(' ')
-    if (isMaintenanceText(allText) || items.every(i => isMaintenanceText(i.title))) {
-      // Build a human-readable message from whatever e-GP sent back
-      const notice = items.map(i => i.title).filter(Boolean).join(' — ') || channelTitle || 'ระบบ e-GP ไม่พร้อมให้บริการในขณะนี้'
-      // Serve stale cache so the page still shows old data during maintenance
-      if (_egpCache[cacheKey]?.items?.length > 0) {
-        return res.json({ items: _egpCache[cacheKey].items, stale: true, staleAt: _egpCache[cacheKey].cachedAt, notice })
+    if (isMaintenanceText(allText) || (items.length > 0 && items.every(i => isMaintenanceText(i.title)))) {
+      const notice = items.map(i => i.title).filter(Boolean).join(' — ')
+        || channelTitle
+        || 'ระบบ e-GP ไม่พร้อมให้บริการในขณะนี้'
+      const cached = await egpCacheRead(cacheKey)
+      if (cached?.items?.length > 0) {
+        return res.json({ items: cached.items, stale: true, staleAt: cached.cachedAt, notice })
       }
       return res.status(503).json({ maintenance: true, notice, hours: '17:01–08:59 น.' })
     }
 
-    // Real data — update cache and return
-    _egpCache[cacheKey] = { items, cachedAt: new Date().toISOString() }
+    // Real data — persist to MongoDB so it survives server restarts
+    await egpCacheWrite(cacheKey, items)
     res.json({ items })
   } catch (err) {
-    if (_egpCache[cacheKey]?.items?.length > 0) {
-      return res.json({ items: _egpCache[cacheKey].items, stale: true, staleAt: _egpCache[cacheKey].cachedAt })
+    const cached = await egpCacheRead(cacheKey).catch(() => null)
+    if (cached?.items?.length > 0) {
+      return res.json({ items: cached.items, stale: true, staleAt: cached.cachedAt })
     }
     res.status(502).json({ error: 'ไม่สามารถเชื่อมต่อระบบ e-GP ได้: ' + err.message })
   }
