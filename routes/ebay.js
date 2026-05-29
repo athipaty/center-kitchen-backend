@@ -2356,4 +2356,41 @@ router.get('/listing/:id/prices', async (req, res) => {
   }
 });
 
+// ── Get eBay listing view count (HitCount via Trading API GetItem) ───
+const viewsCache = new Map(); // listingId → { count, expiresAt }
+const VIEWS_TTL = 60 * 60 * 1000; // 1 hour — eBay updates HitCount ~daily
+
+router.get('/listing/:id/views', async (req, res) => {
+  const cleanId = String(req.params.id).replace(/\D/g, '');
+  if (!cleanId) return res.status(400).json({ error: 'Invalid listing ID' });
+
+  const cached = viewsCache.get(cleanId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return res.json({ listingId: cleanId, views: cached.count });
+  }
+
+  try {
+    const token = await getAccessToken();
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ItemID>${cleanId}</ItemID><DetailLevel>ReturnAll</DetailLevel></GetItemRequest>`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+    );
+
+    if (/<Ack>Failure<\/Ack>/.test(xml)) {
+      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+      return res.status(400).json({ error: msg });
+    }
+
+    const hitMatch = xml.match(/<HitCount>(\d+)<\/HitCount>/);
+    const count = hitMatch ? parseInt(hitMatch[1], 10) : 0;
+
+    viewsCache.set(cleanId, { count, expiresAt: Date.now() + VIEWS_TTL });
+    res.json({ listingId: cleanId, views: count });
+  } catch (err) {
+    if (err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
