@@ -13,7 +13,7 @@ const axios   = require('axios')
 const cheerio = require('cheerio')
 const AbtSettings = require('../models/abt/AbtSettings')
 
-const DEPT_SUB_ID = '6560105'
+const DEPT_SUB_ID = '1509903843'
 const BASE_URL    = 'https://process.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml'
 
 // Same announce types exposed on the public page
