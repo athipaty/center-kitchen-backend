@@ -147,11 +147,16 @@ async function refreshAll() {
 }
 
 function start() {
-  // 18:00 TH = 11:00 UTC — fetch new items
-  cron.schedule('0 11 * * *', refreshAll, { timezone: 'UTC' })
-  // 18:30 TH = 11:30 UTC — enrich items that lack detail data
-  cron.schedule('30 11 * * *', enrichAll, { timezone: 'UTC' })
-  console.log('✅ egpCacheRefresh scheduled: 18:00 TH (RSS) + 18:30 TH (enrich)')
+  // Run RSS fetch 3× during the available window (17:01–08:59 TH)
+  // so announcements published at different times of the day are all captured.
+  cron.schedule('0 11 * * *', refreshAll,  { timezone: 'UTC' })  // 18:00 TH
+  cron.schedule('0 13 * * *', refreshAll,  { timezone: 'UTC' })  // 20:00 TH
+  cron.schedule('0 15 * * *', refreshAll,  { timezone: 'UTC' })  // 22:00 TH
+  // Enrich (fetch detail pages for winner/amount) 30 min after each RSS run
+  cron.schedule('30 11 * * *', enrichAll, { timezone: 'UTC' })   // 18:30 TH
+  cron.schedule('30 13 * * *', enrichAll, { timezone: 'UTC' })   // 20:30 TH
+  cron.schedule('30 15 * * *', enrichAll, { timezone: 'UTC' })   // 22:30 TH
+  console.log('✅ egpCacheRefresh scheduled: 18:00/20:00/22:00 TH (RSS) + enrichment 30min after each')
 }
 
 module.exports = { start, refreshAll, enrichAll }
