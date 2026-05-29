@@ -92,6 +92,7 @@ mongoose
   .then(() => {
     console.log("✅ Connected to MongoDB");
     require("./jobs/trackerScheduler").start(io);
+    require("./jobs/egpCacheRefresh").start();
   })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
