@@ -1437,15 +1437,17 @@ router.post('/listing/variation-photos', async (req, res) => {
     };
     const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
-    const withImages = variants.filter(v => v.image);
+    const withImages = variants.filter(v => v.images?.length || v.image);
     if (!withImages.length) return res.status(400).json({ error: 'No variant images provided' });
 
     const dimName = variantDimension || 'Style';
-    const pictureSets = withImages.map(v => `
-      <VariationSpecificPictureSet>
+    const pictureSets = withImages.map(v => {
+      const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []);
+      return `<VariationSpecificPictureSet>
         <VariationSpecificValue>${escXml(v.label)}</VariationSpecificValue>
-        <PictureURL>${escXml(v.image)}</PictureURL>
-      </VariationSpecificPictureSet>`).join('');
+        ${imgs.map(img => `<PictureURL>${escXml(img)}</PictureURL>`).join('')}
+      </VariationSpecificPictureSet>`;
+    }).join('');
 
     const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
       ${creds}
@@ -1712,16 +1714,18 @@ router.post('/trading-create-listing', async (req, res) => {
         </Variation>`;
       }).join('');
 
-      // Per-variant pictures — changes the displayed image when buyer selects a variation option
-      const variantsWithImages = variants.filter(v => v.image);
+      // Per-variant pictures — all images per variant, changes on selection
+      const variantsWithImages = variants.filter(v => v.images?.length || v.image);
       const variationPicturesXml = variantsWithImages.length ? `
         <Pictures>
           <VariationSpecificName>${escXml(variantDimension)}</VariationSpecificName>
-          ${variantsWithImages.map(v => `
-          <VariationSpecificPictureSet>
+          ${variantsWithImages.map(v => {
+            const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []);
+            return `<VariationSpecificPictureSet>
             <VariationSpecificValue>${escXml(v.label)}</VariationSpecificValue>
-            <PictureURL>${escXml(v.image)}</PictureURL>
-          </VariationSpecificPictureSet>`).join('')}
+            ${imgs.map(img => `<PictureURL>${escXml(img)}</PictureURL>`).join('')}
+          </VariationSpecificPictureSet>`;
+          }).join('')}
         </Pictures>` : '';
 
       varSpecsXml = `<Variations>
