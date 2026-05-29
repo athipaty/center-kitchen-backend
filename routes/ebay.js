@@ -1647,6 +1647,19 @@ router.post('/trading-create-listing', async (req, res) => {
           </VariationSpecifics>
         </Variation>`;
       }).join('');
+
+      // Per-variant pictures — changes the displayed image when buyer selects a variation option
+      const variantsWithImages = variants.filter(v => v.image);
+      const variationPicturesXml = variantsWithImages.length ? `
+        <Pictures>
+          <VariationSpecificName>${escXml(variantDimension)}</VariationSpecificName>
+          ${variantsWithImages.map(v => `
+          <VariationSpecificPictureSet>
+            <VariationSpecificValue>${escXml(v.label)}</VariationSpecificValue>
+            <PictureURL>${escXml(v.image)}</PictureURL>
+          </VariationSpecificPictureSet>`).join('')}
+        </Pictures>` : '';
+
       varSpecsXml = `<Variations>
         ${variationsXml}
         <VariationSpecificsSet>
@@ -1655,6 +1668,7 @@ router.post('/trading-create-listing', async (req, res) => {
             ${variants.map(v => `<Value>${escXml(v.label)}</Value>`).join('')}
           </NameValueList>
         </VariationSpecificsSet>
+        ${variationPicturesXml}
       </Variations>`;
     }
 
