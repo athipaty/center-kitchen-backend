@@ -135,7 +135,7 @@ function setCache(key, data) {
 }
 
 // ── Token persistence (MongoDB — survives Render restarts) ─────────
-let tokens = { access_token: null, refresh_token: null, expires_at: 0 };
+let tokens = { access_token: null, refresh_token: null, expires_at: 0, refresh_token_expires_at: 0 };
 
 // Load tokens from MongoDB on startup
 (async () => {
@@ -166,7 +166,7 @@ async function getAccessToken() {
   if (!tokens.refresh_token) {
     try {
       const doc = await EbayToken.findById('ebay');
-      if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at };
+      if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at, refresh_token_expires_at: doc.refresh_token_expires_at || 0 };
     } catch {}
   }
   if (tokens.access_token && Date.now() < tokens.expires_at - 60000) return tokens.access_token;
@@ -233,10 +233,12 @@ router.get('/auth/callback', async (req, res) => {
       new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: process.env.EBAY_RUNAME }),
       { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
+    const EIGHTEEN_MONTHS = 18 * 30 * 24 * 3600 * 1000;
     tokens = {
       access_token: data.access_token,
       refresh_token: data.refresh_token,
       expires_at: Date.now() + data.expires_in * 1000,
+      refresh_token_expires_at: Date.now() + (data.refresh_token_expires_in ? data.refresh_token_expires_in * 1000 : EIGHTEEN_MONTHS),
     };
     await saveTokens();
     res.redirect(`${process.env.CLIENT_URL}/ebay?connected=1`);
@@ -249,10 +251,13 @@ router.get('/auth/status', async (_req, res) => {
   if (!tokens.refresh_token) {
     try {
       const doc = await EbayToken.findById('ebay');
-      if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at };
+      if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at, refresh_token_expires_at: doc.refresh_token_expires_at || 0 };
     } catch {}
   }
-  res.json({ connected: !!tokens.refresh_token });
+  const daysLeft = tokens.refresh_token_expires_at
+    ? Math.floor((tokens.refresh_token_expires_at - Date.now()) / 86400000)
+    : null;
+  res.json({ connected: !!tokens.refresh_token, refreshTokenDaysLeft: daysLeft });
 });
 
 // ── Public search ──────────────────────────────────────────────────
