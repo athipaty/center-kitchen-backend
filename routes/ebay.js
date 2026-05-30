@@ -1377,6 +1377,7 @@ Generate a JSON object (raw JSON only, no markdown fences):
   ],
   "ctaHeading": "Compelling CTA headline",
   "ctaSub": "One encouraging sentence",
+  "seoText": "2-3 natural readable sentences that describe the product using the keywords buyers actually search for — include product type, material, size/quantity, use cases, and key features as plain prose. Write it for a human reader, not as a keyword list.",
   "theme": "blue|green|orange|navy|teal|red|purple"
 }
 
@@ -1384,6 +1385,7 @@ CRITICAL rules:
 - Generate EXACTLY ${photoRowTarget} photoRows
 - If Amazon features are provided, base photo rows DIRECTLY on those features — don't invent new ones
 - Use SPECIFIC data (numbers, materials, dimensions) not vague language
+- seoText must use natural prose — no bullet points, no keyword stuffing, no repetition
 - theme: green=natural/bamboo/organic, orange=pest/bug/zapper, blue=fans/water/cooling, navy=car/travel/tech, teal=bathroom/home, red=pest/insect, purple=garden/outdoor
 - FORBIDDEN: competitor names, fake reviews, false urgency, external links, HTML tags inside string values`;
 
@@ -1491,6 +1493,7 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background
 .cb{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
 .cbb{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.3);color:#fff;font-size:12px;font-weight:bold;padding:8px 18px;border-radius:22px}
 .ft{background:#f4f4f4;border-top:2px solid ${t.border};padding:16px;text-align:center;font-size:12px;color:#888;line-height:1.65}
+.kw{padding:14px 20px 4px;font-size:12px;color:#aaa;line-height:1.7;text-align:center;max-width:820px;margin:0 auto}
 </style></head><body>
 <div class="hero">${imageUrls[0]?`<img src="${imageUrls[0]}" alt="${esc(title)}">`:''}<div class="hero-text">
 <span class="hero-tag">${esc(content.tagline||'')}</span>
@@ -1504,6 +1507,7 @@ ${galleryHtml}
 ${specTableHtml}
 <div class="cta"><h2>${esc(content.ctaHeading||'Order Today')}</h2><p>${esc(content.ctaSub||'')}</p>
 <div class="cb">${tr.slice(0,4).map(x=>`<span class="cbb">&#10003; ${esc(x)}</span>`).join('')}</div></div>
+${content.seoText ? `<p class="kw">${esc(content.seoText)}</p>` : ''}
 <div class="ft"><p>All images shown are of the actual item. Colour may vary slightly due to monitor settings.</p></div>
 </body></html>`;
 
