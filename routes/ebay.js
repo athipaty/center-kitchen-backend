@@ -471,6 +471,75 @@ async function injectTitleAspects(catId, aspects, title) {
   }
 }
 
+// Single-batch AI enrichment — fills all unfilled category aspects using product context
+async function enrichAspectsWithAI(catId, aspects, title, specs, bullets = []) {
+  const catAspects = await getValidAspectValues(catId);
+  if (!Object.keys(catAspects).length) return;
+
+  const missing = Object.entries(catAspects)
+    .filter(([name]) => !aspects[name] && name !== 'Brand')
+    .map(([name, info]) => ({
+      name,
+      ...(info.values.length ? { validValues: info.values.slice(0, 25) } : {}),
+    }));
+
+  if (!missing.length) return;
+
+  const specText = specs
+    ? Object.entries(specs)
+        .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews', 'brand_name', 'manufacturer'].includes(k))
+        .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+        .join('\n')
+    : '';
+  const bulletText = bullets.length ? bullets.map(b => `- ${b}`).join('\n') : '';
+
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const prompt = `Fill in eBay item specifics for this product.
+
+Title: ${title}
+${specText ? `\nSpecs:\n${specText}` : ''}
+${bulletText ? `\nBullets:\n${bulletText}` : ''}
+
+For each field below, provide a value based on the product info above.
+- If "validValues" is listed, pick EXACTLY one value from that list (exact match, case-sensitive).
+- If no validValues, provide a short accurate value (max 65 chars).
+- Skip fields you cannot confidently answer — do not guess.
+
+Return ONLY a JSON object: {"Field Name": "value", ...}
+Do not include fields you are skipping.
+
+Fields:
+${JSON.stringify(missing)}`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    const raw = (msg.content[0]?.text || '').trim();
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return;
+
+    const filled = JSON.parse(jsonMatch[0]);
+    let count = 0;
+    for (const [name, value] of Object.entries(filled)) {
+      if (!value || aspects[name]) continue;
+      const info = catAspects[name];
+      if (info?.values?.length) {
+        const match = info.values.find(v => v.toLowerCase() === String(value).toLowerCase());
+        if (match) { aspects[name] = [match]; count++; }
+      } else {
+        aspects[name] = [String(value).slice(0, 65)]; count++;
+      }
+    }
+    if (count) console.log(`enrichAspectsWithAI: filled ${count} aspects`);
+  } catch (e) {
+    console.log('enrichAspectsWithAI failed:', e.message);
+  }
+}
+
 // ── Create listing ─────────────────────────────────────────────────
 function buildAspects(specs) {
   const MAP = {
@@ -1953,7 +2022,7 @@ router.post('/trading-create-listing', async (req, res) => {
     const {
       title, price, currency = 'USD', quantity = 2,
       condition = 'NEW', categoryId,
-      imageUrls = [], upc, specs = {}, description,
+      imageUrls = [], upc, specs = {}, bullets = [], description,
       variants, // [{ label, price, quantity }] for multi-variation
       variantDimension = 'Color', // e.g. 'Color', 'Size', 'Style'
       shipping = { free: true, carrier: 'FedExStandardOvernight', handlingDays: 1 },
@@ -1982,6 +2051,9 @@ router.post('/trading-create-listing', async (req, res) => {
 
     // Proactively inject aspects that can be matched from the title (avoids 21919303 on first attempt)
     await injectTitleAspects(catId, aspects, safeTitle);
+
+    // Fill remaining unfilled aspects (required + recommended) using product specs and bullets
+    await enrichAspectsWithAI(catId, aspects, safeTitle, specs, bullets);
 
     // For multi-variation listings, the variantDimension (Color/Size/Style) MUST NOT appear
     // in ItemSpecifics — eBay error 21916626 fires if the same name appears in both.
