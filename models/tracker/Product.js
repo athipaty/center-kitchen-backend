@@ -27,6 +27,7 @@ const productSchema = new mongoose.Schema(
     ebayListingId: { type: String, default: null },
     status: { type: String, enum: ['active', 'out_of_stock', 'unavailable', 'error'], default: 'active' },
     failCount: { type: Number, default: 0 },
+    unavailableSince: { type: Date, default: null },
   },
   { timestamps: true }
 );

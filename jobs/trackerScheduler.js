@@ -1,7 +1,7 @@
 const cron = require("node-cron");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
-const { syncEbayPrice, syncEbayQty } = require("./ebayPriceSync");
+const { syncEbayPrice, syncEbayQty, endListing } = require("./ebayPriceSync");
 
 let io = null;
 
@@ -59,6 +59,7 @@ async function checkProduct(p) {
     // Reset failure tracking on successful fetch
     p.status = 'active';
     p.failCount = 0;
+    p.unavailableSince = null;
 
     if (p.ebayListingId) {
       try {
@@ -93,6 +94,10 @@ async function checkProduct(p) {
       p.status = p.failCount >= 3 ? 'unavailable' : 'error';
       p.nextCheck = p.failCount >= 3 ? slowRetryDate() : errorRetryDate();
     }
+    // Track when product first became unavailable (for auto-end after 7 days)
+    if (p.status === 'unavailable' && !p.unavailableSince) {
+      p.unavailableSince = new Date();
+    }
 
     // Push qty=0 to eBay so the variant shows as Out of Stock
     if (p.ebayListingId && (p.status === 'out_of_stock' || p.status === 'unavailable')) {
@@ -111,7 +116,43 @@ async function checkProduct(p) {
   }
 }
 
+const DEAD_LISTING_DAYS = 7;
+
+async function checkDeadListings() {
+  const cutoff = new Date(Date.now() - DEAD_LISTING_DAYS * 24 * 3600 * 1000);
+
+  // Get all products with an eBay listing, check which are fully dead
+  const listed = await Product.find({ ebayListingId: { $exists: true, $ne: null } }, 'ebayListingId status unavailableSince').lean();
+  if (!listed.length) return;
+
+  // Group by listingId — only end if ALL variants are unavailable for 7+ days
+  const groups = {};
+  for (const p of listed) {
+    if (!groups[p.ebayListingId]) groups[p.ebayListingId] = [];
+    groups[p.ebayListingId].push(p);
+  }
+
+  const deadIds = Object.entries(groups)
+    .filter(([, variants]) =>
+      variants.every(v => v.status === 'unavailable') &&
+      variants.every(v => v.unavailableSince && new Date(v.unavailableSince) <= cutoff)
+    )
+    .map(([id]) => id);
+
+  for (const listingId of deadIds) {
+    try {
+      await endListing(listingId);
+      await Product.updateMany({ ebayListingId: listingId }, { $set: { ebayListingId: null } });
+      console.log(`auto-ended dead listing: ${listingId} (all variants unavailable 7+ days)`);
+      if (io) io.emit('tracker:listing:ended', { listingId });
+    } catch (e) {
+      console.error(`failed to end dead listing ${listingId}:`, e.message);
+    }
+  }
+}
+
 async function runDueChecks() {
+  await checkDeadListings();
   const due = await Product.find({ nextCheck: { $lte: new Date() } });
   if (!due.length) return;
 
