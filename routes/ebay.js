@@ -2373,25 +2373,30 @@ router.get('/listing/:id/views', async (req, res) => {
   try {
     const token = await getAccessToken();
 
-    // Query last 90 days — enough to capture lifetime views for recent listings
     const now = new Date();
-    const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
     const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
 
-    const { data } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
-      headers: { Authorization: `Bearer ${token}` },
-      params: {
-        dimension: 'DAY',
-        metric: 'LISTING_VIEWS_TOTAL',
-        filter: `listing_id:{${cleanId}},date_range:[${fmt(start)}..${fmt(now)}]`,
-      },
-    });
-
-    // Sum daily view counts across all records
     let views = 0;
-    for (const record of (data.records || [])) {
-      const m = (record.metricData || []).find(x => x.metricKey === 'LISTING_VIEWS_TOTAL');
-      if (m?.value) views += Number(m.value);
+    let rawData = null;
+    try {
+      const { data } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          dimension: 'LISTING',
+          metric: 'LISTING_VIEWS_TOTAL',
+          filter: `listing_id:{${cleanId}},date_range:[${fmt(start)}..${fmt(now)}]`,
+        },
+      });
+      rawData = data;
+      for (const record of (data.records || [])) {
+        const m = (record.metricData || []).find(x => x.metricKey === 'LISTING_VIEWS_TOTAL');
+        if (m?.value != null) views += Number(m.value);
+      }
+    } catch (apiErr) {
+      console.error(`[eBay views] Analytics API error for listing ${cleanId}:`, apiErr.response?.data || apiErr.message);
+      // Return debug info so browser console can show what went wrong
+      return res.json({ listingId: cleanId, views: 0, _error: apiErr.response?.data || apiErr.message });
     }
 
     viewsCache.set(cleanId, { count: views, expiresAt: Date.now() + VIEWS_TTL });
@@ -2399,7 +2404,7 @@ router.get('/listing/:id/views', async (req, res) => {
   } catch (err) {
     if (err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
-    res.status(500).json({ error: err.message, detail: err.response?.data });
+    res.status(500).json({ error: err.message });
   }
 });
 
