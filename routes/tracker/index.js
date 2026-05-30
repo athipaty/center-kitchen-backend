@@ -265,4 +265,68 @@ Amazon title: ${title}${variant ? `\nVariant: ${variant}` : ''}${specsText ? `\n
   }
 });
 
+// GET profit summary — aggregate margin/profit data across all active listed products
+router.get("/profit-summary", async (req, res) => {
+  try {
+    const products = await Product.find(
+      { ebayListingId: { $exists: true, $ne: null } },
+      'title ebayListingId current status variant'
+    ).lean();
+
+    // Tiered markup — mirrors src/utils/pricing.js
+    function calcEbayPrice(ap) {
+      const mult = ap < 10 ? 2.2 : ap < 20 ? 1.7 : ap < 35 ? 1.55 : ap < 60 ? 1.45 : 1.35;
+      const minPrice = (ap + 4.50 + 0.30) / (1 - 0.1325);
+      return Math.floor(Math.max(ap * mult, minPrice)) + 0.99;
+    }
+    function calcFee(ep) { return +(ep * 0.1325 + 0.30).toFixed(2); }
+
+    // Group by listingId
+    const groups = {};
+    for (const p of products) {
+      if (!groups[p.ebayListingId]) groups[p.ebayListingId] = [];
+      groups[p.ebayListingId].push(p);
+    }
+
+    const listings = Object.entries(groups).map(([listingId, variants]) => {
+      const primary = variants.find(v => v.title && v.title !== 'Unknown product') || variants[0];
+      const rows = variants.map(v => {
+        const ebay   = calcEbayPrice(v.current);
+        const fee    = calcFee(ebay);
+        const profit = +(ebay - v.current - fee).toFixed(2);
+        const margin = +((profit / ebay) * 100).toFixed(1);
+        return { amazon: v.current, ebay, profit, margin, variant: v.variant, status: v.status };
+      });
+      const avg = key => +(rows.reduce((s, r) => s + r[key], 0) / rows.length).toFixed(2);
+      return {
+        listingId,
+        title: primary.title.slice(0, 70),
+        variantCount: variants.length,
+        avgAmazon: avg('amazon'),
+        avgEbay:   avg('ebay'),
+        avgProfit: avg('profit'),
+        avgMargin: +((rows.reduce((s, r) => s + r.margin, 0) / rows.length).toFixed(1)),
+        variants: rows,
+      };
+    }).sort((a, b) => b.avgProfit - a.avgProfit);
+
+    const n = listings.length;
+    res.json({
+      listings,
+      summary: {
+        totalListings:       n,
+        totalVariants:       products.length,
+        avgMargin:           n ? +(listings.reduce((s, l) => s + l.avgMargin, 0) / n).toFixed(1) : 0,
+        totalPotentialProfit:+(listings.reduce((s, l) => s + l.avgProfit * l.variantCount, 0)).toFixed(2),
+        highMargin:          listings.filter(l => l.avgMargin >= 25).length,
+        thinMargin:          listings.filter(l => l.avgMargin < 15).length,
+        topEarners:          listings.slice(0, 5),
+        needsAttention:      listings.filter(l => l.avgMargin < 15),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
