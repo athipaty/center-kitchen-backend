@@ -1475,7 +1475,7 @@ Rules:
 - Use buyer search language: prefer "Butcher Block" over "chopping board" for wood boards, "Rechargeable" over "battery-powered", etc.
 - Title Case
 - No hyphens, pipes, or special characters — use spaces only
-- No brand name unless it is well-known (Nike, LEGO, Sony, etc.)
+- NEVER include the brand name — buyers search for product type, not brand; drop it entirely
 - No "100%", no asterisks, no "best", no exclamation marks, no "free shipping", no "warranty"
 - Output ONLY the title, no quotes, no explanation`;
 
