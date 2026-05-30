@@ -1,4 +1,5 @@
 const cron = require("node-cron");
+const axios = require("axios");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
 const { syncEbayPrice, syncEbayQty, endListing } = require("./ebayPriceSync");
@@ -166,10 +167,23 @@ async function runDueChecks() {
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
 }
 
+async function runWeeklyOptimize() {
+  const PORT = process.env.PORT || 5000;
+  try {
+    console.log('weekly-optimize: starting batch optimization of all listings…');
+    const { data } = await axios.post(`http://localhost:${PORT}/api/ebay/batch-optimize`);
+    console.log(`weekly-optimize: started — ${data.total} listings queued`);
+  } catch (e) {
+    console.error('weekly-optimize: failed to start:', e.message);
+  }
+}
+
 function start(socketIo) {
   io = socketIo;
   // Check every 5 minutes which products are due
   cron.schedule("*/5 * * * *", runDueChecks);
+  // Re-optimize all listings every Sunday at 3am
+  cron.schedule("0 3 * * 0", runWeeklyOptimize);
 }
 
 // Called when user clicks "Check Now" for a specific product or all products
