@@ -2527,14 +2527,6 @@ router.get('/listing/:id/prices', async (req, res) => {
 const viewsCache = new Map(); // listingId → { count, expiresAt }
 const VIEWS_TTL = 60 * 60 * 1000; // 1 hour cache
 
-const VIEW_METRICS = [
-  'LISTING_VIEWS_SOURCE_DIRECT',
-  'LISTING_VIEWS_SOURCE_OFF_EBAY',
-  'LISTING_VIEWS_SOURCE_OTHER_INTERNAL',
-  'LISTING_VIEWS_SOURCE_ORGANIC_SEARCH',
-  'LISTING_VIEWS_SOURCE_PROMOTED_LISTINGS',
-];
-
 // Batch endpoint: GET /api/ebay/listings/views?ids=id1,id2,id3
 // Returns { views: { id1: N, id2: N, ... } }
 router.get('/listings/views', async (req, res) => {
@@ -2544,7 +2536,7 @@ router.get('/listings/views', async (req, res) => {
 
   const now = new Date();
   const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
-  const start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+  const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
 
   // Return cached results for all IDs that are still fresh
   const result = {};
@@ -2565,17 +2557,14 @@ router.get('/listings/views', async (req, res) => {
         headers: { Authorization: `Bearer ${token}` },
         params: {
           dimension: 'LISTING',
-          metric: VIEW_METRICS.join('|'),
+          metric: 'LISTING_VIEWS_TOTAL',
           filter: `listing_ids:{${uncached.join('|')}},date_range:[${fmt(start)}..${fmt(now)}]`,
         },
       });
       for (const record of (data.records || [])) {
-        const lid = String(record.dimensionMetadata?.[0]?.value || record.dimensionKey || '');
+        const lid = String(record.dimensionValues?.[0]?.value || '');
         if (!lid) continue;
-        let total = 0;
-        for (const m of (record.metricData || [])) {
-          if (VIEW_METRICS.includes(m.metricKey) && m.value != null) total += Number(m.value);
-        }
+        const total = Number(record.metricValues?.[0]?.value ?? 0);
         result[lid] = total;
         viewsCache.set(lid, { count: total, expiresAt: Date.now() + VIEWS_TTL });
       }
@@ -2615,7 +2604,7 @@ router.get('/listing/:id/views', async (req, res) => {
         headers: { Authorization: `Bearer ${token}` },
         params: {
           dimension: 'LISTING',
-          metric: VIEW_METRICS.join('|'),
+          metric: VIEW_METRICS.join(','),
           filter: `listing_ids:{${cleanId}},date_range:[${fmt(start)}..${fmt(now)}]`,
         },
       });
