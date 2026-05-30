@@ -1455,7 +1455,7 @@ router.post('/seo-title', async (req, res) => {
 
     const specLines = specs
       ? Object.entries(specs)
-          .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews'].includes(k))
+          .filter(([k, v]) => v && !['asin', 'best_sellers_rank', 'customer_reviews', 'brand_name', 'manufacturer'].includes(k))
           .slice(0, 12)
           .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
           .join('; ')
