@@ -82,7 +82,9 @@ app.use('/auth', require('./routes/shared/auth'));
 app.use('/api/tracker', require('./routes/tracker'));
 
 // --- eBay ---
-app.use('/api/ebay', require('./routes/ebay'));
+const ebayRouter = require('./routes/ebay');
+app.use('/api/ebay', ebayRouter);
+mongoose.connection.once('open', () => ebayRouter.setIo(io));
 
 /* =====================
    DATABASE

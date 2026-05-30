@@ -5,6 +5,11 @@ const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const EbayToken = require('../models/shared/EbayToken');
 
+const Product = require('../models/tracker/Product');
+
+let _io = null;
+function setIo(socketIo) { _io = socketIo; }
+
 // ── Sold-price cache (6h TTL) ──────────────────────────────────────
 const soldCache = new Map(); // key → { data, expiresAt }
 const SOLD_TTL = 6 * 60 * 60 * 1000;
@@ -2553,4 +2558,99 @@ router.get('/listing/:id/views', async (req, res) => {
   }
 });
 
+// ── Batch optimize all existing listings ───────────────────────────
+// Regenerates SEO title, item specifics, and description for every
+// eBay listing in the DB and pushes via ReviseFixedPriceItem.
+router.post('/batch-optimize', async (req, res) => {
+  const BASE = `http://localhost:${process.env.PORT || 5000}`;
+
+  const products = await Product.find({ ebayListingId: { $exists: true, $ne: null } }).lean();
+  // Group by listingId, pick most-data variant as primary
+  const groups = {};
+  for (const p of products) {
+    if (!groups[p.ebayListingId]) groups[p.ebayListingId] = [];
+    groups[p.ebayListingId].push(p);
+  }
+  const listingIds = Object.keys(groups);
+  const total = listingIds.length;
+
+  res.json({ started: true, total });
+
+  // Process in background — concurrency 3
+  const sem = { running: 0, queue: [] };
+  async function withLimit(fn) {
+    if (sem.running >= 3) await new Promise(r => sem.queue.push(r));
+    sem.running++;
+    try { return await fn(); } finally {
+      sem.running--;
+      if (sem.queue.length) sem.queue.shift()();
+    }
+  }
+
+  let done = 0;
+  await Promise.all(listingIds.map(listingId => withLimit(async () => {
+    const variants = groups[listingId];
+    const primary = variants.find(v => v.status === 'active' && v.specs && Object.keys(v.specs).length) || variants[0];
+
+    try {
+      const token = await getAccessToken();
+      const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+      // 1. Generate SEO title
+      const titleRes = await axios.post(`${BASE}/api/ebay/seo-title`, { title: primary.title, specs: primary.specs });
+      const safeTitle = sanitizeTitle(titleRes.data.title || primary.title);
+
+      // 2. Build + enrich item specifics
+      const aspects = buildAspects(primary.specs || {});
+      if (primary.upc) aspects['UPC'] = [primary.upc];
+      if (!aspects['Brand']) aspects['Brand'] = [(primary.specs?.brand_name) || 'Unbranded'];
+      const catId = await lookupCategory(safeTitle, primary.upc);
+      if (catId) {
+        await injectTitleAspects(catId, aspects, safeTitle);
+        await enrichAspectsWithAI(catId, aspects, safeTitle, primary.specs, primary.bullets);
+      }
+      // Remove variation-dimension aspects — eBay handles these at variation level
+      ['Color', 'Size', 'Style'].forEach(k => delete aspects[k]);
+
+      // 3. Generate description
+      const imageUrls = primary.images?.length ? primary.images : (primary.image ? [primary.image] : []);
+      const descRes = await axios.post(`${BASE}/api/ebay/generate-description`, {
+        title: safeTitle, specs: primary.specs, imageUrls,
+        bullets: primary.bullets || [], upc: primary.upc, variant: primary.variant,
+      });
+      const html = descRes.data.html;
+
+      // 4. Push to eBay via ReviseFixedPriceItem
+      const specificsXml = Object.entries(aspects)
+        .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(v)}</Value>`).join('')}</NameValueList>`)
+        .join('');
+
+      const body = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+        ${creds}
+        <Item>
+          <ItemID>${escXml(listingId)}</ItemID>
+          <Title>${escXml(safeTitle)}</Title>
+          <Description><![CDATA[${html}]]></Description>
+          <ItemSpecifics>${specificsXml}</ItemSpecifics>
+        </Item>
+      </ReviseFixedPriceItemRequest>`;
+
+      const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body,
+        { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem', 'Content-Type': 'text/xml' } }
+      );
+      const ok = !/<Ack>Failure<\/Ack>/.test(xml);
+      done++;
+      if (_io) _io.emit('ebay:optimize:progress', { done, total, listingId, ok, title: safeTitle });
+      console.log(`batch-optimize [${done}/${total}] ${listingId} ${ok ? '✓' : '✗'}`);
+    } catch (e) {
+      done++;
+      if (_io) _io.emit('ebay:optimize:progress', { done, total, listingId, ok: false, error: e.message });
+      console.error(`batch-optimize [${done}/${total}] ${listingId} error:`, e.message);
+    }
+  })));
+
+  if (_io) _io.emit('ebay:optimize:done', { total, done });
+});
+
 module.exports = router;
+module.exports.setIo = setIo;
