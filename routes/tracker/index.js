@@ -155,6 +155,16 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// POST reset all error/unavailable/OOS products for immediate recheck
+router.post("/retry-errors", async (req, res) => {
+  try {
+    const count = await scheduler.retryErrors();
+    res.json({ ok: true, reset: count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST trigger manual price check now — waits for completion
 router.post("/check", async (req, res) => {
   try {

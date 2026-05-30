@@ -22,9 +22,14 @@ function nextCheckDate(product) {
   return new Date(Date.now() + adaptiveInterval(product));
 }
 
+function errorRetryDate() {
+  // 30–90 min for transient errors (failCount < 3) — quick retry without hammering ScraperAPI
+  return new Date(Date.now() + (Math.random() * 60 + 30) * 60 * 1000);
+}
+
 function slowRetryDate() {
-  // 5–15 min retry so unavailable/OOS variants are rechecked quickly
-  return new Date(Date.now() + (Math.random() * 10 + 5) * 60 * 1000);
+  // 4–8h for persistent unavailable products (failCount >= 3) — saves ScraperAPI credits
+  return new Date(Date.now() + (Math.random() * 4 + 4) * 3600 * 1000);
 }
 
 async function checkProduct(p) {
@@ -35,6 +40,7 @@ async function checkProduct(p) {
     const info = await fetchProduct(p.url, { priceOnly: !needsFullScrape });
     const oldPrice = p.current;
     const dropped = info.price < oldPrice;
+    const previousStatus = p.status; // save before overwriting
 
     p.current = info.price;
     if (info.price < p.lowest) p.lowest = info.price;
@@ -57,10 +63,10 @@ async function checkProduct(p) {
     if (p.ebayListingId) {
       try {
         await syncEbayPrice(p.ebayListingId, info.price, p.variant);
-        // Restore qty to 1 if it was previously OOS (coming back in stock)
-        if (p.status === 'out_of_stock' || p.status === 'unavailable') {
+        // Restore qty if recovering from any non-active status
+        if (previousStatus !== 'active') {
           await syncEbayQty(p.ebayListingId, p.variant, 3);
-          console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 3`);
+          console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 3 (was ${previousStatus})`);
         }
         console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" → $${info.price}`);
         if (io) io.emit('tracker:ebay:sync:ok', { productId: String(p._id) });
@@ -82,10 +88,10 @@ async function checkProduct(p) {
 
     if (err.code === 'OUT_OF_STOCK') {
       p.status = 'out_of_stock';
-      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate(p);
+      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : errorRetryDate();
     } else {
       p.status = p.failCount >= 3 ? 'unavailable' : 'error';
-      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : nextCheckDate(p);
+      p.nextCheck = p.failCount >= 3 ? slowRetryDate() : errorRetryDate();
     }
 
     // Push qty=0 to eBay so the variant shows as Out of Stock
@@ -140,6 +146,16 @@ async function triggerNow() {
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
 }
 
+// Force-retry all products with status error/unavailable/out_of_stock immediately
+async function retryErrors() {
+  const result = await Product.updateMany(
+    { status: { $in: ['error', 'unavailable', 'out_of_stock'] } },
+    { $set: { nextCheck: new Date(), failCount: 0 } }
+  );
+  console.log(`retryErrors: reset ${result.modifiedCount} products for immediate recheck`);
+  return result.modifiedCount;
+}
+
 // Set nextCheck on a newly added product
 function scheduleNew(product) {
   product.nextCheck = nextCheckDate(product);
@@ -149,4 +165,4 @@ function getNextCheck() {
   return null; // now per-product, not global
 }
 
-module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck };
+module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors };
