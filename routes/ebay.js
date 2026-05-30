@@ -2568,6 +2568,69 @@ router.get('/listing/:id/views', async (req, res) => {
   }
 });
 
+// ── Audit + fix return policy and handling time on all listings ────
+router.post('/fix-policies', async (req, res) => {
+  const token = await getAccessToken();
+  const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+  const products = await Product.find({ ebayListingId: { $exists: true, $ne: null } }, 'ebayListingId').lean();
+  const ids = [...new Set(products.map(p => p.ebayListingId))];
+
+  const results = await Promise.all(ids.map(async id => {
+    const cleanId = id.replace(/\D/g, '');
+    try {
+      // 1. Check current settings
+      const getBody = `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`;
+      const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', getBody, {
+        headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'X-EBAY-API-CALL-NAME': 'GetItem', 'Content-Type': 'text/xml' },
+        timeout: 10000
+      });
+
+      const dispatch = parseInt(xml.match(/<DispatchTimeMax>(\d+)<\/DispatchTimeMax>/)?.[1] ?? '99');
+      const returnsAccepted = xml.match(/<ReturnsAcceptedOption>(.*?)<\/ReturnsAcceptedOption>/)?.[1] || '';
+      const returnsWithin   = xml.match(/<ReturnsWithinOption>(.*?)<\/ReturnsWithinOption>/)?.[1] || '';
+
+      const needsHandlingFix = dispatch > 1;
+      const needsReturnFix   = returnsAccepted !== 'ReturnsAccepted' || !['Days_30', 'Days_60'].includes(returnsWithin);
+
+      if (!needsHandlingFix && !needsReturnFix) {
+        return { id, ok: true, fixed: false, dispatch, returnsWithin };
+      }
+
+      // 2. Fix
+      const newDispatch = needsHandlingFix ? 1 : dispatch;
+      const reviseBody = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+        ${creds}
+        <Item>
+          <ItemID>${cleanId}</ItemID>
+          <DispatchTimeMax>${newDispatch}</DispatchTimeMax>
+          <ReturnPolicy>
+            <ReturnsAcceptedOption>ReturnsAccepted</ReturnsAcceptedOption>
+            <ReturnsWithinOption>Days_30</ReturnsWithinOption>
+            <ShippingCostPaidByOption>Buyer</ShippingCostPaidByOption>
+          </ReturnPolicy>
+        </Item>
+      </ReviseFixedPriceItemRequest>`;
+
+      const { data: revXml } = await axios.post('https://api.ebay.com/ws/api.dll', reviseBody, {
+        headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem', 'Content-Type': 'text/xml' },
+        timeout: 10000
+      });
+
+      const ok = !/<Ack>Failure<\/Ack>/.test(revXml);
+      const errMsg = revXml.match(/<LongMessage>(.*?)<\/LongMessage>/)?.[1] || '';
+      return { id, ok, fixed: ok, dispatch: newDispatch, returnsWithin: 'Days_30', error: ok ? null : errMsg };
+    } catch (e) {
+      return { id, ok: false, fixed: false, error: e.message };
+    }
+  }));
+
+  const fixed   = results.filter(r => r.fixed).length;
+  const correct = results.filter(r => r.ok && !r.fixed).length;
+  const failed  = results.filter(r => !r.ok).length;
+  res.json({ total: ids.length, fixed, alreadyCorrect: correct, failed, results });
+});
+
 // ── Quick report: fetch current eBay titles for all tracked listings ──
 router.get('/listing-titles', async (req, res) => {
   try {
