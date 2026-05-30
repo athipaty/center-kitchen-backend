@@ -1468,10 +1468,15 @@ Amazon title: ${title}${specLines ? `\nKey specs: ${specLines}` : ''}
 Rules:
 - MUST be 75 characters or less — never exceed this, titles that run long get cut off
 - Must end on a complete word — never cut mid-word or mid-phrase
-- Include brand name and model number if present
-- Use keywords buyers search for (key feature, quantity, color/size if relevant)
+- Word order matters: put the highest-search-volume keyword FIRST (usually material + product type, e.g. "Bamboo Cutting Board Set")
+- Structure: [Material/Type] [Product Name] [Quantity/Size] [Variant: color or style] [Key Feature] [Use Case]
+- If a color or style variant is present in the specs, place it early (3rd or 4th word)
+- Include quantity (e.g. "3 Piece", "4 Pack") if present — buyers filter by this
+- Use buyer search language: prefer "Butcher Block" over "chopping board" for wood boards, "Rechargeable" over "battery-powered", etc.
 - Title Case
-- No "100%", no asterisks, no "best", no exclamation marks
+- No hyphens, pipes, or special characters — use spaces only
+- No brand name unless it is well-known (Nike, LEGO, Sony, etc.)
+- No "100%", no asterisks, no "best", no exclamation marks, no "free shipping", no "warranty"
 - Output ONLY the title, no quotes, no explanation`;
 
     const message = await anthropic.messages.create({
@@ -1481,7 +1486,7 @@ Rules:
     });
 
     let generated = (message.content[0]?.text || '').trim().replace(/^["']|["']$/g, '');
-    // If still over 80, trim to last complete word before the limit
+    // Hard cap at 80 chars (eBay limit), trim to last complete word
     if (generated.length > 80) {
       generated = generated.slice(0, 80).replace(/\s+\S*$/, '').trimEnd();
     }
