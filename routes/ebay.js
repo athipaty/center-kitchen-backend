@@ -254,6 +254,11 @@ router.get('/auth/status', async (_req, res) => {
       if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at, refresh_token_expires_at: doc.refresh_token_expires_at || 0 };
     } catch {}
   }
+  // Backfill expiry for existing tokens that pre-date this tracking (assume 18 months from now)
+  if (tokens.refresh_token && !tokens.refresh_token_expires_at) {
+    tokens.refresh_token_expires_at = Date.now() + 18 * 30 * 24 * 3600 * 1000;
+    await saveTokens().catch(() => {});
+  }
   const daysLeft = tokens.refresh_token_expires_at
     ? Math.floor((tokens.refresh_token_expires_at - Date.now()) / 86400000)
     : null;
