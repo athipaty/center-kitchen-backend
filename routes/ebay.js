@@ -1629,17 +1629,24 @@ router.get('/competitors', async (req, res) => {
 
     const prices = items
       .map(item => parseFloat(item.price?.value || 0))
-      .filter(p => p > 0);
+      .filter(p => p >= 3)  // exclude obvious noise (broken listings, unrelated items)
+      .sort((a, b) => a - b);
 
     if (!prices.length) {
-      const empty = { count: 0, lowest: null, avg: null };
+      const empty = { count: 0, lowest: null, median: null, avg: null };
       setCache(cacheKey, empty);
       return res.json(empty);
     }
 
+    const mid = Math.floor(prices.length / 2);
+    const median = prices.length % 2 !== 0
+      ? prices[mid]
+      : Math.round(((prices[mid - 1] + prices[mid]) / 2) * 100) / 100;
+
     const result = {
       count: prices.length,
-      lowest: Math.min(...prices),
+      lowest: prices[0],
+      median,
       avg: Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100,
     };
     setCache(cacheKey, result);
