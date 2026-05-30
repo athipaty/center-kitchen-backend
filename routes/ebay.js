@@ -1586,56 +1586,49 @@ Rules:
 });
 
 // ── Sold listings (profit research) ───────────────────────────────
-// ── Active competitor prices ───────────────────────────────────────
-// Searches live eBay listings by UPC (preferred) or title keywords.
-// Returns lowest/avg/count so the frontend can flag under/over pricing.
+// ── Active competitor prices (Browse API — higher limits than Finding API) ──
 router.get('/competitors', async (req, res) => {
   const { upc, title } = req.query;
   if (!upc && !title) return res.status(400).json({ error: 'upc or title required' });
-  if (!process.env.EBAY_APP_ID) return res.status(500).json({ error: 'EBAY_APP_ID not set' });
 
   const cacheKey = `comp:${upc || title}`;
   const cached = getCached(cacheKey);
   if (cached) return res.json(cached);
 
-  const base = {
-    'SERVICE-VERSION': '1.0.0',
-    'SECURITY-APPNAME': process.env.EBAY_APP_ID,
-    'RESPONSE-DATA-FORMAT': 'JSON',
-    'paginationInput.entriesPerPage': 20,
-    sortOrder: 'PricePlusShippingLowest',
-    'itemFilter(0).name': 'Condition',
-    'itemFilter(0).value': 'New',
-    'itemFilter(1).name': 'ListingType',
-    'itemFilter(1).value': 'FixedPrice',
-  };
-
   try {
+    // Application token — same pattern as getValidAspectValues
+    const { data: appToken } = await axios.post(
+      'https://api.ebay.com/identity/v1/oauth2/token',
+      new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' }),
+      { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 8000 }
+    );
+    const h = { Authorization: `Bearer ${appToken.access_token}` };
+
     let items = [];
 
-    // Try UPC first (most accurate — finds exact same product)
+    // Try GTIN/UPC first (exact match)
     if (upc) {
       try {
-        const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
-          params: { ...base, 'OPERATION-NAME': 'findItemsByProduct', 'productId.@type': 'UPC', 'productId': upc },
-          timeout: 8000,
+        const { data } = await axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
+          params: { gtin: upc, filter: 'conditions:{NEW},buyingOptions:{FIXED_PRICE}', sort: 'price', limit: 20 },
+          headers: h, timeout: 8000,
         });
-        items = data.findItemsByProductResponse?.[0]?.searchResult?.[0]?.item || [];
+        items = data.itemSummaries || [];
       } catch {}
     }
 
-    // Fall back to keyword search on first 6 words of title
+    // Fall back to keyword search
     if (!items.length && title) {
-      const keywords = title.split(' ').slice(0, 6).join(' ');
-      const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
-        params: { ...base, 'OPERATION-NAME': 'findItemsByKeywords', keywords },
-        timeout: 8000,
+      const q = title.split(' ').slice(0, 6).join(' ');
+      const { data } = await axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
+        params: { q, filter: 'conditions:{NEW},buyingOptions:{FIXED_PRICE}', sort: 'price', limit: 20 },
+        headers: h, timeout: 8000,
       });
-      items = data.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || [];
+      items = data.itemSummaries || [];
     }
 
     const prices = items
-      .map(item => parseFloat(item.sellingStatus?.[0]?.currentPrice?.[0]?.__value__ || 0))
+      .map(item => parseFloat(item.price?.value || 0))
       .filter(p => p > 0);
 
     if (!prices.length) {
