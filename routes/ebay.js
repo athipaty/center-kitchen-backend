@@ -1586,6 +1586,76 @@ Rules:
 });
 
 // ── Sold listings (profit research) ───────────────────────────────
+// ── Active competitor prices ───────────────────────────────────────
+// Searches live eBay listings by UPC (preferred) or title keywords.
+// Returns lowest/avg/count so the frontend can flag under/over pricing.
+router.get('/competitors', async (req, res) => {
+  const { upc, title } = req.query;
+  if (!upc && !title) return res.status(400).json({ error: 'upc or title required' });
+  if (!process.env.EBAY_APP_ID) return res.status(500).json({ error: 'EBAY_APP_ID not set' });
+
+  const cacheKey = `comp:${upc || title}`;
+  const cached = getCached(cacheKey);
+  if (cached) return res.json(cached);
+
+  const base = {
+    'SERVICE-VERSION': '1.0.0',
+    'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+    'RESPONSE-DATA-FORMAT': 'JSON',
+    'paginationInput.entriesPerPage': 20,
+    sortOrder: 'PricePlusShippingLowest',
+    'itemFilter(0).name': 'Condition',
+    'itemFilter(0).value': 'New',
+    'itemFilter(1).name': 'ListingType',
+    'itemFilter(1).value': 'FixedPrice',
+  };
+
+  try {
+    let items = [];
+
+    // Try UPC first (most accurate — finds exact same product)
+    if (upc) {
+      try {
+        const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+          params: { ...base, 'OPERATION-NAME': 'findItemsByProduct', 'productId.@type': 'UPC', 'productId': upc },
+          timeout: 8000,
+        });
+        items = data.findItemsByProductResponse?.[0]?.searchResult?.[0]?.item || [];
+      } catch {}
+    }
+
+    // Fall back to keyword search on first 6 words of title
+    if (!items.length && title) {
+      const keywords = title.split(' ').slice(0, 6).join(' ');
+      const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
+        params: { ...base, 'OPERATION-NAME': 'findItemsByKeywords', keywords },
+        timeout: 8000,
+      });
+      items = data.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || [];
+    }
+
+    const prices = items
+      .map(item => parseFloat(item.sellingStatus?.[0]?.currentPrice?.[0]?.__value__ || 0))
+      .filter(p => p > 0);
+
+    if (!prices.length) {
+      const empty = { count: 0, lowest: null, avg: null };
+      setCache(cacheKey, empty);
+      return res.json(empty);
+    }
+
+    const result = {
+      count: prices.length,
+      lowest: Math.min(...prices),
+      avg: Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100,
+    };
+    setCache(cacheKey, result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: ebayError(err) });
+  }
+});
+
 router.get('/sold', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q is required' });
