@@ -2357,10 +2357,77 @@ router.get('/listing/:id/prices', async (req, res) => {
   }
 });
 
-// ── Get eBay listing view count (Analytics API — real Seller Hub views) ──
+// ── Get eBay listing view counts (batch — one Analytics API call for all IDs) ──
 const viewsCache = new Map(); // listingId → { count, expiresAt }
 const VIEWS_TTL = 60 * 60 * 1000; // 1 hour cache
 
+const VIEW_METRICS = [
+  'LISTING_VIEWS_SOURCE_DIRECT',
+  'LISTING_VIEWS_SOURCE_OFF_EBAY',
+  'LISTING_VIEWS_SOURCE_OTHER_INTERNAL',
+  'LISTING_VIEWS_SOURCE_ORGANIC_SEARCH',
+  'LISTING_VIEWS_SOURCE_PROMOTED_LISTINGS',
+];
+
+// Batch endpoint: GET /api/ebay/listings/views?ids=id1,id2,id3
+// Returns { views: { id1: N, id2: N, ... } }
+router.get('/listings/views', async (req, res) => {
+  const rawIds = String(req.query.ids || '');
+  const ids = [...new Set(rawIds.split(',').map(s => s.replace(/\D/g, '')).filter(Boolean))];
+  if (!ids.length) return res.status(400).json({ error: 'ids query param required' });
+
+  const now = new Date();
+  const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+  const start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+
+  // Return cached results for all IDs that are still fresh
+  const result = {};
+  const uncached = [];
+  for (const id of ids) {
+    const cached = viewsCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) {
+      result[id] = cached.count;
+    } else {
+      uncached.push(id);
+    }
+  }
+
+  if (uncached.length) {
+    try {
+      const token = await getAccessToken();
+      const { data } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          dimension: 'LISTING',
+          metric: VIEW_METRICS.join('|'),
+          filter: `listing_ids:{${uncached.join('|')}},date_range:[${fmt(start)}..${fmt(now)}]`,
+        },
+      });
+      for (const record of (data.records || [])) {
+        const lid = String(record.dimensionMetadata?.[0]?.value || record.dimensionKey || '');
+        if (!lid) continue;
+        let total = 0;
+        for (const m of (record.metricData || [])) {
+          if (VIEW_METRICS.includes(m.metricKey) && m.value != null) total += Number(m.value);
+        }
+        result[lid] = total;
+        viewsCache.set(lid, { count: total, expiresAt: Date.now() + VIEWS_TTL });
+      }
+      // IDs with no records get 0
+      for (const id of uncached) {
+        if (result[id] == null) result[id] = 0;
+      }
+    } catch (apiErr) {
+      console.error('[eBay views] Analytics API error:', apiErr.response?.data || apiErr.message);
+      for (const id of uncached) result[id] = 0;
+      return res.json({ views: result, _error: apiErr.response?.data || apiErr.message });
+    }
+  }
+
+  res.json({ views: result });
+});
+
+// Legacy single-ID endpoint (kept for backwards compat)
 router.get('/listing/:id/views', async (req, res) => {
   const cleanId = String(req.params.id).replace(/\D/g, '');
   if (!cleanId) return res.status(400).json({ error: 'Invalid listing ID' });
@@ -2372,30 +2439,27 @@ router.get('/listing/:id/views', async (req, res) => {
 
   try {
     const token = await getAccessToken();
-
     const now = new Date();
     const start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
     const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
 
     let views = 0;
-    let rawData = null;
     try {
       const { data } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
         headers: { Authorization: `Bearer ${token}` },
         params: {
           dimension: 'LISTING',
-          metric: 'LISTING_VIEWS_TOTAL',
-          filter: `listing_id:{${cleanId}},date_range:[${fmt(start)}..${fmt(now)}]`,
+          metric: VIEW_METRICS.join('|'),
+          filter: `listing_ids:{${cleanId}},date_range:[${fmt(start)}..${fmt(now)}]`,
         },
       });
-      rawData = data;
       for (const record of (data.records || [])) {
-        const m = (record.metricData || []).find(x => x.metricKey === 'LISTING_VIEWS_TOTAL');
-        if (m?.value != null) views += Number(m.value);
+        for (const m of (record.metricData || [])) {
+          if (VIEW_METRICS.includes(m.metricKey) && m.value != null) views += Number(m.value);
+        }
       }
     } catch (apiErr) {
       console.error(`[eBay views] Analytics API error for listing ${cleanId}:`, apiErr.response?.data || apiErr.message);
-      // Return debug info so browser console can show what went wrong
       return res.json({ listingId: cleanId, views: 0, _error: apiErr.response?.data || apiErr.message });
     }
 
