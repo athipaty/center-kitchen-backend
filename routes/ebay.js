@@ -2558,6 +2558,36 @@ router.get('/listing/:id/views', async (req, res) => {
   }
 });
 
+// ── Quick report: fetch current eBay titles for all tracked listings ──
+router.get('/listing-titles', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const products = await Product.find({ ebayListingId: { $exists: true, $ne: null } }, 'ebayListingId title').lean();
+    const ids = [...new Set(products.map(p => p.ebayListingId))];
+
+    const results = await Promise.all(ids.map(async id => {
+      try {
+        const body = `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ItemID>${id}</ItemID></GetItemRequest>`;
+        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body, {
+          headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'X-EBAY-API-CALL-NAME': 'GetItem', 'Content-Type': 'text/xml' },
+          timeout: 10000
+        });
+        const ok = !/<Ack>Failure<\/Ack>/.test(xml);
+        const ebayTitle = xml.match(/<Title>(.*?)<\/Title>/)?.[1] || '';
+        const errMsg = xml.match(/<LongMessage>(.*?)<\/LongMessage>/)?.[1] || '';
+        return { id, ok, title: ebayTitle, error: ok ? null : errMsg };
+      } catch (e) {
+        return { id, ok: false, title: '', error: e.message };
+      }
+    }));
+
+    const updated = results.filter(r => r.ok).length;
+    res.json({ total: ids.length, updated, failed: ids.length - updated, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Batch optimize all existing listings ───────────────────────────
 // Regenerates SEO title, item specifics, and description for every
 // eBay listing in the DB and pushes via ReviseFixedPriceItem.
