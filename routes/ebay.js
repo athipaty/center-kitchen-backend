@@ -2102,6 +2102,41 @@ router.post('/listing/price', async (req, res) => {
   }
 });
 
+// ── End (delete) a listing via Trading API (EndFixedPriceItem) ─────────
+router.delete('/listing/:id', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    if (!cleanId) return res.status(400).json({ error: 'Listing ID must be numeric' });
+
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const body = `<?xml version="1.0" encoding="utf-8"?><EndFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID><EndingReason>NotAvailable</EndingReason></EndFixedPriceItemRequest>`;
+
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body,
+      { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'EndFixedPriceItem' } }
+    );
+
+    if (/<Ack>Failure<\/Ack>/.test(xml)) {
+      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
+        || 'eBay returned an error';
+      return res.status(400).json({ error: msg });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.response?.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message || 'Failed to end listing' });
+  }
+});
+
 // ── Create listing via Trading API (AddFixedPriceItem) ─────────────────
 // More reliable than Inventory API for accounts that haven't been approved
 // for programmatic listing creation via the Inventory API.
