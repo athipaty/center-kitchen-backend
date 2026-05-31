@@ -1798,6 +1798,11 @@ router.get('/selling-limits', async (req, res) => {
       totalQtyListed += countVariations(block);
     }
 
+    const activeCount = activeItemIds.size;
+    const unsoldIds = [...unsoldSection.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1]);
+    const soldTxIds = [...soldSection.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1]);
+    console.log(`selling-limits debug: active=${activeCount} items, unsoldIds=[${unsoldIds.join(',')}], soldTxIds=[${soldTxIds.join(',')}], total=${totalQtyListed}`);
+
     const usedItems = totalQtyListed;
     const revLimitUsd = revLimitSgd * sgdToUsd;
 
