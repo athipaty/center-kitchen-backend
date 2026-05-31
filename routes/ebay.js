@@ -3030,7 +3030,7 @@ router.get('/listing-titles', async (req, res) => {
 // ── Manual trigger: auto-restock sold listings ─────────────────────────
 router.post('/auto-restock', async (req, res) => {
   try {
-    const { getAccessToken } = require('../jobs/ebayPriceSync');
+    // getAccessToken is already available in this file's scope
     const token = await getAccessToken();
     const tradingHeaders = {
       'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
