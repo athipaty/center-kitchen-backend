@@ -2226,6 +2226,110 @@ router.delete('/listing/:id', async (req, res) => {
   }
 });
 
+// ── Sale mode: reprice all listings to ~2% margin + bump promo to 5% ──
+router.post('/sale-mode', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const Product = require('../models/tracker/Product');
+    const EBAY_FEE  = 0.1325;
+    const FIXED_FEE = 0.30;
+    const PROMO     = 0.05;
+    const MARGIN    = 0.02;
+
+    const products = await Product.find({ ebayListingId: { $ne: null } });
+
+    // Group by listingId — use average cost for the listing
+    const byListing = {};
+    for (const p of products) {
+      const lid = p.ebayListingId;
+      if (!byListing[lid]) byListing[lid] = [];
+      byListing[lid].push(p);
+    }
+
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
+      );
+    }
+
+    const results = { done: 0, failed: 0, skipped: 0 };
+
+    for (const [listingId, variants] of Object.entries(byListing)) {
+      try {
+        const cleanId = String(listingId).replace(/\D/g, '');
+
+        // Read current listing to get variations
+        const { data: getXml } = await tradingPost('GetItem',
+          `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+        );
+        const varBlocks = [...getXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+
+        if (varBlocks.length) {
+          // Multi-variation: match each variant's cost by label
+          const variationXml = varBlocks.map(vBlock => {
+            const specifics = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+            const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+            // Find matching product by variant label
+            const labelMatch = specifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase() || '';
+            const matched = variants.find(v => (v.variant || '').toLowerCase() === labelMatch) || variants[0];
+            const cost = matched?.current || 0;
+            const newPrice = cost > 0 ? ((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)).toFixed(2) : null;
+            if (!newPrice) return null;
+            const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+            return `<Variation>${skuXml}<StartPrice currencyID="USD">${newPrice}</StartPrice><VariationSpecifics>${specifics}</VariationSpecifics></Variation>`;
+          }).filter(Boolean).join('');
+
+          if (!variationXml) { results.skipped++; continue; }
+          const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+          const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
+          if (/<Ack>Failure<\/Ack>/.test(xml)) { results.failed++; } else { results.done++; }
+        } else {
+          // Single listing
+          const cost = variants[0]?.current || 0;
+          if (!cost) { results.skipped++; continue; }
+          const newPrice = ((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)).toFixed(2);
+          const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${newPrice}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`;
+          const { data: xml } = await tradingPost('ReviseInventoryStatus', body);
+          if (/<Ack>Failure<\/Ack>/.test(xml)) { results.failed++; } else { results.done++; }
+        }
+      } catch { results.failed++; }
+    }
+
+    // Update promoted listings to 5% bid
+    try {
+      const mktHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+      const { data: camps } = await axios.get('https://api.ebay.com/sell/marketing/v1/ad_campaign', { headers: mktHeaders }).catch(() => ({ data: {} }));
+      const camp = (camps.campaigns || []).find(c => c.campaignName === 'TingTongStore Promoted' && c.campaignStatus === 'RUNNING');
+      if (camp) {
+        const { data: adsData } = await axios.get(`https://api.ebay.com/sell/marketing/v1/ad_campaign/${camp.campaignId}/ads`, { headers: mktHeaders });
+        const adIds = (adsData.ads || []).map(a => a.adId);
+        if (adIds.length) {
+          await axios.post(`https://api.ebay.com/sell/marketing/v1/ad_campaign/${camp.campaignId}/bulk_update_ads_bid_by_inventory_reference`,
+            { requests: adIds.map(adId => ({ adId, bidPercentage: '5.0' })) },
+            { headers: mktHeaders }
+          ).catch(() => {});
+        }
+      }
+    } catch {}
+
+    console.log(`sale-mode: repriced ${results.done} listings, failed=${results.failed}, skipped=${results.skipped}`);
+    res.json({ ...results, total: Object.keys(byListing).length });
+  } catch (err) {
+    if (err.response?.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Bulk set quantity on all active listings ───────────────────────────
 router.post('/bulk-set-quantity', async (req, res) => {
   try {
