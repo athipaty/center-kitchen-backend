@@ -1847,22 +1847,6 @@ router.get('/selling-limits', async (req, res) => {
       totalQtyListed += varBlocks.length || 1; // 1 per variation; 1 for single-item
     }
 
-    // Per-item breakdown for diagnosis
-    const _activeItems2 = [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
-    const _activeBreakdown = _activeItems2.map(([,b]) => {
-      const itemId = b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1] || '?';
-      const vars = [...b.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
-      const qty = parseInt(b.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
-      const sold = parseInt(b.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
-      const varQtys = vars.map(([,v]) => (parseInt(v.match(/<Quantity>(\d+)<\/Quantity>/)?.[1]||'0')) + (parseInt(v.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1]||'0')));
-      return { itemId, varCount: vars.length, qty, sold, varQtys };
-    });
-    const _debugSections = {
-      activeLen: activeSection.length,
-      activeItemCount: activeItemIds.size,
-      activeBreakdown: _activeBreakdown,
-      computed: totalQtyListed,
-    };
 
     const usedItems = totalQtyListed;
     const revLimitUsd = revLimitSgd * sgdToUsd;
@@ -1899,7 +1883,6 @@ router.get('/selling-limits', async (req, res) => {
         rate: sgdToUsd,
         source: revenueSource,
       },
-      _debug: _debugSections,
     });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
