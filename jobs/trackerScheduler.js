@@ -191,7 +191,7 @@ async function runAutoEndZeroViews() {
       { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
     );
 
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const sevenDaysAgo = Date.now() - 4 * 24 * 60 * 60 * 1000;
     const oldListings = [];
     const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
     let m;
