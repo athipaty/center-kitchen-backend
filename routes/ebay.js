@@ -216,6 +216,7 @@ router.get('/auth/login', (req, res) => {
     'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
     'https://api.ebay.com/oauth/api_scope/sell.finances',
     'https://api.ebay.com/oauth/api_scope/sell.analytics.readonly',
+    'https://api.ebay.com/oauth/api_scope/sell.marketing',
   ].join(' ');
   const url = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(process.env.EBAY_APP_ID)}&redirect_uri=${encodeURIComponent(process.env.EBAY_RUNAME)}&response_type=code&scope=${encodeURIComponent(scope)}`;
   res.redirect(url);
