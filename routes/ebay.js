@@ -2304,7 +2304,7 @@ router.post('/trading-create-listing', async (req, res) => {
   try {
     const token = await getAccessToken();
     const {
-      title, price, currency = 'USD', quantity = 2,
+      title, price, currency = 'USD', quantity = 1,
       condition = 'NEW', categoryId,
       imageUrls = [], upc, specs = {}, bullets = [], description,
       variants, // [{ label, price, quantity }] for multi-variation
@@ -2429,7 +2429,7 @@ router.post('/trading-create-listing', async (req, res) => {
         const varPrice = v.price || price;
         return `<Variation>
           <StartPrice currencyID="USD">${Number(varPrice).toFixed(2)}</StartPrice>
-          <Quantity>${Number(v.quantity) || 2}</Quantity>
+          <Quantity>${Number(v.quantity) || 1}</Quantity>
           <VariationSpecifics>
             <NameValueList><Name>${escXml(variantDimension)}</Name><Value>${escXml(v.label)}</Value></NameValueList>
           </VariationSpecifics>
