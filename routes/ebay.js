@@ -541,12 +541,15 @@ ${JSON.stringify(missing)}`;
     let count = 0;
     for (const [name, value] of Object.entries(filled)) {
       if (!value || aspects[name]) continue;
+      const val = String(value).slice(0, 65);
+      // Never let AI set MPN to a barcode value
+      if (name === 'MPN' && /^\d{8,14}$/.test(val.trim())) continue;
       const info = catAspects[name];
       if (info?.values?.length) {
-        const match = info.values.find(v => v.toLowerCase() === String(value).toLowerCase());
+        const match = info.values.find(v => v.toLowerCase() === val.toLowerCase());
         if (match) { aspects[name] = [match]; count++; }
       } else {
-        aspects[name] = [String(value).slice(0, 65)]; count++;
+        aspects[name] = [val]; count++;
       }
     }
     if (count) console.log(`enrichAspectsWithAI: filled ${count} aspects`);
