@@ -254,6 +254,88 @@ async function runAutoEndZeroViews() {
   }
 }
 
+// Auto-restock: after a sale, set qty back to 1 so listing stays live
+async function runAutoRestock() {
+  try {
+    const { getAccessToken } = require('./ebayPriceSync');
+    const token = await getAccessToken();
+
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
+      );
+    }
+
+    // Get orders from the last 20 minutes (slightly overlapping 15min interval)
+    const from = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const to   = new Date().toISOString();
+
+    const { data: ordersXml } = await tradingPost('GetOrders',
+      `<GetOrdersRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<CreateTimeFrom>${from}</CreateTimeFrom><CreateTimeTo>${to}</CreateTimeTo><OrderStatus>Active</OrderStatus><DetailLevel>ReturnAll</DetailLevel></GetOrdersRequest>`
+    );
+
+    // Extract (ItemID, VariationSpecifics) pairs from all transactions
+    const toRestock = []; // [{ itemId, variationSpecifics }]
+    const orderBlocks = [...ordersXml.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)];
+    for (const [, tx] of orderBlocks) {
+      const itemId = tx.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+      if (!itemId) continue;
+      const varSpecs = tx.match(/<Variation>([\s\S]*?)<\/Variation>/)?.[1] || null;
+      toRestock.push({ itemId, varSpecs });
+    }
+
+    if (!toRestock.length) return;
+    console.log(`auto-restock: ${toRestock.length} sold item(s) to restock`);
+
+    for (const { itemId, varSpecs } of toRestock) {
+      try {
+        if (varSpecs) {
+          // Multi-variation: read all variations and set sold one back to 1
+          const { data: getXml } = await tradingPost('GetItem',
+            `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${itemId}</ItemID></GetItemRequest>`
+          );
+          const varBlocks = [...getXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+          const soldSpecifics = varSpecs.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+          const soldValue = soldSpecifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase() || '';
+
+          const variationXml = varBlocks.map(vBlock => {
+            const specs = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+            const val = specs.match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase() || '';
+            const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0';
+            const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+            const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+            const qty = (val === soldValue) ? 1 : (parseInt(vBlock.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '1'));
+            return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specs}</VariationSpecifics></Variation>`;
+          }).join('');
+
+          await tradingPost('ReviseFixedPriceItem',
+            `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${itemId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`
+          );
+        } else {
+          // Single listing: set qty back to 1
+          await tradingPost('ReviseInventoryStatus',
+            `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>1</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`
+          );
+        }
+        console.log(`auto-restock: restocked listing ${itemId}`);
+      } catch (e) {
+        console.error(`auto-restock: failed to restock ${itemId}:`, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('auto-restock: error:', e.message);
+  }
+}
+
 function start(socketIo) {
   io = socketIo;
   // Check every 5 minutes which products are due
@@ -262,6 +344,8 @@ function start(socketIo) {
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
   // Auto-end listings 7+ days old with 0 views — runs daily at 2am
   cron.schedule("0 2 * * *", runAutoEndZeroViews);
+  // Auto-restock sold listings back to qty 1 — runs every 15 minutes
+  cron.schedule("*/15 * * * *", runAutoRestock);
 }
 
 // Called when user clicks "Check Now" for a specific product or all products
