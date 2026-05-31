@@ -2963,7 +2963,7 @@ router.post('/promoted-listings/setup', async (req, res) => {
     // Add listings to campaign using bulk endpoint
     const { data: bulkRes } = await axios.post(
       `${base}/ad_campaign/${campaignId}/bulk_create_ads_by_listing_id`,
-      { requests: listingIds.map(id => ({ listingId: String(id) })) },
+      { requests: listingIds.map(id => ({ listingId: String(id), bidPercentage: Number(adRate).toFixed(1) })) },
       { headers }
     );
 
