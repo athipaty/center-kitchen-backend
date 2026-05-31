@@ -1704,6 +1704,44 @@ router.get('/sold', async (req, res) => {
   }
 });
 
+// ── Debug: raw GetMyeBaySelling section lengths + samples ──────────
+router.get('/selling-limits/debug', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+      <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+        ${creds}
+        <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList>
+        <SoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
+        <UnsoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></UnsoldList>
+      </GetMyeBaySellingRequest>`;
+    const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
+      headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+        'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' },
+    });
+    const activeSection = xmlResp.match(/<ActiveList>([\s\S]*?)<\/ActiveList>/)?.[1] || '';
+    const soldSection   = xmlResp.match(/<SoldList>([\s\S]*?)<\/SoldList>/)?.[1] || '';
+    const unsoldSection = xmlResp.match(/<UnsoldList>([\s\S]*?)<\/UnsoldList>/)?.[1] || '';
+    const activeItems   = [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
+    const soldTxs       = [...soldSection.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)];
+    const unsoldItems   = [...unsoldSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
+    res.json({
+      activeItemCount: activeItems.length,
+      soldTxCount: soldTxs.length,
+      unsoldItemCount: unsoldItems.length,
+      activeItemIds: activeItems.map(([,b]) => b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1]).filter(Boolean),
+      soldItemIds:   [...new Set(soldTxs.map(([,b]) => b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1]).filter(Boolean))],
+      unsoldItemIds: unsoldItems.map(([,b]) => b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1]).filter(Boolean),
+      activeFirstItem: activeSection.slice(0, 800),
+      soldFirstTx: soldSection.slice(0, 800),
+      unsoldFirstItem: unsoldSection.slice(0, 800),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Monthly selling limits usage ──────────────────────────────────
 router.get('/selling-limits', async (req, res) => {
   try {
