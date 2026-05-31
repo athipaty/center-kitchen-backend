@@ -3027,6 +3027,53 @@ router.get('/listing-titles', async (req, res) => {
   }
 });
 
+// ── Manual trigger: auto-restock sold listings ─────────────────────────
+router.post('/auto-restock', async (req, res) => {
+  try {
+    const { getAccessToken } = require('../jobs/ebayPriceSync');
+    const token = await getAccessToken();
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll', `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } });
+    }
+
+    // Check last 24h so we can see recent orders in the test
+    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const to   = new Date().toISOString();
+    const { data: ordersXml } = await tradingPost('GetOrders',
+      `<GetOrdersRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<CreateTimeFrom>${from}</CreateTimeFrom><CreateTimeTo>${to}</CreateTimeTo><OrderStatus>Active</OrderStatus><DetailLevel>ReturnAll</DetailLevel></GetOrdersRequest>`
+    );
+
+    const transactions = [];
+    for (const [, tx] of [...ordersXml.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)]) {
+      const itemId = tx.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+      const title  = tx.match(/<Title>([\s\S]*?)<\/Title>/)?.[1] || '';
+      const qty    = tx.match(/<QuantityPurchased>(\d+)<\/QuantityPurchased>/)?.[1] || '1';
+      const varVal = tx.match(/<Variation>[\s\S]*?<Value>([\s\S]*?)<\/Value>/)?.[1] || null;
+      if (itemId) transactions.push({ itemId, title: title.slice(0, 50), qty, variant: varVal });
+    }
+
+    const restocked = [];
+    for (const { itemId, varVal } of transactions) {
+      try {
+        await tradingPost('ReviseInventoryStatus',
+          `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>1</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`
+        );
+        restocked.push(itemId);
+      } catch {}
+    }
+
+    res.json({ ordersFound: transactions.length, transactions, restocked });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Manual trigger: auto-end listings 7+ days old with 0 views ────────
 router.post('/auto-end-zero-views', async (req, res) => {
   try {
