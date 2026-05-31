@@ -2960,20 +2960,18 @@ router.post('/promoted-listings/setup', async (req, res) => {
       campaignId = created.campaignId;
     }
 
-    // Add listings to campaign
-    const results = [];
-    for (const listingId of listingIds) {
-      try {
-        await axios.post(`${base}/ad_campaign/${campaignId}/ads`, {
-          listingId: String(listingId),
-          adGroupId: null,
-        }, { headers });
-        results.push({ listingId, ok: true });
-      } catch (e) {
-        const msg = e.response?.data?.errors?.[0]?.message || e.message;
-        results.push({ listingId, ok: false, error: msg });
-      }
-    }
+    // Add listings to campaign using bulk endpoint
+    const { data: bulkRes } = await axios.post(
+      `${base}/ad_campaign/${campaignId}/bulk_create_ads_by_listing_id`,
+      { requests: listingIds.map(id => ({ listingId: String(id) })) },
+      { headers }
+    );
+
+    const results = (bulkRes.responses || []).map((r, i) => ({
+      listingId: listingIds[i],
+      ok: !r.errors?.length,
+      error: r.errors?.[0]?.message || null,
+    }));
 
     const done = results.filter(r => r.ok).length;
     console.log(`promoted-listings: campaign=${campaignId} rate=${adRate}% added=${done}/${listingIds.length}`);
