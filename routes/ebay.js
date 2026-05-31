@@ -1798,10 +1798,8 @@ router.get('/selling-limits', async (req, res) => {
       totalQtyListed += countVariations(block);
     }
 
-    const activeCount = activeItemIds.size;
     const unsoldIds = [...unsoldSection.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1]);
-    const soldTxIds = [...soldSection.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1]);
-    console.log(`selling-limits debug: active=${activeCount} items, unsoldIds=[${unsoldIds.join(',')}], soldTxIds=[${soldTxIds.join(',')}], total=${totalQtyListed}`);
+    const soldTxIds = [...(new Set([...soldSection.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1])))];
 
     const usedItems = totalQtyListed;
     const revLimitUsd = revLimitSgd * sgdToUsd;
@@ -1838,6 +1836,7 @@ router.get('/selling-limits', async (req, res) => {
         rate: sgdToUsd,
         source: revenueSource,
       },
+      _debug: { activeItems: activeItemIds.size, unsoldIds, soldTxIds },
     });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
