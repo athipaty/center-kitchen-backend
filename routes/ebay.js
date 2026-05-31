@@ -2218,6 +2218,85 @@ router.delete('/listing/:id', async (req, res) => {
   }
 });
 
+// ── Bulk set quantity on all active listings ───────────────────────────
+router.post('/bulk-set-quantity', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { quantity = 1 } = req.body;
+    const qty = Math.max(1, parseInt(quantity) || 1);
+
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
+      );
+    }
+
+    // Fetch all active listing IDs
+    const { data: listXml } = await tradingPost('GetMyeBaySelling',
+      `<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList></GetMyeBaySellingRequest>`
+    );
+    const itemIds = [...listXml.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1]);
+    const uniqueIds = [...new Set(itemIds)];
+
+    const results = { done: 0, failed: 0, errors: [] };
+
+    for (const itemId of uniqueIds) {
+      try {
+        // Read current variations
+        const { data: getXml } = await tradingPost('GetItem',
+          `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${itemId}</ItemID></GetItemRequest>`
+        );
+
+        const varBlocks = [...getXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+
+        let body;
+        if (varBlocks.length) {
+          const variationXml = varBlocks.map(vBlock => {
+            const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+            const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0';
+            const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+            const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+            return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
+          }).join('');
+          body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${itemId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+        } else {
+          body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>${qty}</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`;
+        }
+
+        const callName = varBlocks.length ? 'ReviseFixedPriceItem' : 'ReviseInventoryStatus';
+        const { data: revXml } = await tradingPost(callName, body);
+
+        if (/<Ack>Failure<\/Ack>/.test(revXml)) {
+          const msg = revXml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+          results.failed++;
+          results.errors.push({ itemId, error: msg });
+        } else {
+          results.done++;
+        }
+      } catch (err) {
+        results.failed++;
+        results.errors.push({ itemId, error: err.message });
+      }
+    }
+
+    console.log(`bulk-set-quantity: qty=${qty} done=${results.done} failed=${results.failed}`);
+    res.json({ ...results, total: uniqueIds.length });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message || 'Failed to set quantity' });
+  }
+});
+
 // ── Create listing via Trading API (AddFixedPriceItem) ─────────────────
 // More reliable than Inventory API for accounts that haven't been approved
 // for programmatic listing creation via the Inventory API.
