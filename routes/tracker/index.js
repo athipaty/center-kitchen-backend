@@ -4,6 +4,7 @@ const axios = require("axios");
 const Product = require("../../models/tracker/Product");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
+const { deleteCloudinaryFolder } = require("../../utils/cloudinaryUtils");
 
 // GET raw ScraperAPI response for an ASIN — for debugging variant field names
 router.get("/debug-raw", async (req, res) => {
@@ -93,12 +94,10 @@ router.post("/", async (req, res) => {
 // PATCH update eBay listing ID for a product
 router.patch("/:id/ebay", async (req, res) => {
   try {
-    const { ebayListingId } = req.body;
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
-      { ebayListingId: ebayListingId || null },
-      { new: true }
-    );
+    const { ebayListingId, cloudinaryFolder } = req.body;
+    const update = { ebayListingId: ebayListingId || null };
+    if (cloudinaryFolder !== undefined) update.cloudinaryFolder = cloudinaryFolder || null;
+    const product = await Product.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!product) return res.status(404).json({ error: "Product not found" });
     res.json(product);
   } catch (err) {
@@ -148,7 +147,10 @@ router.post("/:id/refresh-images", async (req, res) => {
 // DELETE remove a product
 router.delete("/:id", async (req, res) => {
   try {
-    await Product.findByIdAndDelete(req.params.id);
+    const product = await Product.findByIdAndDelete(req.params.id);
+    if (product?.cloudinaryFolder) {
+      deleteCloudinaryFolder(product.cloudinaryFolder).catch(() => {});
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

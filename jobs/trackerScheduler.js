@@ -3,6 +3,7 @@ const axios = require("axios");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
 const { syncEbayPrice, syncEbayQty, endListing } = require("./ebayPriceSync");
+const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 
 let io = null;
 
@@ -236,8 +237,13 @@ async function runAutoEndZeroViews() {
     for (const listingId of toEnd) {
       try {
         await endListing(listingId);
-        // Remove from tracker DB
+        // Delete Cloudinary images for all products linked to this listing
+        const linked = await Product.find({ ebayListingId: listingId });
+        const folders = [...new Set(linked.map(p => p.cloudinaryFolder).filter(Boolean))];
         await Product.deleteMany({ ebayListingId: listingId });
+        for (const folder of folders) {
+          await deleteCloudinaryFolder(folder).catch(() => {});
+        }
         console.log(`auto-end-zero-views: ended listing ${listingId}`);
       } catch (e) {
         console.error(`auto-end-zero-views: failed to end ${listingId}:`, e.message);
