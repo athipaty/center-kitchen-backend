@@ -2950,14 +2950,12 @@ router.post('/promoted-listings/setup', async (req, res) => {
 
     // Create campaign if none exists
     if (!campaignId) {
-      const now = new Date();
-      const startDate = now.toISOString().slice(0, 10);
       const { data: created } = await axios.post(`${base}/ad_campaign`, {
         campaignName,
         campaignStatus: 'RUNNING',
         fundingStrategy: { adRate, fundingModel: 'COST_PER_SALE' },
         marketplaceId: 'EBAY_US',
-        startDate,
+        startDate: new Date().toISOString(),
       }, { headers });
       campaignId = created.campaignId;
     }
