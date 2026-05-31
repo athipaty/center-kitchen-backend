@@ -1735,13 +1735,20 @@ router.get('/selling-limits', async (req, res) => {
         'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' },
     });
 
-    // eBay counts total QUANTITY across all listing variations (not just number of listings)
-    // For each item: sum(variation.Quantity + variation.QuantitySold) across all variations
+    // Parse ActiveList and SoldList separately so sold-out/ended items are counted correctly.
+    // ActiveList items have Quantity (remaining) + QuantitySold; SoldList transactions have
+    // QuantityPurchased but no Quantity/QuantitySold — mixing them caused an undercount.
     let totalQtyListed = 0;
     let soldRevenueUsd = 0;
     let soldCount = 0;
-    const itemBlocks = [...xmlResp.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
-    for (const [, block] of itemBlocks) {
+    const activeItemIds = new Set();
+
+    // 1. Count active listings: qty remaining + qty sold = original listed quantity
+    const activeSection = xmlResp.match(/<ActiveList>([\s\S]*?)<\/ActiveList>/)?.[1] || '';
+    const activeItemBlocks = [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
+    for (const [, block] of activeItemBlocks) {
+      const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+      if (itemId) activeItemIds.add(itemId);
       const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
       if (varBlocks.length) {
         for (const [, vb] of varBlocks) {
@@ -1749,7 +1756,6 @@ router.get('/selling-limits', async (req, res) => {
           const sold = parseInt(vb.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
           totalQtyListed += qty + sold;
           soldCount += sold;
-          // Revenue: sold qty × listing price (USD)
           if (sold) {
             const price = parseFloat(vb.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
             soldRevenueUsd += price * sold;
@@ -1765,6 +1771,25 @@ router.get('/selling-limits', async (req, res) => {
           soldRevenueUsd += price * sold;
         }
       }
+    }
+
+    // 2. Count sold-out/ended items from SoldList that are no longer in ActiveList.
+    // These were listed this month but have no remaining quantity so eBay still counts them.
+    const soldSection = xmlResp.match(/<SoldList>([\s\S]*?)<\/SoldList>/)?.[1] || '';
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const soldOnlyQty = {};
+    const txBlocks = [...soldSection.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)];
+    for (const [, tx] of txBlocks) {
+      const itemId = tx.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+      if (!itemId || activeItemIds.has(itemId)) continue; // already counted in active
+      const dateStr = tx.match(/<TransactionCreatedDate>([\s\S]*?)<\/TransactionCreatedDate>/)?.[1]
+        || tx.match(/<CreatedDate>([\s\S]*?)<\/CreatedDate>/)?.[1];
+      if (dateStr && new Date(dateStr) < monthStart) continue; // previous month
+      const qty = parseInt(tx.match(/<QuantityPurchased>(\d+)<\/QuantityPurchased>/)?.[1] || '0');
+      soldOnlyQty[itemId] = (soldOnlyQty[itemId] || 0) + qty;
+    }
+    for (const qty of Object.values(soldOnlyQty)) {
+      totalQtyListed += qty;
     }
 
     const usedItems = totalQtyListed;
