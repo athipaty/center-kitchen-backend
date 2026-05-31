@@ -1795,18 +1795,17 @@ router.get('/selling-limits', async (req, res) => {
     const activeItemIds = new Set();
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
-    // 1. Active listings
-    // Multi-variation: eBay counts 1 per variation (not qty × variation)
-    // Single-item: eBay counts by quantity (qty remaining + qty sold)
+    // 1. Active listings: count qty per variation (eBay counts available + sold quantity per slot)
     const activeSection = xmlResp.match(/<ActiveList>([\s\S]*?)<\/ActiveList>/)?.[1] || '';
     for (const [, block] of [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
       const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
       if (itemId) activeItemIds.add(itemId);
       const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
       if (varBlocks.length) {
-        totalQtyListed += varBlocks.length; // 1 per variation
         for (const [, vb] of varBlocks) {
+          const qty  = parseInt(vb.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
           const sold = parseInt(vb.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+          totalQtyListed += qty + sold;
           soldCount += sold;
           if (sold) {
             const price = parseFloat(vb.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
@@ -1837,7 +1836,7 @@ router.get('/selling-limits', async (req, res) => {
       totalQtyListed += 1;
     }
 
-    // 3. Unsold/ended listings (ended with no sales, still count against monthly limit)
+    // 3. Unsold/ended listings: count 1 per variation (eBay counts slots used, not qty)
     const unsoldSection = xmlResp.match(/<UnsoldList>([\s\S]*?)<\/UnsoldList>/)?.[1] || '';
     for (const [, block] of [...unsoldSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
       const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
@@ -1845,12 +1844,7 @@ router.get('/selling-limits', async (req, res) => {
       const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
       if (startTime && new Date(startTime) < monthStart) continue;
       const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
-      if (varBlocks.length) {
-        totalQtyListed += varBlocks.length; // 1 per variation
-      } else {
-        const qty = parseInt(block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
-        totalQtyListed += qty || 1;
-      }
+      totalQtyListed += varBlocks.length || 1; // 1 per variation; 1 for single-item
     }
 
     const unsoldIds = [...unsoldSection.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1]);
