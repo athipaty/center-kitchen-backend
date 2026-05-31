@@ -178,12 +178,84 @@ async function runWeeklyOptimize() {
   }
 }
 
+// Auto-end listings that are 7+ days old with 0 eBay views
+async function runAutoEndZeroViews() {
+  try {
+    const { getAccessToken } = require('./ebayPriceSync');
+    const token = await getAccessToken();
+
+    // Get all active listings with their start times
+    const { data: listXml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList></GetMyeBaySellingRequest>`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+    );
+
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const oldListings = [];
+    const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
+    let m;
+    while ((m = itemRe.exec(listXml)) !== null) {
+      const block = m[1];
+      const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+      const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
+      if (!itemId || !startTime) continue;
+      if (new Date(startTime).getTime() <= sevenDaysAgo) {
+        oldListings.push(itemId);
+      }
+    }
+
+    console.log(`auto-end-zero-views: ${oldListings.length} listings are 7+ days old`);
+    if (!oldListings.length) return;
+
+    // Fetch view counts for old listings
+    const now = new Date();
+    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const { data: viewsData } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
+      headers: { Authorization: `Bearer ${token}` },
+      params: {
+        dimension: 'LISTING',
+        metric: 'LISTING_VIEWS_TOTAL',
+        filter: `listing_ids:{${oldListings.join('|')}},date_range:[${fmt(start)}..${fmt(now)}]`,
+      },
+    });
+
+    const viewCounts = {};
+    for (const record of (viewsData.records || [])) {
+      const lid = String(record.dimensionValues?.[0]?.value || '');
+      if (lid) viewCounts[lid] = Number(record.metricValues?.[0]?.value ?? 0);
+    }
+    for (const id of oldListings) {
+      if (viewCounts[id] == null) viewCounts[id] = 0;
+    }
+
+    // End listings with 0 views
+    const toEnd = oldListings.filter(id => viewCounts[id] === 0);
+    console.log(`auto-end-zero-views: ${toEnd.length} listings have 0 views → ending`);
+
+    for (const listingId of toEnd) {
+      try {
+        await endListing(listingId);
+        // Remove from tracker DB
+        await Product.deleteMany({ ebayListingId: listingId });
+        console.log(`auto-end-zero-views: ended listing ${listingId}`);
+      } catch (e) {
+        console.error(`auto-end-zero-views: failed to end ${listingId}:`, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('auto-end-zero-views: error:', e.message);
+  }
+}
+
 function start(socketIo) {
   io = socketIo;
   // Check every 5 minutes which products are due
   cron.schedule("*/5 * * * *", runDueChecks);
   // Re-optimize all listings every Sunday at 3am
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
+  // Auto-end listings 7+ days old with 0 views — runs daily at 2am
+  cron.schedule("0 2 * * *", runAutoEndZeroViews);
 }
 
 // Called when user clicks "Check Now" for a specific product or all products
@@ -220,4 +292,4 @@ function getNextCheck() {
   return null; // now per-product, not global
 }
 
-module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors };
+module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors, autoEndZeroViews: runAutoEndZeroViews };

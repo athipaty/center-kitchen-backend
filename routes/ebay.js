@@ -2915,6 +2915,17 @@ router.get('/listing-titles', async (req, res) => {
   }
 });
 
+// ── Manual trigger: auto-end listings 7+ days old with 0 views ────────
+router.post('/auto-end-zero-views', async (req, res) => {
+  try {
+    const { autoEndZeroViews } = require('../jobs/trackerScheduler');
+    await autoEndZeroViews();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Batch optimize all existing listings ───────────────────────────
 // Regenerates SEO title, item specifics, and description for every
 // eBay listing in the DB and pushes via ReviseFixedPriceItem.
