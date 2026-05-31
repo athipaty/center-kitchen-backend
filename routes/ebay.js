@@ -1726,16 +1726,29 @@ router.get('/selling-limits/debug', async (req, res) => {
     const activeItems   = [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
     const soldTxs       = [...soldSection.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)];
     const unsoldItems   = [...unsoldSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
+    // Per-item breakdown for active listings
+    const activeBreakdown = activeItems.map(([,b]) => {
+      const itemId = b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1] || '?';
+      const vars = [...b.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
+      const qty = parseInt(b.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
+      const sold = parseInt(b.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+      const varQtys = vars.map(([,v]) => parseInt(v.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0') + parseInt(v.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0'));
+      return { itemId, hasVariations: vars.length > 0, varCount: vars.length, qty, sold, varQtys };
+    });
+    const unsoldBreakdown = unsoldItems.map(([,b]) => {
+      const itemId = b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1] || '?';
+      const vars = [...b.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
+      const qty = parseInt(b.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
+      const startTime = b.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
+      return { itemId, hasVariations: vars.length > 0, varCount: vars.length, qty, startTime };
+    });
     res.json({
       activeItemCount: activeItems.length,
       soldTxCount: soldTxs.length,
       unsoldItemCount: unsoldItems.length,
-      activeItemIds: activeItems.map(([,b]) => b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1]).filter(Boolean),
-      soldItemIds:   [...new Set(soldTxs.map(([,b]) => b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1]).filter(Boolean))],
-      unsoldItemIds: unsoldItems.map(([,b]) => b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1]).filter(Boolean),
-      activeFirstItem: activeSection.slice(0, 800),
-      soldFirstTx: soldSection.slice(0, 800),
-      unsoldFirstItem: unsoldSection.slice(0, 800),
+      activeBreakdown,
+      unsoldBreakdown,
+      soldItemIds: [...new Set(soldTxs.map(([,b]) => b.match(/<ItemID>(\d+)<\/ItemID>/)?.[1]).filter(Boolean))],
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
