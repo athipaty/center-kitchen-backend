@@ -2933,6 +2933,59 @@ router.post('/auto-end-zero-views', async (req, res) => {
   }
 });
 
+// ── Set up Promoted Listings Standard campaign at a given ad rate ──────
+router.post('/promoted-listings/setup', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { listingIds, adRate = 2.0, campaignName = 'TingTongStore Promoted' } = req.body;
+    if (!listingIds?.length) return res.status(400).json({ error: 'listingIds required' });
+
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const base = 'https://api.ebay.com/sell/marketing/v1';
+
+    // Check for existing active campaign with same name
+    const { data: existing } = await axios.get(`${base}/ad_campaign`, { headers }).catch(() => ({ data: { campaigns: [] } }));
+    let campaignId = existing.campaigns?.find(c => c.campaignName === campaignName && c.campaignStatus === 'RUNNING')?.campaignId;
+
+    // Create campaign if none exists
+    if (!campaignId) {
+      const now = new Date();
+      const startDate = now.toISOString().slice(0, 10);
+      const { data: created } = await axios.post(`${base}/ad_campaign`, {
+        campaignName,
+        campaignStatus: 'RUNNING',
+        fundingStrategy: { adRate, fundingModel: 'COST_PER_SALE' },
+        marketplaceId: 'EBAY_US',
+        startDate,
+      }, { headers });
+      campaignId = created.campaignId;
+    }
+
+    // Add listings to campaign
+    const results = [];
+    for (const listingId of listingIds) {
+      try {
+        await axios.post(`${base}/ad_campaign/${campaignId}/ads`, {
+          listingId: String(listingId),
+          adGroupId: null,
+        }, { headers });
+        results.push({ listingId, ok: true });
+      } catch (e) {
+        const msg = e.response?.data?.errors?.[0]?.message || e.message;
+        results.push({ listingId, ok: false, error: msg });
+      }
+    }
+
+    const done = results.filter(r => r.ok).length;
+    console.log(`promoted-listings: campaign=${campaignId} rate=${adRate}% added=${done}/${listingIds.length}`);
+    res.json({ campaignId, adRate, done, total: listingIds.length, results });
+  } catch (err) {
+    if (err.response?.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.response?.data?.errors?.[0]?.message || err.message });
+  }
+});
+
 // ── Batch optimize all existing listings ───────────────────────────
 // Regenerates SEO title, item specifics, and description for every
 // eBay listing in the DB and pushes via ReviseFixedPriceItem.
