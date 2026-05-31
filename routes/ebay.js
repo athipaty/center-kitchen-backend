@@ -1722,12 +1722,13 @@ router.get('/selling-limits', async (req, res) => {
 
     const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
-    // Fetch all active listings (full data) + sold list
+    // Fetch active + sold + unsold(ended) listings for this month
     const xml = `<?xml version="1.0" encoding="utf-8"?>
       <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
         ${creds}
         <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList>
         <SoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
+        <UnsoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></UnsoldList>
       </GetMyeBaySellingRequest>`;
 
     const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
@@ -1735,26 +1736,30 @@ router.get('/selling-limits', async (req, res) => {
         'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' },
     });
 
-    // Parse ActiveList and SoldList separately so sold-out/ended items are counted correctly.
-    // ActiveList items have Quantity (remaining) + QuantitySold; SoldList transactions have
-    // QuantityPurchased but no Quantity/QuantitySold — mixing them caused an undercount.
+    // eBay counts 1 per variation (not qty × variations). Parse each section separately:
+    // ActiveList = currently listed, SoldList = sold & ended, UnsoldList = ended with no sales.
     let totalQtyListed = 0;
     let soldRevenueUsd = 0;
     let soldCount = 0;
     const activeItemIds = new Set();
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
-    // 1. Count active listings: qty remaining + qty sold = original listed quantity
+    function countVariations(block) {
+      const vars = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
+      return vars.length || 1; // 1 per variation; single-item listings count as 1
+    }
+
+    // 1. Active listings: 1 per variation
     const activeSection = xmlResp.match(/<ActiveList>([\s\S]*?)<\/ActiveList>/)?.[1] || '';
-    const activeItemBlocks = [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)];
-    for (const [, block] of activeItemBlocks) {
+    for (const [, block] of [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
       const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
       if (itemId) activeItemIds.add(itemId);
+      totalQtyListed += countVariations(block);
+      // Revenue: sum sold qty × price across variations
       const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
       if (varBlocks.length) {
         for (const [, vb] of varBlocks) {
-          const qty  = parseInt(vb.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
           const sold = parseInt(vb.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
-          totalQtyListed += qty + sold;
           soldCount += sold;
           if (sold) {
             const price = parseFloat(vb.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
@@ -1762,9 +1767,7 @@ router.get('/selling-limits', async (req, res) => {
           }
         }
       } else {
-        const qty  = parseInt(block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
         const sold = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
-        totalQtyListed += qty + sold;
         soldCount += sold;
         if (sold) {
           const price = parseFloat(block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
@@ -1773,23 +1776,26 @@ router.get('/selling-limits', async (req, res) => {
       }
     }
 
-    // 2. Count sold-out/ended items from SoldList that are no longer in ActiveList.
-    // These were listed this month but have no remaining quantity so eBay still counts them.
+    // 2. Sold & ended listings not in active list: count 1 per unique item (sold transactions)
     const soldSection = xmlResp.match(/<SoldList>([\s\S]*?)<\/SoldList>/)?.[1] || '';
-    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-    const soldOnlyQty = {};
-    const txBlocks = [...soldSection.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)];
-    for (const [, tx] of txBlocks) {
+    const countedSoldIds = new Set();
+    for (const [, tx] of [...soldSection.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)]) {
       const itemId = tx.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-      if (!itemId || activeItemIds.has(itemId)) continue; // already counted in active
-      const dateStr = tx.match(/<TransactionCreatedDate>([\s\S]*?)<\/TransactionCreatedDate>/)?.[1]
-        || tx.match(/<CreatedDate>([\s\S]*?)<\/CreatedDate>/)?.[1];
-      if (dateStr && new Date(dateStr) < monthStart) continue; // previous month
-      const qty = parseInt(tx.match(/<QuantityPurchased>(\d+)<\/QuantityPurchased>/)?.[1] || '0');
-      soldOnlyQty[itemId] = (soldOnlyQty[itemId] || 0) + qty;
+      if (!itemId || activeItemIds.has(itemId) || countedSoldIds.has(itemId)) continue;
+      const dateStr = tx.match(/<CreatedDate>([\s\S]*?)<\/CreatedDate>/)?.[1];
+      if (dateStr && new Date(dateStr) < monthStart) continue;
+      countedSoldIds.add(itemId);
+      totalQtyListed += 1;
     }
-    for (const qty of Object.values(soldOnlyQty)) {
-      totalQtyListed += qty;
+
+    // 3. Unsold/ended listings (ended with no sales, still count against monthly limit)
+    const unsoldSection = xmlResp.match(/<UnsoldList>([\s\S]*?)<\/UnsoldList>/)?.[1] || '';
+    for (const [, block] of [...unsoldSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
+      const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+      if (!itemId || activeItemIds.has(itemId)) continue;
+      const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
+      if (startTime && new Date(startTime) < monthStart) continue;
+      totalQtyListed += countVariations(block);
     }
 
     const usedItems = totalQtyListed;
