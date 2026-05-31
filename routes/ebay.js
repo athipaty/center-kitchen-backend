@@ -569,7 +569,11 @@ function buildAspects(specs) {
   };
   const aspects = {};
   for (const [k, label] of Object.entries(MAP)) {
-    if (specs[k]) aspects[label] = [String(specs[k]).slice(0, 65)];
+    if (!specs[k]) continue;
+    const val = String(specs[k]).slice(0, 65);
+    // Skip MPN if it looks like a barcode (all digits, 8–14 chars) — eBay rejects it as invalid MPN
+    if (label === 'MPN' && /^\d{8,14}$/.test(val.trim())) continue;
+    aspects[label] = [val];
   }
   return aspects;
 }
