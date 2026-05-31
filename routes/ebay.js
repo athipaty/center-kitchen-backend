@@ -2967,11 +2967,14 @@ router.post('/promoted-listings/setup', async (req, res) => {
       { headers }
     );
 
-    const results = (bulkRes.responses || []).map((r, i) => ({
-      listingId: listingIds[i],
-      ok: !r.errors?.length,
-      error: r.errors?.[0]?.message || null,
-    }));
+    const results = (bulkRes.responses || []).map((r, i) => {
+      const alreadyExists = r.errors?.some(e => /already exists/i.test(e.message));
+      return {
+        listingId: listingIds[i],
+        ok: !r.errors?.length || alreadyExists,
+        error: alreadyExists ? null : r.errors?.[0]?.message || null,
+      };
+    });
 
     const done = results.filter(r => r.ok).length;
     console.log(`promoted-listings: campaign=${campaignId} rate=${adRate}% added=${done}/${listingIds.length}`);
