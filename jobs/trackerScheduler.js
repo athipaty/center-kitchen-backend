@@ -158,11 +158,15 @@ async function runDueChecks() {
   const due = await Product.find({ nextCheck: { $lte: new Date() } });
   if (!due.length) return;
 
+  const TrackerSettings = require('../models/tracker/TrackerSettings');
+  const settings = await TrackerSettings.findById('tracker').lean().catch(() => null);
+  const saleMode = settings?.saleModeActive ?? false;
+
   if (io) io.emit("tracker:check:start", { count: due.length, time: new Date().toISOString() });
 
   const results = [];
   for (const p of due) {
-    results.push(await checkProduct(p));
+    results.push(await checkProduct(p, saleMode));
   }
 
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });

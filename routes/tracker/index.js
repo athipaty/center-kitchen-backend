@@ -2,9 +2,20 @@ const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 const Product = require("../../models/tracker/Product");
+const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 const { deleteCloudinaryFolder } = require("../../utils/cloudinaryUtils");
+
+// GET current tracker settings (saleModeActive, etc.)
+router.get("/settings", async (req, res) => {
+  try {
+    const settings = await TrackerSettings.findById('tracker').lean();
+    res.json({ saleModeActive: settings?.saleModeActive ?? false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET raw ScraperAPI response for an ASIN — for debugging variant field names
 router.get("/debug-raw", async (req, res) => {

@@ -2231,6 +2231,9 @@ router.post('/sale-mode', async (req, res) => {
   try {
     const token = await getAccessToken();
     const Product = require('../models/tracker/Product');
+    const TrackerSettings = require('../models/tracker/TrackerSettings');
+    const active = req.body?.active !== false; // default true; pass active:false to turn off
+    await TrackerSettings.findByIdAndUpdate('tracker', { saleModeActive: active }, { upsert: true });
     const EBAY_FEE  = 0.1325;
     const FIXED_FEE = 0.30;
     const PROMO     = 0.05;
