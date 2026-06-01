@@ -11,6 +11,7 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: "*", methods: ["GET", "POST"] },
 });
+app.set('io', io);
 
 /* =====================
    MIDDLEWARE

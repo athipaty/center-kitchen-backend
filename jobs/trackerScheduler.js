@@ -183,19 +183,19 @@ async function runWeeklyOptimize() {
   }
 }
 
-// Auto-end listings that are 7+ days old with 0 eBay views
+// Auto-end listings 4+ days old with 0 eBay views, then fill freed slots with new discoveries
 async function runAutoEndZeroViews() {
+  let slotsFreed = 0;
   try {
     const { getAccessToken } = require('./ebayPriceSync');
     const token = await getAccessToken();
 
-    // Get all active listings with their start times
     const { data: listXml } = await axios.post('https://api.ebay.com/ws/api.dll',
       `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList></GetMyeBaySellingRequest>`,
       { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
     );
 
-    const sevenDaysAgo = Date.now() - 4 * 24 * 60 * 60 * 1000;
+    const fourDaysAgo = Date.now() - 4 * 24 * 60 * 60 * 1000;
     const oldListings = [];
     const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
     let m;
@@ -204,15 +204,12 @@ async function runAutoEndZeroViews() {
       const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
       const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
       if (!itemId || !startTime) continue;
-      if (new Date(startTime).getTime() <= sevenDaysAgo) {
-        oldListings.push(itemId);
-      }
+      if (new Date(startTime).getTime() <= fourDaysAgo) oldListings.push(itemId);
     }
 
-    console.log(`auto-end-zero-views: ${oldListings.length} listings are 7+ days old`);
+    console.log(`auto-end-zero-views: ${oldListings.length} listings are 4+ days old`);
     if (!oldListings.length) return;
 
-    // Fetch view counts for old listings
     const now = new Date();
     const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
     const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
@@ -234,27 +231,34 @@ async function runAutoEndZeroViews() {
       if (viewCounts[id] == null) viewCounts[id] = 0;
     }
 
-    // End listings with 0 views
     const toEnd = oldListings.filter(id => viewCounts[id] === 0);
     console.log(`auto-end-zero-views: ${toEnd.length} listings have 0 views → ending`);
 
     for (const listingId of toEnd) {
       try {
         await endListing(listingId);
-        // Delete Cloudinary images for all products linked to this listing
         const linked = await Product.find({ ebayListingId: listingId });
         const folders = [...new Set(linked.map(p => p.cloudinaryFolder).filter(Boolean))];
+        // Each variant that was linked = 1 freed slot
+        slotsFreed += linked.length;
         await Product.deleteMany({ ebayListingId: listingId });
         for (const folder of folders) {
           await deleteCloudinaryFolder(folder).catch(() => {});
         }
-        console.log(`auto-end-zero-views: ended listing ${listingId}`);
+        console.log(`auto-end-zero-views: ended listing ${listingId} (${linked.length} variant slot(s) freed)`);
       } catch (e) {
         console.error(`auto-end-zero-views: failed to end ${listingId}:`, e.message);
       }
     }
   } catch (e) {
     console.error('auto-end-zero-views: error:', e.message);
+  }
+
+  // Chain directly into discovery using the exact slots we just freed
+  if (slotsFreed > 0) {
+    console.log(`auto-end-zero-views: ${slotsFreed} slot(s) freed → triggering product discovery`);
+    const { runProductDiscovery } = require('./productDiscovery');
+    await runProductDiscovery(io, slotsFreed);
   }
 }
 
@@ -346,7 +350,7 @@ function start(socketIo) {
   cron.schedule("*/5 * * * *", runDueChecks);
   // Re-optimize all listings every Sunday at 3am
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
-  // Auto-end listings 7+ days old with 0 views — runs daily at 2am
+  // Auto-end listings 4+ days old with 0 views → immediately chains into product discovery
   cron.schedule("0 2 * * *", runAutoEndZeroViews);
   // Auto-restock sold listings back to qty 1 — runs every 15 minutes
   cron.schedule("*/15 * * * *", runAutoRestock);
