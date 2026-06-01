@@ -2238,7 +2238,17 @@ router.post('/sale-mode', async (req, res) => {
     const FIXED_FEE = 0.30;
     const PROMO     = 0.05;
     const MARGIN    = 0.02;
-    const calcPrice = cost => (Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)) + 0.99).toFixed(2);
+    const MIN_PROFIT = 4.50;
+    // Sale mode ON  → flat 2% margin formula
+    // Sale mode OFF → tiered multiplier (same as normal mode pricing.js)
+    const calcPrice = active
+      ? cost => (Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)) + 0.99).toFixed(2)
+      : cost => {
+          let m = cost < 10 ? 2.2 : cost < 20 ? 1.7 : cost < 35 ? 1.55 : cost < 60 ? 1.45 : 1.35;
+          const tiered = cost * m;
+          const floor  = (cost + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
+          return (Math.floor(Math.max(tiered, floor)) + 0.99).toFixed(2);
+        };
 
     const products = await Product.find({ ebayListingId: { $ne: null } });
 

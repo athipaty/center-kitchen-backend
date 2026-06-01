@@ -5,13 +5,19 @@ const { fetchProduct, extractAsin } = require('../scraper');
 
 const BASE = `http://localhost:${process.env.PORT || 5000}`;
 
-const EBAY_FEE  = 0.1325;
-const FIXED_FEE = 0.30;
-const PROMO     = 0.05;
+const EBAY_FEE   = 0.1325;
+const FIXED_FEE  = 0.30;
+const PROMO      = 0.05;
+const MIN_PROFIT = 4.50;
 
 function calcEbayPrice(cost, saleMode) {
-  const margin = saleMode ? 0.02 : 0.08;
-  return Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - margin)) + 0.99;
+  if (saleMode) {
+    return Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - 0.02)) + 0.99;
+  }
+  const m      = cost < 10 ? 2.2 : cost < 20 ? 1.7 : cost < 35 ? 1.55 : cost < 60 ? 1.45 : 1.35;
+  const tiered = cost * m;
+  const floor  = (cost + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
+  return Math.floor(Math.max(tiered, floor)) + 0.99;
 }
 
 function calcProfit(cost, saleMode) {
