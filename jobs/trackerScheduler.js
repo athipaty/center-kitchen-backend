@@ -357,11 +357,15 @@ async function triggerNow() {
   const products = await Product.find();
   if (!products.length) return;
 
+  const TrackerSettings = require('../models/tracker/TrackerSettings');
+  const settings = await TrackerSettings.findById('tracker').lean().catch(() => null);
+  const saleMode = settings?.saleModeActive ?? false;
+
   if (io) io.emit("tracker:check:start", { count: products.length, time: new Date().toISOString() });
 
   const results = [];
   for (const p of products) {
-    results.push(await checkProduct(p));
+    results.push(await checkProduct(p, saleMode));
   }
 
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
