@@ -176,4 +176,4 @@ async function endListing(listingId) {
   if (err) throw new Error(err);
 }
 
-module.exports = { syncEbayPrice, syncEbayQty, endListing };
+module.exports = { syncEbayPrice, syncEbayQty, endListing, getAccessToken };
