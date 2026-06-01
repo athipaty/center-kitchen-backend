@@ -2235,6 +2235,7 @@ router.post('/sale-mode', async (req, res) => {
     const FIXED_FEE = 0.30;
     const PROMO     = 0.05;
     const MARGIN    = 0.02;
+    const calcPrice = cost => (Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)) + 0.99).toFixed(2);
 
     const products = await Product.find({ ebayListingId: { $ne: null } });
 
@@ -2282,7 +2283,7 @@ router.post('/sale-mode', async (req, res) => {
             const labelMatch = specifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase() || '';
             const matched = variants.find(v => (v.variant || '').toLowerCase() === labelMatch) || variants[0];
             const cost = matched?.current || 0;
-            const newPrice = cost > 0 ? ((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)).toFixed(2) : null;
+            const newPrice = cost > 0 ? calcPrice(cost) : null;
             if (!newPrice) return null;
             const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
             return `<Variation>${skuXml}<StartPrice currencyID="USD">${newPrice}</StartPrice><VariationSpecifics>${specifics}</VariationSpecifics></Variation>`;
@@ -2296,7 +2297,7 @@ router.post('/sale-mode', async (req, res) => {
           // Single listing
           const cost = variants[0]?.current || 0;
           if (!cost) { results.skipped++; continue; }
-          const newPrice = ((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)).toFixed(2);
+          const newPrice = calcPrice(cost);
           const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${newPrice}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`;
           const { data: xml } = await tradingPost('ReviseInventoryStatus', body);
           if (/<Ack>Failure<\/Ack>/.test(xml)) { results.failed++; } else { results.done++; }

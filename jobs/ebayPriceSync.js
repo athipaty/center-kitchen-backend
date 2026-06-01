@@ -114,9 +114,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
   const token = await getAccessToken();
   const cleanId = String(listingId).trim().replace(/\D/g, '');
   const ap = Number(amazonPrice);
-  let mult = ap < 10 ? 2.2 : ap < 20 ? 1.7 : ap < 35 ? 1.55 : ap < 60 ? 1.45 : 1.35;
-  const minPrice = (ap + 4.50 + 0.30) / (1 - 0.1325);
-  const ebayPrice = Math.floor(Math.max(ap * mult, minPrice)) + 0.99;
+  const ebayPrice = Math.floor((ap + 0.30) / (1 - 0.1325 - 0.05 - 0.02)) + 0.99;
   const priceStr = ebayPrice.toFixed(2);
   const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 

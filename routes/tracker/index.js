@@ -275,11 +275,9 @@ router.get("/profit-summary", async (req, res) => {
       'title ebayListingId current status variant'
     ).lean();
 
-    // Tiered markup — mirrors src/utils/pricing.js
+    // 2% margin formula — mirrors src/utils/pricing.js
     function calcEbayPrice(ap) {
-      const mult = ap < 10 ? 2.2 : ap < 20 ? 1.7 : ap < 35 ? 1.55 : ap < 60 ? 1.45 : 1.35;
-      const minPrice = (ap + 4.50 + 0.30) / (1 - 0.1325);
-      return Math.floor(Math.max(ap * mult, minPrice)) + 0.99;
+      return Math.floor((ap + 0.30) / (1 - 0.1325 - 0.05 - 0.02)) + 0.99;
     }
     function calcFee(ep) { return +(ep * 0.1325 + 0.30).toFixed(2); }
 
