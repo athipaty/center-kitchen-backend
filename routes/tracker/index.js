@@ -195,7 +195,8 @@ router.post("/check/:id", async (req, res) => {
       }
     }
 
-    await scheduler.checkOne(product);
+    const saleMode = req.body?.saleMode === true;
+    await scheduler.checkOne(product, saleMode);
     const updated = await Product.findById(req.params.id);
     res.json(updated);
   } catch (err) {

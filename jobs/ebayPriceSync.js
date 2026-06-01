@@ -110,11 +110,13 @@ async function syncEbayQty(listingId, variantLabel, qty) {
 }
 
 // variantLabel — the color/variant name from Amazon (e.g. "purple"), used to match the right eBay variation
-async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
+// saleMode — when true, uses sale pricing formula (currently same margin; ready for future differentiation)
+async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = false) {
   const token = await getAccessToken();
   const cleanId = String(listingId).trim().replace(/\D/g, '');
   const ap = Number(amazonPrice);
-  const ebayPrice = Math.floor((ap + 0.30) / (1 - 0.1325 - 0.05 - 0.02)) + 0.99;
+  const margin = saleMode ? 0.02 : 0.02; // both 2% for now — change sale margin here when needed
+  const ebayPrice = Math.floor((ap + 0.30) / (1 - 0.1325 - 0.05 - margin)) + 0.99;
   const priceStr = ebayPrice.toFixed(2);
   const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 

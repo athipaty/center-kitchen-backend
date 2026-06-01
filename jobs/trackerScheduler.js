@@ -34,7 +34,7 @@ function slowRetryDate() {
   return new Date(Date.now() + (Math.random() * 4 + 4) * 3600 * 1000);
 }
 
-async function checkProduct(p) {
+async function checkProduct(p, saleMode = false) {
   try {
     // Use price-only direct fetch for routine checks — saves ScraperAPI credits.
     // Full scrape (priceOnly=false) only when metadata is missing or on first check.
@@ -65,7 +65,7 @@ async function checkProduct(p) {
 
     if (p.ebayListingId) {
       try {
-        await syncEbayPrice(p.ebayListingId, info.price, p.variant);
+        await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
         // Restore qty if recovering from any non-active status
         if (previousStatus !== 'active') {
           await syncEbayQty(p.ebayListingId, p.variant, 3);
