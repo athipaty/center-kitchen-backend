@@ -3141,6 +3141,32 @@ router.post('/promoted-listings/setup', async (req, res) => {
   }
 });
 
+// ── End all Promoted Listings campaigns ────────────────────────────
+router.post('/promoted-listings/end-all', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const base = 'https://api.ebay.com/sell/marketing/v1';
+    const { data } = await axios.get(`${base}/ad_campaign`, { headers }).catch(() => ({ data: { campaigns: [] } }));
+    const active = (data.campaigns || []).filter(c => c.campaignStatus === 'RUNNING');
+    const results = [];
+    for (const c of active) {
+      try {
+        await axios.post(`${base}/ad_campaign/${c.campaignId}/end`, {}, { headers });
+        results.push({ campaignId: c.campaignId, name: c.campaignName, ended: true });
+        console.log(`promoted-listings: ended campaign ${c.campaignId} "${c.campaignName}"`);
+      } catch (e) {
+        results.push({ campaignId: c.campaignId, name: c.campaignName, ended: false, error: e.response?.data?.errors?.[0]?.message || e.message });
+      }
+    }
+    res.json({ total: active.length, results });
+  } catch (err) {
+    if (err.response?.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Batch optimize all existing listings ───────────────────────────
 // Regenerates SEO title, item specifics, and description for every
 // eBay listing in the DB and pushes via ReviseFixedPriceItem.
