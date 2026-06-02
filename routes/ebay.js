@@ -2725,11 +2725,16 @@ router.post('/trading-create-listing', async (req, res) => {
       let em;
       while ((em = errRe.exec(xml)) !== null) {
         const sev = em[1].match(/<SeverityCode>([^<]+)<\/SeverityCode>/)?.[1] || '';
-        if (sev === 'Warning') continue; // skip non-fatal warnings
+        if (sev === 'Warning') continue;
         const code = em[1].match(/<ErrorCode>([^<]+)<\/ErrorCode>/)?.[1] || '';
-        const long = em[1].match(/<LongMessage>([^<]+)<\/LongMessage>/)?.[1] || '';
-        const short = em[1].match(/<ShortMessage>([^<]+)<\/ShortMessage>/)?.[1] || '';
-        allMsgs.push(`[${code}] ${long || short}`);
+        const long = em[1].match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || '';
+        const short = em[1].match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1] || '';
+        // ErrorParameters contain the real reason for errors like 240 (premium item block)
+        const paramVals = [...em[1].matchAll(/<ErrorParameters[^>]*>\s*<Value>([\s\S]*?)<\/Value>/g)]
+          .map(p => p[1].replace(/&apos;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/<[^>]+>/g, '').trim())
+          .filter(Boolean);
+        const detail = paramVals[0] || long || short;
+        allMsgs.push(`[${code}] ${detail}`);
       }
       const msg = allMsgs.join(' | ') || xml.slice(0, 600);
       console.error('trading-create-listing failure XML:\n', xml.slice(0, 1200));
