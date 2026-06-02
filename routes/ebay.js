@@ -2857,6 +2857,7 @@ router.get('/listings/views', async (req, res) => {
   if (!ids.length) return res.status(400).json({ error: 'ids query param required' });
 
   const now = new Date();
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
   const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
 
@@ -2880,13 +2881,13 @@ router.get('/listings/views', async (req, res) => {
         params: {
           dimension: 'LISTING',
           metric: VIEW_METRICS.join(','),
-          filter: `listing_ids:{${uncached.join('|')}},date_range:[${fmt(start)}..${fmt(now)}]`,
+          filter: `listing_ids:{${uncached.join('|')}},date_range:[${fmt(start)}..${fmt(yesterday)}]`,
         },
       });
       for (const record of (data.records || [])) {
         const lid = String(record.dimensionValues?.[0]?.value || '');
         if (!lid) continue;
-        const total = Number(record.metricData?.[0]?.value ?? 0);
+        const total = Number(record.metricValues?.[0]?.value ?? 0);
         result[lid] = total;
         viewsCache.set(lid, { count: total, expiresAt: Date.now() + VIEWS_TTL });
       }
@@ -2917,6 +2918,7 @@ router.get('/listing/:id/views', async (req, res) => {
   try {
     const token = await getAccessToken();
     const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
     const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
 
@@ -2927,12 +2929,12 @@ router.get('/listing/:id/views', async (req, res) => {
         params: {
           dimension: 'LISTING',
           metric: VIEW_METRICS.join(','),
-          filter: `listing_ids:{${cleanId}},date_range:[${fmt(start)}..${fmt(now)}]`,
+          filter: `listing_ids:{${cleanId}},date_range:[${fmt(start)}..${fmt(yesterday)}]`,
         },
       });
       for (const record of (data.records || [])) {
-        for (const m of (record.metricData || [])) {
-          if (VIEW_METRICS.includes(m.metricKey) && m.value != null) views += Number(m.value);
+        for (const m of (record.metricValues || [])) {
+          if (m.value != null) views += Number(m.value);
         }
       }
     } catch (apiErr) {
