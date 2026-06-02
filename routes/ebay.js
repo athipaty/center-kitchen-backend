@@ -1451,7 +1451,7 @@ CRITICAL rules:
       const even = i % 2 === 1;
       return `<div class="pr${even ? ' pr-rev' : ''}">
 <div class="pc">${imgUrl ? `<img src="${imgUrl}" alt="${esc(row.heading||'')}">` : ''}</div>
-<div class="tc"><p class="lbl">${esc(row.label||`Feature 0${i+1}`)}</p>
+<div class="tc">
 <h3>${esc(row.heading||'')}</h3><p>${esc(row.body||'')}</p>
 ${(row.bullets||[]).length ? `<ul>${row.bullets.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>` : ''}
 </div></div>`;
