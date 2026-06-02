@@ -1352,6 +1352,8 @@ router.post('/generate-description', async (req, res) => {
   try {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    // Convert 4-byte emoji to HTML numeric entities so eBay renders them correctly
+    const emoji = s => String(s||'').replace(/[\u{10000}-\u{10FFFF}]/gu, c => `&#${c.codePointAt(0)};`);
 
     // ── Data richness assessment ──────────────────────────────────────
     const cleanSpecs = Object.entries(specs)
@@ -1601,7 +1603,7 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background
 </div>
 <div class="trust-bar">${tr.map(x=>`<div class="ti">&#9989; ${esc(x)}</div>`).join('')}</div>
 <div class="sh"><h2>Why Choose This Product?</h2><div class="div"></div></div>
-<div class="fg">${f.map(x=>`<div class="fc"><span class="fi">${x.icon||'&#10003;'}</span><h3>${esc(x.title)}</h3><p>${esc(x.desc)}</p></div>`).join('')}</div>
+<div class="fg">${f.map(x=>`<div class="fc"><span class="fi">${emoji(x.icon)||'&#10003;'}</span><h3>${esc(x.title)}</h3><p>${esc(x.desc)}</p></div>`).join('')}</div>
 ${photoRowsHtml}
 ${galleryHtml}
 ${specTableHtml2col}
