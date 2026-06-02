@@ -1,4 +1,5 @@
-const axios = require('axios');
+const axios   = require('axios');
+const cheerio = require('cheerio');
 const Product = require('../models/tracker/Product');
 const TrackerSettings = require('../models/tracker/TrackerSettings');
 const { fetchProduct, extractAsin } = require('../scraper');
@@ -69,17 +70,50 @@ function extractCategorySlug(product) {
   return null;
 }
 
-async function fetchNewReleaseAsins(categorySlug, scraperKey, seenAsins) {
+// 1 credit: scrape the new-releases page and extract ASIN + rating + reviews + price
+// so we can pre-filter before spending 5-credit structured calls.
+async function fetchNewReleaseCandidates(categorySlug, scraperKey, seenAsins) {
   const url = `https://www.amazon.com/gp/new-releases/${categorySlug}/`;
   try {
     const { data: html } = await axios.get('https://api.scraperapi.com/', {
       params: { api_key: scraperKey, url },
       timeout: 30000,
     });
-    const raw = [...html.matchAll(/\/dp\/([A-Z0-9]{10})/g)].map(m => m[1]);
-    const asins = [...new Set(raw)].filter(a => !seenAsins.has(a));
-    console.log(`productDiscovery: new-releases/${categorySlug} → ${asins.length} new ASINs`);
-    return asins.slice(0, 24);
+    const $ = cheerio.load(html);
+    const seen = new Set();
+    const candidates = [];
+
+    $('[data-asin]').each((_, el) => {
+      const asin = $(el).attr('data-asin');
+      if (!asin || asin.length !== 10 || seen.has(asin) || seenAsins.has(asin)) return;
+      seen.add(asin);
+
+      // Rating: "4.2 out of 5 stars"
+      const ratingText = $(el).find('.a-icon-alt').first().text();
+      const rating = parseFloat(ratingText) || 0;
+
+      // Review count: aria-label like "236" or text like "1,234"
+      const reviewEl = $(el).find('[aria-label]').filter((_, e) => /^\d[\d,]*$/.test($(e).attr('aria-label') || '')).first();
+      const reviewCount = parseInt((reviewEl.attr('aria-label') || '0').replace(/,/g, '')) || 0;
+
+      // Price
+      const whole    = $(el).find('.a-price-whole').first().text().replace(/[^0-9]/g, '');
+      const fraction = $(el).find('.a-price-fraction').first().text().replace(/[^0-9]/g, '') || '00';
+      const price    = whole ? parseFloat(`${whole}.${fraction}`) : 0;
+
+      candidates.push({ asin, rating, reviewCount, price });
+    });
+
+    // Pre-filter by criteria we already know — saves 5-credit structured calls
+    const preFiltered = candidates.filter(c =>
+      (c.rating === 0 || c.rating >= 4) &&        // 0 = unknown, let it through for structured check
+      (c.reviewCount === 0 || c.reviewCount >= 50) && // 0 = unknown, let it through
+      (c.price === 0 || c.price < 50)              // 0 = unknown, let it through
+    );
+
+    const dropped = candidates.length - preFiltered.length;
+    console.log(`productDiscovery: new-releases/${categorySlug} → ${candidates.length} ASINs, ${dropped} pre-filtered (saved ${dropped * 5} credits)`);
+    return preFiltered.slice(0, 24);
   } catch (e) {
     console.error(`productDiscovery: failed to fetch new-releases/${categorySlug}:`, e.message);
     return [];
@@ -225,10 +259,10 @@ async function runProductDiscovery(io, slotsToFill) {
       if (!slug || seenCategories.has(slug)) continue;
       seenCategories.add(slug);
       console.log(`productDiscovery: seed "${source.title.slice(0, 40)}" → category "${slug}"`);
-      const newReleaseAsins = await fetchNewReleaseAsins(slug, scraperKey, seenAsins);
-      for (const asin of newReleaseAsins) {
-        seenAsins.add(asin);
-        candidates.push({ asin, sourceTitle: source.title, category: slug });
+      const newReleaseCandidates = await fetchNewReleaseCandidates(slug, scraperKey, seenAsins);
+      for (const c of newReleaseCandidates) {
+        seenAsins.add(c.asin);
+        candidates.push({ ...c, sourceTitle: source.title, category: slug });
       }
       await new Promise(r => setTimeout(r, 1500));
     }
@@ -257,8 +291,14 @@ async function runProductDiscovery(io, slotsToFill) {
     // variantsToAdd = resolved list of variants (or single-product treated as 1 variant)
     const qualified = [];
 
-    for (const { asin } of candidates) {
+    for (const { asin, rating: preRating, reviewCount: preReviews, price: prePrice } of candidates) {
       if (qualified.length >= slotsToFill * 3) break; // enough candidates, stop scraping
+
+      // Skip structured fetch (5 credits) if pre-filter data already disqualifies
+      if (preRating  > 0 && preRating  < 4)  continue;
+      if (preReviews > 0 && preReviews < 50)  continue;
+      if (prePrice   > 0 && prePrice   >= 50) continue;
+
       try {
         const url = `https://www.amazon.com/dp/${asin}`;
         const info = await fetchProduct(url, { priceOnly: false });
