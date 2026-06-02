@@ -88,15 +88,12 @@ async function fetchNewReleaseCandidates(categorySlug, scraperKey, seenAsins) {
       if (!asin || asin.length !== 10 || seen.has(asin) || seenAsins.has(asin)) return;
       seen.add(asin);
 
-      // Rating: "4.2 out of 5 stars"
       const ratingText = $(el).find('.a-icon-alt').first().text();
       const rating = parseFloat(ratingText) || 0;
 
-      // Review count: aria-label like "236" or text like "1,234"
       const reviewEl = $(el).find('[aria-label]').filter((_, e) => /^\d[\d,]*$/.test($(e).attr('aria-label') || '')).first();
       const reviewCount = parseInt((reviewEl.attr('aria-label') || '0').replace(/,/g, '')) || 0;
 
-      // Price
       const whole    = $(el).find('.a-price-whole').first().text().replace(/[^0-9]/g, '');
       const fraction = $(el).find('.a-price-fraction').first().text().replace(/[^0-9]/g, '') || '00';
       const price    = whole ? parseFloat(`${whole}.${fraction}`) : 0;
@@ -104,11 +101,19 @@ async function fetchNewReleaseCandidates(categorySlug, scraperKey, seenAsins) {
       candidates.push({ asin, rating, reviewCount, price });
     });
 
+    // Fallback: if CSS selector found nothing, extract ASINs from href patterns
+    if (!candidates.length) {
+      const asinMatches = [...html.matchAll(/\/dp\/([A-Z0-9]{10})/g)].map(m => m[1]);
+      const unique = [...new Set(asinMatches)].filter(a => !seenAsins.has(a));
+      console.log(`productDiscovery: new-releases/${categorySlug} — [data-asin] found 0, regex fallback found ${unique.length} ASINs`);
+      unique.slice(0, 24).forEach(asin => candidates.push({ asin, rating: 0, reviewCount: 0, price: 0 }));
+    }
+
     // Pre-filter by criteria we already know — saves 5-credit structured calls
     const preFiltered = candidates.filter(c =>
-      (c.rating === 0 || c.rating >= 4) &&        // 0 = unknown, let it through for structured check
-      (c.reviewCount === 0 || c.reviewCount >= 50) && // 0 = unknown, let it through
-      (c.price === 0 || c.price < 50)              // 0 = unknown, let it through
+      (c.rating === 0 || c.rating >= 4) &&
+      (c.reviewCount === 0 || c.reviewCount >= 50) &&
+      (c.price === 0 || c.price < 50)
     );
 
     const dropped = candidates.length - preFiltered.length;
@@ -303,9 +308,6 @@ async function runProductDiscovery(io, slotsToFill) {
         const url = `https://www.amazon.com/dp/${asin}`;
         const info = await fetchProduct(url, { priceOnly: false });
         if (!info.price || !info.isPrime) continue;
-        // Skip isNewRelease check for candidates sourced from Amazon's new-releases pages —
-        // the source itself guarantees they are new releases.
-        if (!fromNewReleasePage && !info.isNewRelease) continue;
         if (!info.rating || info.rating < 4) continue;
         if (!info.reviewCount || info.reviewCount < 50) continue;
 
@@ -506,6 +508,12 @@ async function runProductDiscovery(io, slotsToFill) {
 
   } catch (e) {
     console.error('productDiscovery: fatal error:', e.message);
+  } finally {
+    // Always stamp the run time so the UI/monitor can tell it completed
+    await TrackerSettings.findByIdAndUpdate('tracker',
+      { $set: { lastDiscoveryRun: new Date() } },
+      { upsert: true }
+    ).catch(() => {});
   }
 }
 
