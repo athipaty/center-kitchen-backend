@@ -352,7 +352,7 @@ function start(socketIo) {
   // Re-optimize all listings every Sunday at 3am
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
   // Auto-end listings 4+ days old with 0 views → immediately chains into product discovery
-  cron.schedule("0 2 * * *", runAutoEndZeroViews);
+  cron.schedule("1 19 * * *", runAutoEndZeroViews);
   // Auto-restock sold listings back to qty 1 — runs every 15 minutes
   cron.schedule("*/15 * * * *", runAutoRestock);
 }
