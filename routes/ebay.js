@@ -2178,7 +2178,7 @@ router.post('/listing/price', async (req, res) => {
       console.log(`listing/price: id=${cleanId} label="${label}" → ReviseFixedPriceItem (${varBlocks.length} variations)`);
       const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
       const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
-      console.log('listing/price: ReviseFixedPriceItem response:', xml.slice(0, 500));
+      console.log('listing/price: ReviseFixedPriceItem response:', xml.slice(0, 2000));
       const err = checkFailure(xml);
       if (err) return res.status(400).json({ error: err });
     }
