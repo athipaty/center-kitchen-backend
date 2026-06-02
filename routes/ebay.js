@@ -575,8 +575,9 @@ function buildAspects(specs) {
   for (const [k, label] of Object.entries(MAP)) {
     if (!specs[k]) continue;
     const val = String(specs[k]).slice(0, 65);
-    // Skip MPN if it looks like a barcode (all digits, 8–14 chars) — eBay rejects it as invalid MPN
-    if (label === 'MPN' && /^\d{8,14}$/.test(val.trim())) continue;
+    // Skip MPN if it looks like a barcode or random internal code — eBay rejects both
+    if (label === 'MPN' && /^\d{8,14}$/.test(val.trim())) continue;       // all-digit barcode
+    if (label === 'MPN' && /^[A-Z0-9]{6,12}$/.test(val.trim())) continue; // random all-caps code (e.g. RIDOPXRA)
     aspects[label] = [val];
   }
   return aspects;
