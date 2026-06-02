@@ -26,6 +26,34 @@ function calcProfit(cost, saleMode) {
   return +(cp - cost - (cp * EBAY_FEE + FIXED_FEE)).toFixed(2);
 }
 
+// Returns the 5 most meaningful words from a product title (used for similarity check)
+function titleFingerprint(title) {
+  const stop = new Set([
+    'the','a','an','and','or','for','with','set','pack','count','piece','pcs',
+    'new','inch','inches','large','small','medium','heavy','duty','high','quality',
+    'premium','men','women','boys','girls','kids','adults','ideal','perfect','best',
+    'ultra','super','pro','plus','mini','max','great','good','top','pack','value',
+  ]);
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !stop.has(w) && !/^\d+$/.test(w))
+    .slice(0, 5);
+}
+
+// Returns true if candidateTitle shares 2+ key words with any existing product title
+function isTooSimilar(candidateTitle, existingProducts) {
+  const cWords = new Set(titleFingerprint(candidateTitle));
+  for (const p of existingProducts) {
+    if (!p.title) continue;
+    const eWords = titleFingerprint(p.title);
+    const overlap = eWords.filter(w => cWords.has(w)).length;
+    if (overlap >= 2) return true;
+  }
+  return false;
+}
+
 // Map Amazon top-level BSR category names → Amazon new-releases URL slugs
 const CATEGORY_SLUG_MAP = {
   'kitchen & dining':          'kitchen',
@@ -310,6 +338,10 @@ async function runProductDiscovery(io, slotsToFill) {
         if (!info.price || !info.isPrime) continue;
         if (!info.rating || info.rating < 4) continue;
         if (!info.reviewCount || info.reviewCount < 50) continue;
+        if (info.title && isTooSimilar(info.title, allProducts)) {
+          console.log(`productDiscovery: skipping ${asin} "${info.title.slice(0,50)}" — too similar to existing product`);
+          continue;
+        }
 
         const variants = info.variants?.filter(v => v.asin) || [];
 
