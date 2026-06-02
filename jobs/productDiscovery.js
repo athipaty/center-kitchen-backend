@@ -259,7 +259,7 @@ async function runProductDiscovery(io, slotsToFill) {
     const seenCategories = new Set();
 
     for (const source of topProducts) {
-      if (candidates.length >= slotsToFill * 5) break;
+      if (candidates.length >= Math.max(slotsToFill * 5, 20)) break;
       const slug = extractCategorySlug(source);
       if (!slug || seenCategories.has(slug)) continue;
       seenCategories.add(slug);
@@ -276,7 +276,7 @@ async function runProductDiscovery(io, slotsToFill) {
     if (!candidates.length) {
       console.log('productDiscovery: no category BSR data found, falling back to keyword search');
       for (const source of topProducts) {
-        if (candidates.length >= slotsToFill * 5) break;
+        if (candidates.length >= Math.max(slotsToFill * 5, 20)) break;
         const similarAsins = await fetchSimilarAsins(source, scraperKey);
         for (const asin of similarAsins) {
           if (!seenAsins.has(asin)) {
@@ -297,7 +297,7 @@ async function runProductDiscovery(io, slotsToFill) {
     const qualified = [];
 
     for (const { asin, rating: preRating, reviewCount: preReviews, price: prePrice, fromNewReleasePage } of candidates) {
-      if (qualified.length >= slotsToFill * 3) break; // enough candidates, stop scraping
+      if (qualified.length >= Math.max(slotsToFill * 3, 5)) break; // enough candidates, stop scraping
 
       // Skip structured fetch (5 credits) if pre-filter data already disqualifies
       if (preRating  > 0 && preRating  < 4)  continue;
