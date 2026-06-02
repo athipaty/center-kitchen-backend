@@ -127,21 +127,26 @@ async function runProductDiscovery(io, slotsToFill) {
       const lid = String(p.ebayListingId);
       if (!byListing[lid]) byListing[lid] = { product: p, views: views[lid] || 0 };
     }
-    const topProducts = Object.values(byListing)
+    const viewed = Object.values(byListing)
       .filter(x => x.views > 0)
       .sort((a, b) => b.views - a.views)
       .slice(0, 10)
       .map(x => x.product);
 
+    // Fall back to a random sample of all listed products when none have views yet
+    const topProducts = viewed.length
+      ? viewed
+      : listedProducts.sort(() => Math.random() - 0.5).slice(0, 10);
+
     if (!topProducts.length) {
-      console.log('productDiscovery: no viewed listings to base search on');
+      console.log('productDiscovery: no listed products to base search on');
       return;
     }
-    console.log('productDiscovery: top products:', topProducts.map(p =>
-      `"${p.title.slice(0, 40)}" (${views[p.ebayListingId]}v)`));
+    console.log('productDiscovery: seeds:', topProducts.map(p =>
+      `"${p.title.slice(0, 40)}" (${views[p.ebayListingId] ?? 0}v)`));
 
     // ── 2. Find similar ASINs ─────────────────────────────────────────────
-    const existingAsins = new Set(allProducts.map(p => p.asin).filter(Boolean));
+    const existingAsins = new Set(allProducts.map(p => p.groupId).filter(Boolean));
     const candidates = [];
     const seenAsins = new Set(existingAsins);
 
@@ -353,7 +358,8 @@ async function runProductDiscovery(io, slotsToFill) {
 
         await new Promise(r => setTimeout(r, 2000));
       } catch (e) {
-        console.error(`productDiscovery: failed to add ${asin}:`, e.message);
+        const detail = e.response?.data?.error || e.response?.data || e.message || String(e);
+        console.error(`productDiscovery: failed to add ${asin}:`, detail);
       }
     }
 
