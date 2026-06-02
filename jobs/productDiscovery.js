@@ -262,7 +262,7 @@ async function runProductDiscovery(io, slotsToFill) {
       const newReleaseCandidates = await fetchNewReleaseCandidates(slug, scraperKey, seenAsins);
       for (const c of newReleaseCandidates) {
         seenAsins.add(c.asin);
-        candidates.push({ ...c, sourceTitle: source.title, category: slug });
+        candidates.push({ ...c, sourceTitle: source.title, category: slug, fromNewReleasePage: true });
       }
       await new Promise(r => setTimeout(r, 1500));
     }
@@ -291,7 +291,7 @@ async function runProductDiscovery(io, slotsToFill) {
     // variantsToAdd = resolved list of variants (or single-product treated as 1 variant)
     const qualified = [];
 
-    for (const { asin, rating: preRating, reviewCount: preReviews, price: prePrice } of candidates) {
+    for (const { asin, rating: preRating, reviewCount: preReviews, price: prePrice, fromNewReleasePage } of candidates) {
       if (qualified.length >= slotsToFill * 3) break; // enough candidates, stop scraping
 
       // Skip structured fetch (5 credits) if pre-filter data already disqualifies
@@ -303,7 +303,9 @@ async function runProductDiscovery(io, slotsToFill) {
         const url = `https://www.amazon.com/dp/${asin}`;
         const info = await fetchProduct(url, { priceOnly: false });
         if (!info.price || !info.isPrime) continue;
-        if (!info.isNewRelease) continue;
+        // Skip isNewRelease check for candidates sourced from Amazon's new-releases pages —
+        // the source itself guarantees they are new releases.
+        if (!fromNewReleasePage && !info.isNewRelease) continue;
         if (!info.rating || info.rating < 4) continue;
         if (!info.reviewCount || info.reviewCount < 50) continue;
 
