@@ -53,10 +53,17 @@ async function fetchSimilarAsins(product, scraperKey) {
       timeout: 30000,
     });
     const results = data.results || data.organic_results || data.products || [];
-    const asins = results
+    const filtered = results.filter(r => {
+      const rating = parseFloat(r.rating || r.average_rating) || 0;
+      const reviews = parseInt(r.reviews_count || r.total_ratings || r.ratings_total) || 0;
+      if (rating > 0 && rating < 4) return false;
+      if (reviews > 0 && reviews < 50) return false;
+      return true;
+    });
+    const asins = filtered
       .map(r => r.asin || extractAsin(r.url || r.link || ''))
       .filter(Boolean);
-    console.log(`productDiscovery: search "${query}" → ${asins.length} ASINs`);
+    console.log(`productDiscovery: search "${query}" → ${asins.length} ASINs (${results.length - filtered.length} filtered by rating/reviews)`);
     return asins.slice(0, 20);
   } catch (e) {
     console.error(`productDiscovery: search failed for "${query}":`, e.message);
@@ -176,6 +183,9 @@ async function runProductDiscovery(io, slotsToFill) {
         const url = `https://www.amazon.com/dp/${asin}`;
         const info = await fetchProduct(url, { priceOnly: false });
         if (!info.price || !info.isPrime) continue;
+        if (!info.isNewRelease) continue;
+        if (!info.rating || info.rating < 4) continue;
+        if (!info.reviewCount || info.reviewCount < 50) continue;
 
         const variants = info.variants?.filter(v => v.asin) || [];
 
@@ -205,7 +215,7 @@ async function runProductDiscovery(io, slotsToFill) {
           qualified.push({ asin, url, info, baseProfit, variantsToAdd: variantList });
         }
 
-        console.log(`productDiscovery: qualified ${asin} — ${info.variants?.length || 0} variant(s), baseProfit=$${calcProfit(info.price, saleMode)}`);
+        console.log(`productDiscovery: qualified ${asin} — ${info.variants?.length || 0} variant(s), baseProfit=$${calcProfit(info.price, saleMode)}, rating=${info.rating}, reviews=${info.reviewCount}, newRelease=${info.isNewRelease}`);
         await new Promise(r => setTimeout(r, 800));
       } catch {
         // skip out-of-stock, unavailable, etc.
