@@ -2106,6 +2106,36 @@ router.post('/listing/:id/revise-description', async (req, res) => {
   }
 });
 
+// ── Revise photos on an existing single listing ─────────────────────
+router.post('/listing/:id/revise-photos', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    const { imageUrls = [] } = req.body;
+    if (!cleanId) return res.status(400).json({ error: 'Invalid listing ID' });
+    if (!imageUrls.length) return res.status(400).json({ error: 'imageUrls required' });
+
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const picsXml = imageUrls.slice(0, 12).map(u => `<PictureURL>${u}</PictureURL>`).join('');
+    const body = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      ${creds}
+      <Item><ItemID>${cleanId}</ItemID><PictureDetails>${picsXml}</PictureDetails></Item>
+    </ReviseFixedPriceItemRequest>`;
+
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body, {
+      headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+        'X-EBAY-API-IAF-TOKEN': token, 'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem', 'Content-Type': 'text/xml' },
+    });
+    if (/<Ack>Failure<\/Ack>/.test(xml)) {
+      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+      return res.status(400).json({ error: msg });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Update variation photos on an existing multi-variation listing ──
 router.post('/listing/variation-photos', async (req, res) => {
   try {
