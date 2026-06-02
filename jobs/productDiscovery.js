@@ -176,6 +176,7 @@ async function runProductDiscovery(io, slotsToFill) {
 
         if (variants.length === 0) {
           // Single product — 1 slot, use base price
+          if (calcEbayPrice(info.price, saleMode) >= 100) continue; // skip $100+ listings
           const profit = calcProfit(info.price, saleMode);
           if (profit <= 0) continue;
           qualified.push({
@@ -193,6 +194,7 @@ async function runProductDiscovery(io, slotsToFill) {
             image: v.image || info.image,
             images: v.image ? [v.image, ...(info.images || [])] : (info.images || []),
           }));
+          if (calcEbayPrice(info.price, saleMode) >= 100) continue; // skip $100+ listings
           const baseProfit = calcProfit(info.price, saleMode);
           if (baseProfit <= 0) continue;
           qualified.push({ asin, url, info, baseProfit, variantsToAdd: variantList });

@@ -2443,6 +2443,7 @@ router.post('/trading-create-listing', async (req, res) => {
     } = req.body;
 
     if (!title || !price) return res.status(400).json({ error: 'title and price are required' });
+    if (Number(price) >= 100) return res.status(400).json({ error: `Listing price $${Number(price).toFixed(2)} is $100 or more — eBay requires account approval for premium listings. Keep price under $100.` });
 
     const safeTitle = sanitizeTitle(title);
     const conditionId = condition === 'NEW' ? '1000' : '3000';
