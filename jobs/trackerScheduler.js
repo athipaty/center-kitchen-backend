@@ -211,6 +211,7 @@ async function runAutoEndZeroViews() {
     if (!oldListings.length) return;
 
     const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
     const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
     const { data: viewsData } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
@@ -218,7 +219,7 @@ async function runAutoEndZeroViews() {
       params: {
         dimension: 'LISTING',
         metric: 'LISTING_VIEWS_TOTAL',
-        filter: `listing_ids:{${oldListings.join('|')}},date_range:[${fmt(start)}..${fmt(now)}]`,
+        filter: `listing_ids:{${oldListings.join('|')}},date_range:[${fmt(start)}..${fmt(yesterday)}]`,
       },
     });
 
