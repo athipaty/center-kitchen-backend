@@ -1468,93 +1468,143 @@ ${(row.bullets||[]).length ? `<ul>${row.bullets.map(b=>`<li>${esc(b)}</li>`).joi
       `<tr><td class="sk">Condition</td><td>New</td></tr>`,
     ].filter(Boolean).join('');
 
-    const specTableHtml = allSpecRows
-      ? `<div class="sh"><h2>Full Product Specifications</h2><div class="div"></div></div>
-<div class="ss"><table class="st"><tr><th colspan="2">Technical Details</th></tr>${allSpecRows}</table></div>` : '';
+    // specTableHtml replaced by specTableHtml2col (2-column desktop layout, built below)
 
     // ── HTML ──────────────────────────────────────────────────────────
+    // ── Spec table: 2-column layout on desktop ────────────────────────
+    const specPairs = [];
+    const allSpecRowArr = [
+      ...cleanSpecs.map(s => ({ k: s.label, v: s.value })),
+      ...(upc     ? [{ k: 'UPC / Barcode', v: upc }]     : []),
+      ...(variant ? [{ k: 'Variant',       v: variant }]  : []),
+      { k: 'Condition', v: 'New' },
+    ];
+    for (let i = 0; i < allSpecRowArr.length; i += 2) {
+      specPairs.push([allSpecRowArr[i], allSpecRowArr[i + 1] || null]);
+    }
+    const specTableHtml2col = specPairs.length ? `
+<div class="sh"><h2>Full Product Specifications</h2><div class="div"></div></div>
+<div class="ss"><table class="st">
+<tr><th colspan="4">Technical Details</th></tr>
+${specPairs.map(([a, b]) => `<tr>
+  <td class="sk">${esc(a.k)}</td><td class="sv">${esc(a.v)}</td>
+  ${b ? `<td class="sk">${esc(b.k)}</td><td class="sv">${esc(b.v)}</td>` : '<td colspan="2"></td>'}
+</tr>`).join('')}
+</table></div>` : '';
+
     const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background:#fff;max-width:900px;margin:0 auto}
-.hero{background:${t.dark};text-align:center;padding:0 0 28px}
-.hero img{width:100%;max-height:480px;object-fit:contain;background:${t.dark};display:block}
-.hero-text{padding:22px 20px 0}
-.hero-tag{display:inline-block;background:${t.accent};color:#fff;font-family:Georgia,serif;font-size:11px;letter-spacing:2.5px;text-transform:uppercase;padding:5px 16px;border-radius:20px;margin-bottom:12px}
-.hero-title{font-family:Georgia,serif;font-size:22px;font-weight:bold;color:#fff;line-height:1.35;margin-bottom:10px}
-.hero-sub{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.65;max-width:660px;margin:0 auto}
-.trust-bar{background:${t.primary};display:flex;flex-wrap:wrap;justify-content:center;gap:0}
-.ti{display:flex;align-items:center;gap:6px;color:#fff;font-size:12px;font-weight:bold;padding:11px 16px;border-right:1px solid rgba(255,255,255,0.2);white-space:nowrap}
+
+/* ── Hero: split layout on desktop ── */
+.hero{background:${t.dark};display:flex;align-items:stretch;min-height:340px}
+.hero-img{flex:0 0 48%;background:${t.dark}}
+.hero-img img{width:100%;height:100%;max-height:420px;object-fit:contain;display:block}
+.hero-body{flex:1 1 0;display:flex;flex-direction:column;justify-content:center;padding:36px 32px}
+.hero-tag{display:inline-block;background:${t.accent};color:#fff;font-family:Georgia,serif;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;padding:5px 14px;border-radius:20px;margin-bottom:14px;align-self:flex-start}
+.hero-title{font-family:Georgia,serif;font-size:24px;font-weight:bold;color:#fff;line-height:1.35;margin-bottom:12px}
+.hero-sub{font-size:14px;color:rgba(255,255,255,0.78);line-height:1.7}
+.hero-badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+.hb{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:11px;font-weight:bold;padding:6px 12px;border-radius:16px}
+
+/* ── Trust bar ── */
+.trust-bar{background:${t.primary};display:flex;flex-wrap:wrap;justify-content:center}
+.ti{display:flex;align-items:center;gap:6px;color:#fff;font-size:12px;font-weight:bold;padding:11px 18px;border-right:1px solid rgba(255,255,255,0.2);white-space:nowrap}
 .ti:last-child{border-right:none}
-.sh{text-align:center;padding:32px 20px 10px}
-.sh h2{font-family:Georgia,serif;font-size:20px;color:${t.dk};margin-bottom:6px}
-.div{width:44px;height:3px;background:${t.accent};margin:8px auto 0;border-radius:2px}
-.fg{display:flex;flex-wrap:wrap;gap:12px;padding:16px 14px 28px;justify-content:center}
-.fc{flex:1 1 200px;max-width:260px;background:${t.light};border:1px solid ${t.border};border-radius:10px;padding:18px 14px;text-align:center}
-.fi{font-size:30px;margin-bottom:8px;display:block}
-.fc h3{font-family:Georgia,serif;font-size:14px;color:${t.dk};margin-bottom:6px}
-.fc p{font-size:13px;color:#555;line-height:1.5}
-.pr{display:flex;align-items:center;border-bottom:1px solid ${t.border};overflow:hidden}
+
+/* ── Section headings ── */
+.sh{text-align:center;padding:36px 20px 12px}
+.sh h2{font-family:Georgia,serif;font-size:22px;color:${t.dk};margin-bottom:6px}
+.div{width:48px;height:3px;background:${t.accent};margin:8px auto 0;border-radius:2px}
+
+/* ── Feature grid: 3-equal-col on desktop ── */
+.fg{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:18px 20px 34px}
+.fc{background:${t.light};border:1px solid ${t.border};border-radius:12px;padding:22px 18px;text-align:center}
+.fi{font-size:34px;margin-bottom:10px;display:block}
+.fc h3{font-family:Georgia,serif;font-size:15px;color:${t.dk};margin-bottom:7px}
+.fc p{font-size:13px;color:#555;line-height:1.55}
+
+/* ── Photo rows: 50/50 split ── */
+.pr{display:flex;align-items:stretch;border-bottom:1px solid ${t.border};overflow:hidden}
 .pr-rev{flex-direction:row-reverse}
-.pc{flex:0 0 45%;min-width:0}
-.pc img{width:100%;height:280px;object-fit:contain;background:${t.light};display:block}
-.tc{flex:1 1 0;padding:24px 20px}
-.lbl{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:${t.accent};font-weight:bold;margin-bottom:6px}
-.tc h3{font-family:Georgia,serif;font-size:17px;color:${t.dk};margin-bottom:8px;line-height:1.3}
-.tc p{font-size:14px;color:#555;line-height:1.6;margin-bottom:8px}
-.tc ul{padding-left:16px;margin-top:6px}
-.tc ul li{font-size:13px;color:#555;line-height:1.6;margin-bottom:5px}
-.gal{display:flex;flex-wrap:wrap;gap:6px;padding:14px;background:${t.light}}
-.gal img{flex:1 1 140px;height:130px;object-fit:contain;background:#fff;border:1px solid ${t.border};border-radius:6px}
-.ss{padding:0 12px 28px}
+.pc{flex:0 0 50%}
+.pc img{width:100%;height:320px;object-fit:contain;background:${t.light};display:block}
+.tc{flex:1 1 0;padding:32px 28px;display:flex;flex-direction:column;justify-content:center}
+.lbl{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:${t.accent};font-weight:bold;margin-bottom:8px}
+.tc h3{font-family:Georgia,serif;font-size:19px;color:${t.dk};margin-bottom:10px;line-height:1.3}
+.tc p{font-size:14px;color:#555;line-height:1.65;margin-bottom:10px}
+.tc ul{padding-left:18px;margin-top:4px}
+.tc ul li{font-size:13px;color:#555;line-height:1.65;margin-bottom:6px}
+
+/* ── Gallery: uniform 3-col grid ── */
+.gal{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:16px;background:${t.light}}
+.gal img{width:100%;height:160px;object-fit:contain;background:#fff;border:1px solid ${t.border};border-radius:8px;display:block}
+
+/* ── Spec table: 2-col layout ── */
+.ss{padding:0 16px 32px}
 .st{width:100%;border-collapse:collapse;font-size:14px}
-.st th{background:${t.dk};color:#fff;font-family:Georgia,serif;padding:10px 12px;text-align:left;font-size:14px}
-.st td{padding:9px 12px;border-bottom:1px solid ${t.border};vertical-align:top;word-break:break-word}
-.st tr:nth-child(even) td{background:${t.light}}
-.sk{color:${t.dk};width:40%;font-weight:bold;font-size:13px}
-.cta{background:linear-gradient(135deg,${t.dk},${t.primary},${t.accent});text-align:center;padding:34px 18px}
-.cta h2{font-family:Georgia,serif;font-size:21px;color:#fff;margin-bottom:8px}
-.cta p{font-size:14px;color:rgba(255,255,255,0.85);margin-bottom:16px;line-height:1.55}
-.cb{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
-.cbb{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.3);color:#fff;font-size:12px;font-weight:bold;padding:8px 16px;border-radius:22px}
+.st th{background:${t.dk};color:#fff;font-family:Georgia,serif;padding:11px 14px;text-align:left;font-size:15px}
+.sk{color:${t.dk};width:18%;font-weight:bold;font-size:13px;padding:9px 12px;border-bottom:1px solid ${t.border};background:${t.light};vertical-align:top}
+.sv{padding:9px 14px;border-bottom:1px solid ${t.border};vertical-align:top;word-break:break-word;width:32%}
+.st tr:nth-child(even) .sv{background:#fafafa}
+
+/* ── CTA ── */
+.cta{background:linear-gradient(135deg,${t.dk} 0%,${t.primary} 55%,${t.accent} 100%);text-align:center;padding:40px 24px}
+.cta h2{font-family:Georgia,serif;font-size:24px;color:#fff;margin-bottom:10px}
+.cta p{font-size:15px;color:rgba(255,255,255,0.85);margin-bottom:20px;line-height:1.6;max-width:560px;margin-left:auto;margin-right:auto}
+.cb{display:grid;grid-template-columns:repeat(2,auto);gap:10px;justify-content:center;margin-top:4px}
+.cbb{background:rgba(255,255,255,0.14);border:1px solid rgba(255,255,255,0.35);color:#fff;font-size:12px;font-weight:bold;padding:10px 20px;border-radius:24px;text-align:left}
+
+/* ── Footer ── */
 .ft{background:#f4f4f4;border-top:2px solid ${t.border};padding:14px;text-align:center;font-size:12px;color:#888;line-height:1.65}
-.kw{padding:12px 18px 4px;font-size:12px;color:#aaa;line-height:1.7;text-align:center;max-width:820px;margin:0 auto}
+.kw{padding:14px 20px 4px;font-size:12px;color:#aaa;line-height:1.7;text-align:center;max-width:820px;margin:0 auto}
+
+/* ── Mobile overrides ── */
 @media(max-width:580px){
   body{font-size:14px}
-  .hero img{max-height:300px}
+  .hero{flex-direction:column;min-height:0}
+  .hero-img{flex:0 0 auto}
+  .hero-img img{max-height:280px;width:100%}
+  .hero-body{padding:20px 16px 24px}
   .hero-title{font-size:18px}
   .hero-sub{font-size:13px}
+  .hero-badges{display:none}
   .trust-bar{flex-direction:column;align-items:stretch}
   .ti{border-right:none;border-bottom:1px solid rgba(255,255,255,0.15);justify-content:center;padding:10px 14px}
   .ti:last-child{border-bottom:none}
-  .fg{flex-direction:column;align-items:stretch;gap:10px;padding:14px 12px 22px}
-  .fc{max-width:100%;flex:1 1 auto}
+  .fg{grid-template-columns:1fr;gap:10px;padding:14px 12px 22px}
   .pr{flex-direction:column !important}
   .pc{flex:0 0 auto;width:100%}
-  .pc img{height:240px;width:100%}
+  .pc img{height:240px}
   .tc{padding:16px 14px}
   .tc h3{font-size:16px}
-  .tc ul li{font-size:13px}
-  .gal img{flex:1 1 100px;height:100px}
+  .gal{grid-template-columns:repeat(2,1fr);gap:6px;padding:10px}
+  .gal img{height:110px}
   .st{font-size:13px}
-  .st td,.st th{padding:8px 10px}
-  .sk{width:45%}
-  .sh h2{font-size:17px}
+  .sk,.sv{padding:8px 10px;width:auto}
+  .st tr{display:grid;grid-template-columns:1fr 1fr}
+  .sh h2{font-size:18px}
   .cta{padding:26px 14px}
-  .cta h2{font-size:18px}
-  .cb{flex-direction:column;align-items:center}
+  .cta h2{font-size:19px}
+  .cb{grid-template-columns:1fr;justify-items:center}
   .cbb{width:100%;max-width:240px;text-align:center}
 }
 </style></head><body>
-<div class="hero">${imageUrls[0]?`<img src="${imageUrls[0]}" alt="${esc(title)}">`:''}<div class="hero-text">
-<span class="hero-tag">${esc(content.tagline||'')}</span>
-<h1 class="hero-title">${esc(title)}</h1>
-<p class="hero-sub">${esc(content.heroSub||'')}</p></div></div>
+<div class="hero">
+  <div class="hero-img">${imageUrls[0]?`<img src="${imageUrls[0]}" alt="${esc(title)}">`:''}</div>
+  <div class="hero-body">
+    <span class="hero-tag">${esc(content.tagline||'')}</span>
+    <h1 class="hero-title">${esc(title)}</h1>
+    <p class="hero-sub">${esc(content.heroSub||'')}</p>
+    <div class="hero-badges">${tr.slice(0,3).map(x=>`<span class="hb">&#10003; ${esc(x)}</span>`).join('')}</div>
+  </div>
+</div>
 <div class="trust-bar">${tr.map(x=>`<div class="ti">&#9989; ${esc(x)}</div>`).join('')}</div>
 <div class="sh"><h2>Why Choose This Product?</h2><div class="div"></div></div>
 <div class="fg">${f.map(x=>`<div class="fc"><span class="fi">${x.icon||'&#10003;'}</span><h3>${esc(x.title)}</h3><p>${esc(x.desc)}</p></div>`).join('')}</div>
 ${photoRowsHtml}
 ${galleryHtml}
-${specTableHtml}
+${specTableHtml2col}
 <div class="cta"><h2>${esc(content.ctaHeading||'Order Today')}</h2><p>${esc(content.ctaSub||'')}</p>
 <div class="cb">${tr.slice(0,4).map(x=>`<span class="cbb">&#10003; ${esc(x)}</span>`).join('')}</div></div>
 ${content.seoText ? `<p class="kw">${esc(content.seoText)}</p>` : ''}
