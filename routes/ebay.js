@@ -2845,6 +2845,7 @@ router.get('/listing/:id/prices', async (req, res) => {
 });
 
 // ── Get eBay listing view counts (batch — one Analytics API call for all IDs) ──
+const VIEW_METRICS = ['LISTING_VIEWS_TOTAL'];
 const viewsCache = new Map(); // listingId → { count, expiresAt }
 const VIEWS_TTL = 60 * 60 * 1000; // 1 hour cache
 
@@ -2878,14 +2879,14 @@ router.get('/listings/views', async (req, res) => {
         headers: { Authorization: `Bearer ${token}` },
         params: {
           dimension: 'LISTING',
-          metric: 'LISTING_VIEWS_TOTAL',
+          metric: VIEW_METRICS.join(','),
           filter: `listing_ids:{${uncached.join('|')}},date_range:[${fmt(start)}..${fmt(now)}]`,
         },
       });
       for (const record of (data.records || [])) {
         const lid = String(record.dimensionValues?.[0]?.value || '');
         if (!lid) continue;
-        const total = Number(record.metricValues?.[0]?.value ?? 0);
+        const total = Number(record.metricData?.[0]?.value ?? 0);
         result[lid] = total;
         viewsCache.set(lid, { count: total, expiresAt: Date.now() + VIEWS_TTL });
       }
