@@ -25,6 +25,67 @@ function calcProfit(cost, saleMode) {
   return +(cp - cost - (cp * EBAY_FEE + FIXED_FEE)).toFixed(2);
 }
 
+// Map Amazon top-level BSR category names → Amazon new-releases URL slugs
+const CATEGORY_SLUG_MAP = {
+  'kitchen & dining':          'kitchen',
+  'home & kitchen':            'kitchen',
+  'kitchen':                   'kitchen',
+  'tools & home improvement':  'tools',
+  'tools':                     'tools',
+  'sports & outdoors':         'sports-outdoors',
+  'sports':                    'sports-outdoors',
+  'home & garden':             'home-garden',
+  'garden & outdoor':          'lawn-garden',
+  'patio, lawn & garden':      'lawn-garden',
+  'electronics':               'electronics',
+  'beauty & personal care':    'beauty',
+  'beauty':                    'beauty',
+  'baby':                      'baby',
+  'toys & games':              'toys-and-games',
+  'office products':           'office-products',
+  'clothing, shoes & jewelry': 'clothing-shoes-jewelry',
+  'health & household':        'hpc',
+  'grocery & gourmet food':    'grocery',
+  'pet supplies':              'pets',
+  'automotive':                'automotive',
+};
+
+function extractCategorySlug(product) {
+  const bsr = product.specs?.best_sellers_rank;
+  if (!Array.isArray(bsr) || !bsr.length) return null;
+  // BSR entry example: "#183 in Tools & Home Improvement (See Top 100 ...)"
+  // Take only the top-level category (first entry in the array, broadest one)
+  for (const entry of bsr) {
+    const match = String(entry).match(/in\s+([A-Za-z,&' ]+?)(?:\s*\(|$)/i);
+    if (!match) continue;
+    const raw = match[1].trim().toLowerCase();
+    // Exact match
+    if (CATEGORY_SLUG_MAP[raw]) return CATEGORY_SLUG_MAP[raw];
+    // Partial match
+    for (const [key, slug] of Object.entries(CATEGORY_SLUG_MAP)) {
+      if (raw.includes(key) || key.includes(raw)) return slug;
+    }
+  }
+  return null;
+}
+
+async function fetchNewReleaseAsins(categorySlug, scraperKey, seenAsins) {
+  const url = `https://www.amazon.com/gp/new-releases/${categorySlug}/`;
+  try {
+    const { data: html } = await axios.get('https://api.scraperapi.com/', {
+      params: { api_key: scraperKey, url },
+      timeout: 30000,
+    });
+    const raw = [...html.matchAll(/\/dp\/([A-Z0-9]{10})/g)].map(m => m[1]);
+    const asins = [...new Set(raw)].filter(a => !seenAsins.has(a));
+    console.log(`productDiscovery: new-releases/${categorySlug} → ${asins.length} new ASINs`);
+    return asins.slice(0, 24);
+  } catch (e) {
+    console.error(`productDiscovery: failed to fetch new-releases/${categorySlug}:`, e.message);
+    return [];
+  }
+}
+
 function titleKeywords(title) {
   const stop = new Set(['the','a','an','and','or','for','with','set','pack','count',
     'piece','pcs','new','inch','inches','black','white','gray','blue','red','green',
@@ -152,21 +213,40 @@ async function runProductDiscovery(io, slotsToFill) {
     console.log('productDiscovery: seeds:', topProducts.map(p =>
       `"${p.title.slice(0, 40)}" (${views[p.ebayListingId] ?? 0}v)`));
 
-    // ── 2. Find similar ASINs ─────────────────────────────────────────────
+    // ── 2. Find new release ASINs in the same categories as top products ─────
     const existingAsins = new Set(allProducts.map(p => p.groupId).filter(Boolean));
     const candidates = [];
     const seenAsins = new Set(existingAsins);
+    const seenCategories = new Set();
 
     for (const source of topProducts) {
-      if (candidates.length >= slotsToFill * 5) break; // gather plenty to evaluate
-      const similarAsins = await fetchSimilarAsins(source, scraperKey);
-      for (const asin of similarAsins) {
-        if (!seenAsins.has(asin)) {
-          seenAsins.add(asin);
-          candidates.push({ asin, sourceTitle: source.title });
-        }
+      if (candidates.length >= slotsToFill * 5) break;
+      const slug = extractCategorySlug(source);
+      if (!slug || seenCategories.has(slug)) continue;
+      seenCategories.add(slug);
+      console.log(`productDiscovery: seed "${source.title.slice(0, 40)}" → category "${slug}"`);
+      const newReleaseAsins = await fetchNewReleaseAsins(slug, scraperKey, seenAsins);
+      for (const asin of newReleaseAsins) {
+        seenAsins.add(asin);
+        candidates.push({ asin, sourceTitle: source.title, category: slug });
       }
       await new Promise(r => setTimeout(r, 1500));
+    }
+
+    // Fallback: if no categories detected in BSR data, use keyword search
+    if (!candidates.length) {
+      console.log('productDiscovery: no category BSR data found, falling back to keyword search');
+      for (const source of topProducts) {
+        if (candidates.length >= slotsToFill * 5) break;
+        const similarAsins = await fetchSimilarAsins(source, scraperKey);
+        for (const asin of similarAsins) {
+          if (!seenAsins.has(asin)) {
+            seenAsins.add(asin);
+            candidates.push({ asin, sourceTitle: source.title });
+          }
+        }
+        await new Promise(r => setTimeout(r, 1500));
+      }
     }
 
     console.log(`productDiscovery: ${candidates.length} candidate ASINs to evaluate`);

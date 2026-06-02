@@ -167,17 +167,27 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
         : Array.isArray(data.about_this_item) ? data.about_this_item
         : [];
 
-      const rating = parseFloat(data.rating || data.average_rating) || null;
-      const reviewCount = parseInt(data.reviews_count || data.total_ratings || data.ratings_total) || 0;
+      const rating = parseFloat(
+        data.average_rating ||
+        data.rating ||
+        data.product_information?.customer_reviews?.stars ||
+        data.product_information?.average_rating
+      ) || null;
+      const reviewCount = parseInt(
+        data.total_ratings || data.reviews_count ||
+        data.ratings_total || data.product_information?.total_reviews
+      ) || 0;
 
-      // "New Release" = has a new-release badge OR first listed within the last 180 days
-      const badgesRaw = Array.isArray(data.badges) ? data.badges : (data.badge ? [data.badge] : []);
-      const hasNewReleaseBadge = badgesRaw.some(b => /new.?release/i.test(String(b)));
-      const dateFirstAvailable = data.product_information?.date_first_available || data.date_first_available || null;
+      // "New Release" = BSR contains a "New Release" rank entry OR first listed within 180 days
+      const bsrEntries = Array.isArray(data.product_information?.best_sellers_rank)
+        ? data.product_information.best_sellers_rank
+        : [];
+      const hasNewReleaseBSR = bsrEntries.some(e => /new.?release/i.test(String(e)));
+      const dateFirstAvailable = data.product_information?.date_first_available || null;
       const isRecentRelease = dateFirstAvailable
         ? (Date.now() - new Date(dateFirstAvailable).getTime()) < 180 * 24 * 3600 * 1000
         : false;
-      const isNewRelease = hasNewReleaseBadge || isRecentRelease;
+      const isNewRelease = hasNewReleaseBSR || isRecentRelease;
 
       return { title, price, currency, image, images, upc, variants, isPrime, variant, specs, bullets, rating, reviewCount, isNewRelease };
     } catch (err) {
