@@ -130,7 +130,7 @@ async function runProductDiscovery(io, slotsToFill) {
     const topProducts = Object.values(byListing)
       .filter(x => x.views > 0)
       .sort((a, b) => b.views - a.views)
-      .slice(0, 5)
+      .slice(0, 10)
       .map(x => x.product);
 
     if (!topProducts.length) {
