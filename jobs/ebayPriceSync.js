@@ -65,9 +65,25 @@ function decodeEntities(str) {
 }
 
 function labelMatch(blockVal, label) {
-  const v = decodeEntities(blockVal).toLowerCase();
-  const l = (label || '').toLowerCase();
-  return v === l || l.includes(v) || v.includes(l);
+  const v = decodeEntities(blockVal).toLowerCase().trim();
+  const l = (label || '').toLowerCase().trim();
+  return v === l || v.includes(l) || l.includes(v);
+}
+
+// Returns the DB variant that best matches an eBay variation label.
+// Prefers exact match, then most-specific partial match (shortest DB name that still contains the eBay value).
+function bestVariantMatch(variants, ebayVal) {
+  const v = decodeEntities(ebayVal).toLowerCase().trim();
+  // 1. Exact match
+  const exact = variants.find(dbv => (dbv.variant || '').toLowerCase().trim() === v);
+  if (exact) return exact;
+  // 2. eBay value is contained in DB name (e.g. eBay="yellow", DB="2pcs yellow") — pick shortest DB name to avoid over-matching
+  const supersets = variants.filter(dbv => (dbv.variant || '').toLowerCase().trim().includes(v));
+  if (supersets.length) return supersets.reduce((a, b) => a.variant.length <= b.variant.length ? a : b);
+  // 3. DB name is contained in eBay value — pick longest DB name (most specific)
+  const subsets = variants.filter(dbv => v.includes((dbv.variant || '').toLowerCase().trim()));
+  if (subsets.length) return subsets.reduce((a, b) => a.variant.length >= b.variant.length ? a : b);
+  return variants[0];
 }
 
 // Set eBay variation quantity to 0 (OOS) or back to qty (in-stock)
@@ -178,4 +194,4 @@ async function endListing(listingId) {
   if (err) throw new Error(err);
 }
 
-module.exports = { syncEbayPrice, syncEbayQty, endListing, getAccessToken };
+module.exports = { syncEbayPrice, syncEbayQty, endListing, getAccessToken, bestVariantMatch };

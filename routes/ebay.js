@@ -2449,12 +2449,12 @@ router.post('/sale-mode', async (req, res) => {
 
         if (varBlocks.length) {
           // Multi-variation: match each variant's cost by label
+          const { bestVariantMatch } = require('../jobs/ebayPriceSync');
           const variationXml = varBlocks.map(vBlock => {
             const specifics = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
             const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
-            // Find matching product by variant label
-            const labelMatch = specifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase() || '';
-            const matched = variants.find(v => (v.variant || '').toLowerCase() === labelMatch) || variants[0];
+            const ebayVal = specifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+            const matched = bestVariantMatch(variants, ebayVal);
             const cost = matched?.current || 0;
             const newPrice = cost > 0 ? calcPrice(cost) : null;
             if (!newPrice) return null;
