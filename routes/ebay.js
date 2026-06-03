@@ -2582,6 +2582,66 @@ router.post('/bulk-set-quantity', async (req, res) => {
   }
 });
 
+// ── Set quantity on a single listing ──────────────────────────────────
+router.post('/listing/:id/quantity', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    if (!cleanId) return res.status(400).json({ error: 'Listing ID must be numeric' });
+    const { quantity = 1 } = req.body;
+    const qty = Math.max(1, parseInt(quantity) || 1);
+
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
+      );
+    }
+
+    const { data: getXml } = await tradingPost('GetItem',
+      `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+    );
+
+    const varBlocks = [...getXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+
+    let body, callName;
+    if (varBlocks.length) {
+      const variationXml = varBlocks.map(vBlock => {
+        const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+        const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0';
+        const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+        const varVal = vBlock.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+        const skuXml = `<SKU>${sku || sanitizeSku(`${cleanId}-${varVal}`)}</SKU>`;
+        return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
+      }).join('');
+      body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+      callName = 'ReviseFixedPriceItem';
+    } else {
+      body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><Quantity>${qty}</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`;
+      callName = 'ReviseInventoryStatus';
+    }
+
+    const { data: revXml } = await tradingPost(callName, body);
+    const err = checkFailure(revXml);
+    if (err) return res.status(400).json({ error: err });
+
+    console.log(`listing/quantity: id=${cleanId} qty=${qty} variations=${varBlocks.length}`);
+    res.json({ ok: true, quantity: qty, variations: varBlocks.length });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message || 'Failed to set quantity' });
+  }
+});
+
 // ── Create listing via Trading API (AddFixedPriceItem) ─────────────────
 // More reliable than Inventory API for accounts that haven't been approved
 // for programmatic listing creation via the Inventory API.
