@@ -136,6 +136,18 @@ router.post("/", async (req, res) => {
     scheduler.scheduleNew(product);
     await product.save();
     res.json(product);
+
+    // Auto-list on eBay immediately (fire-and-forget — client already got the response)
+    if (product.isPrime) {
+      const io = req.app.get('io');
+      const { autoList, scheduleGroupAutoList } = require('../../jobs/autoList');
+      if (groupId) {
+        // Debounce so all variants in the group are saved before we create the listing
+        scheduleGroupAutoList(groupId, io);
+      } else {
+        setImmediate(() => autoList([product], io).catch(() => {}));
+      }
+    }
   } catch (err) {
     res.status(502).json({ error: err.message });
   }

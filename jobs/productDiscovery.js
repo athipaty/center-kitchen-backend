@@ -4,22 +4,9 @@ const Product = require('../models/tracker/Product');
 const TrackerSettings = require('../models/tracker/TrackerSettings');
 const { fetchProduct, extractAsin } = require('../scraper');
 
-const BASE = `http://localhost:${process.env.PORT || 5000}`;
+const { calcEbayPrice, detectVariantDimension } = require('./autoList');
 
-const EBAY_FEE   = 0.1325;
-const FIXED_FEE  = 0.30;
-const PROMO      = 0.05;
-const MIN_PROFIT = 4.50;
-
-function calcEbayPrice(cost, saleMode) {
-  if (saleMode) {
-    return Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - 0.02)) + 0.99;
-  }
-  const m      = cost < 10 ? 2.2 : cost < 20 ? 1.7 : cost < 35 ? 1.55 : cost < 60 ? 1.45 : 1.35;
-  const tiered = cost * m;
-  const floor  = (cost + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
-  return Math.floor(Math.max(tiered, floor)) + 0.99;
-}
+const EBAY_FEE = 0.1325, FIXED_FEE = 0.30;
 
 function calcProfit(cost, saleMode) {
   const cp = calcEbayPrice(cost, saleMode);
@@ -164,12 +151,6 @@ function titleKeywords(title) {
     .filter(w => w.length > 3 && !stop.has(w) && !/^\d+$/.test(w))
     .slice(0, 4)
     .join(' ');
-}
-
-function detectVariantDimension(variants) {
-  if (variants.some(v => (v.label || '').match(/\d+["'\s]*(inch|in\b|cm\b|mm\b|oz\b|lb\b|ft\b)/i))) return 'Size';
-  if (variants.some(v => (v.label || '').match(/\b(red|blue|green|black|white|gray|grey|pink|purple|yellow|orange|brown|natural|carbonized|silver|gold|beige|navy|teal)\b/i))) return 'Color';
-  return 'Style';
 }
 
 async function fetchSimilarAsins(product, scraperKey) {
@@ -407,15 +388,15 @@ async function runProductDiscovery(io, slotsToFill) {
     // ── 5. Add each product to tracker + auto-list on eBay ────────────────
     const added = [];
 
+    const { autoList } = require('./autoList');
+
     for (const { asin, info, variantsToAdd } of toProcess) {
       try {
-        const isMultiVariant = variantsToAdd.length > 1 || (info.variants?.length > 0);
-        const slug = asin.toLowerCase();
+        const scheduler = require('./trackerScheduler');
 
         // Save each variant as a Product document
         const savedProducts = [];
         for (const v of variantsToAdd) {
-          const variantSlug = slug + (v.label ? '-' + v.label.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) : '');
           const product = new Product({
             url: v.url,
             title: info.title,
@@ -428,94 +409,18 @@ async function runProductDiscovery(io, slotsToFill) {
             history: [{ price: v.price }],
             isPrime: true,
             variant: v.label || info.variant || null,
-            groupId: asin, // group all variants under the base ASIN
+            groupId: asin,
             specs: info.specs || {},
             bullets: info.bullets || [],
           });
-          const scheduler = require('./trackerScheduler');
           scheduler.scheduleNew(product);
           await product.save();
-          savedProducts.push({ product, variantSlug, v });
+          savedProducts.push(product);
         }
 
-        // Upload images per variant to Cloudinary
-        const variantCloudinaryImages = [];
-        const variantCloudinaryFolders = [];
-        for (const { product, variantSlug, v } of savedProducts) {
-          const varImgs = [...new Set([v.image, ...(v.images || [])].filter(Boolean))].slice(0, 8);
-          if (!varImgs.length) { variantCloudinaryImages.push([]); variantCloudinaryFolders.push(null); continue; }
-          try {
-            const { data: uploadData } = await axios.post(`${BASE}/api/ebay/upload-images`, {
-              imageUrls: varImgs, slug: variantSlug,
-            }, { timeout: 60000 });
-            variantCloudinaryImages.push(uploadData.cloudinaryUrls || []);
-            variantCloudinaryFolders.push(`ebay-listings/${variantSlug}`);
-          } catch {
-            variantCloudinaryImages.push(varImgs);
-            variantCloudinaryFolders.push(null);
-          }
-        }
-
-        const allCloudinaryUrls = [...new Set(variantCloudinaryImages.flat())].slice(0, 12);
-
-        // Generate SEO title
-        let ebayTitle = info.title;
-        try {
-          const { data: titleData } = await axios.post(`${BASE}/api/ebay/seo-title`, {
-            title: info.title, specs: info.specs,
-          }, { timeout: 20000 });
-          if (titleData.title) ebayTitle = titleData.title;
-        } catch {}
-
-        // Generate HTML description
-        let description = null;
-        try {
-          const { data: descData } = await axios.post(`${BASE}/api/ebay/generate-description`, {
-            title: ebayTitle, specs: info.specs,
-            imageUrls: allCloudinaryUrls, bullets: info.bullets || [],
-            upc: info.upc, variant: info.variant,
-          }, { timeout: 30000 });
-          description = descData.html || null;
-        } catch {}
-
-        // Build listing payload
-        const listingPayload = {
-          title: ebayTitle,
-          price: calcEbayPrice(info.price, saleMode).toFixed(2),
-          imageUrls: allCloudinaryUrls,
-          upc: info.upc,
-          specs: info.specs || {},
-          bullets: info.bullets || [],
-          quantity: 1,
-          ...(description ? { description } : {}),
-        };
-
-        // Add variant array for multi-variation listings
-        if (isMultiVariant && variantsToAdd.length > 1) {
-          listingPayload.variantDimension = detectVariantDimension(variantsToAdd);
-          listingPayload.variants = variantsToAdd.map((v, i) => ({
-            label: v.label || `Variant ${i + 1}`,
-            price: calcEbayPrice(v.price, saleMode).toFixed(2),
-            quantity: 1,
-            images: variantCloudinaryImages[i] || [],
-            image: variantCloudinaryImages[i]?.[0] || null,
-          }));
-        }
-
-        // Create eBay listing
-        const { data: listData } = await axios.post(`${BASE}/api/ebay/trading-create-listing`,
-          listingPayload, { timeout: 60000 });
-
-        const ebayListingId = listData.listingId || listData.itemId;
+        // Full listing pipeline (images → title → description → eBay → photos)
+        const ebayListingId = await autoList(savedProducts, io);
         if (!ebayListingId) throw new Error('No listing ID returned');
-
-        // Save listing ID to all variant products
-        for (let i = 0; i < savedProducts.length; i++) {
-          await Product.findByIdAndUpdate(savedProducts[i].product._id, {
-            ebayListingId,
-            cloudinaryFolder: variantCloudinaryFolders[i] || null,
-          });
-        }
 
         const profit = calcProfit(info.price, saleMode);
         added.push({ asin, title: info.title, profit, ebayListingId, variantCount: variantsToAdd.length });

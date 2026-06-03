@@ -321,7 +321,7 @@ async function runAutoRestock() {
             const val = specs.match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase() || '';
             const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0';
             const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
-            const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+            const skuXml = `<SKU>${sku || (itemId + (val ? '-' + val.replace(/[^a-z0-9]/g, '') : '')).slice(0, 50)}</SKU>`;
             const qty = (val === soldValue) ? 1 : (parseInt(vBlock.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '1'));
             return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specs}</VariationSpecifics></Variation>`;
           }).join('');
