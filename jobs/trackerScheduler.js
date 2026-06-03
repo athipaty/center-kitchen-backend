@@ -68,8 +68,8 @@ async function checkProduct(p, saleMode = false) {
         await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
         // Restore qty if recovering from any non-active status
         if (previousStatus !== 'active') {
-          await syncEbayQty(p.ebayListingId, p.variant, 3);
-          console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 3 (was ${previousStatus})`);
+          await syncEbayQty(p.ebayListingId, p.variant, 1);
+          console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1 (was ${previousStatus})`);
         }
         console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" → $${info.price}`);
         if (io) io.emit('tracker:ebay:sync:ok', { productId: String(p._id) });
