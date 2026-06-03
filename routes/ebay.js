@@ -2141,7 +2141,7 @@ router.post('/listing/variation-photos', async (req, res) => {
   try {
     const token = await getAccessToken();
     const { listingId, variantDimension, variants } = req.body;
-    // variants: [{ label, image }]
+    // variants: [{ label, image, images }]
     if (!listingId || !variants?.length)
       return res.status(400).json({ error: 'listingId and variants required' });
 
@@ -2156,14 +2156,61 @@ router.post('/listing/variation-photos', async (req, res) => {
     };
     const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
+    // Step 1: Read the live listing so we use eBay's exact dimension name and label spellings.
+    // This is critical — if the name doesn't match (e.g. "Color" vs "Style") eBay silently
+    // ignores the photo update and keeps showing the wrong image for each variant.
+    let dimName = variantDimension || 'Color';
+    const ebayLabelMap = {}; // lowercase → exact stored label
+    try {
+      const { data: getXml } = await axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'GetItem' } }
+      );
+
+      const decodeXml = s => (s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+
+      // Prefer dimension stored in Pictures block (most reliable if photos were set before)
+      const picBlock = getXml.match(/<Pictures>([\s\S]*?)<\/Pictures>/)?.[1] || '';
+      const dimFromPic = picBlock.match(/<VariationSpecificName>([\s\S]*?)<\/VariationSpecificName>/)?.[1];
+      if (dimFromPic) {
+        dimName = decodeXml(dimFromPic);
+        console.log(`variation-photos: dimension from Pictures="${dimName}" (listing ${cleanId})`);
+      } else {
+        // Fall back: read from the first Variation's NameValueList
+        const firstVarBlock = getXml.match(/<Variation>([\s\S]*?)<\/Variation>/)?.[1] || '';
+        const dimFromVar = firstVarBlock.match(/<NameValueList>[\s\S]*?<Name>([\s\S]*?)<\/Name>/)?.[1];
+        if (dimFromVar) {
+          dimName = decodeXml(dimFromVar);
+          console.log(`variation-photos: dimension from Variation="${dimName}" (listing ${cleanId})`);
+        }
+      }
+
+      // Build lowercase → exact label map so variant labels round-trip correctly
+      const varRe2 = /<Variation>([\s\S]*?)<\/Variation>/g;
+      let vm2;
+      while ((vm2 = varRe2.exec(getXml)) !== null) {
+        const nvRe2 = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+        let nv2;
+        while ((nv2 = nvRe2.exec(vm2[1])) !== null) {
+          const raw = nv2[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+          const decoded = decodeXml(raw);
+          if (decoded) ebayLabelMap[decoded.toLowerCase()] = decoded;
+        }
+      }
+      console.log(`variation-photos: ${Object.keys(ebayLabelMap).length} eBay labels mapped`);
+    } catch (e) {
+      console.log('variation-photos: GetItem failed, using supplied dimension:', dimName, e.message);
+    }
+
     const withImages = variants.filter(v => v.images?.length || v.image);
     if (!withImages.length) return res.status(400).json({ error: 'No variant images provided' });
 
-    const dimName = variantDimension || 'Style';
     const pictureSets = withImages.map(v => {
       const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []);
+      // Use eBay's exact label spelling (preserves case eBay stored) or fall back to what was sent
+      const exactLabel = ebayLabelMap[(v.label || '').toLowerCase()] || v.label;
       return `<VariationSpecificPictureSet>
-        <VariationSpecificValue>${escXml(v.label)}</VariationSpecificValue>
+        <VariationSpecificValue>${escXml(exactLabel)}</VariationSpecificValue>
         ${imgs.map(img => `<PictureURL>${escXml(img)}</PictureURL>`).join('')}
       </VariationSpecificPictureSet>`;
     }).join('');
@@ -2193,8 +2240,8 @@ router.post('/listing/variation-photos', async (req, res) => {
       return res.status(400).json({ error: msg });
     }
 
-    console.log(`variation-photos: updated ${withImages.length} variants on listing ${cleanId}`);
-    res.json({ ok: true, updated: withImages.length });
+    console.log(`variation-photos: updated ${withImages.length} variants on listing ${cleanId} (dimension="${dimName}")`);
+    res.json({ ok: true, updated: withImages.length, dimension: dimName });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
