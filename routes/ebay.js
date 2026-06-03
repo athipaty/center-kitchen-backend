@@ -2328,7 +2328,8 @@ router.post('/listing/price', async (req, res) => {
         const thisPrice = isMatch ? priceStr : currentPrice;
         const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
         const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
-        const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+        const varVal = vBlock.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+        const skuXml = `<SKU>${sku || sanitizeSku(`${cleanId}-${varVal}`)}</SKU>`;
         return `<Variation>${skuXml}<StartPrice currencyID="USD">${thisPrice}</StartPrice><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
       }).join('');
 
@@ -2455,7 +2456,7 @@ router.post('/sale-mode', async (req, res) => {
             const cost = matched?.current || 0;
             const newPrice = cost > 0 ? calcPrice(cost) : null;
             if (!newPrice) return null;
-            const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+            const skuXml = `<SKU>${sku || sanitizeSku(`${cleanId}-${labelMatch}`)}</SKU>`;
             return `<Variation>${skuXml}<StartPrice currencyID="USD">${newPrice}</StartPrice><VariationSpecifics>${specifics}</VariationSpecifics></Variation>`;
           }).filter(Boolean).join('');
 
@@ -2547,7 +2548,8 @@ router.post('/bulk-set-quantity', async (req, res) => {
             const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
             const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0';
             const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
-            const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+            const varVal = vBlock.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+            const skuXml = `<SKU>${sku || sanitizeSku(`${itemId}-${varVal}`)}</SKU>`;
             return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
           }).join('');
           body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${itemId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
