@@ -3072,7 +3072,9 @@ router.get('/listing/:id/prices', async (req, res) => {
 // ── Get eBay listing view counts (batch — one Analytics API call for all IDs) ──
 const VIEW_METRICS = ['LISTING_VIEWS_TOTAL'];
 const viewsCache = new Map(); // listingId → { count, expiresAt }
-const VIEWS_TTL = 60 * 60 * 1000; // 1 hour cache
+const VIEWS_TTL = 6 * 60 * 60 * 1000; // 6 hour cache — Analytics API has tight rate limits
+let viewsLastFetch = 0;            // timestamp of last successful batch fetch
+const VIEWS_MIN_INTERVAL = 5 * 60 * 1000; // never hit Analytics more than once per 5 min
 
 // Batch endpoint: GET /api/ebay/listings/views?ids=id1,id2,id3
 // Returns { views: { id1: N, id2: N, ... } }
@@ -3099,31 +3101,40 @@ router.get('/listings/views', async (req, res) => {
   }
 
   if (uncached.length) {
-    try {
-      const token = await getAccessToken();
-      const { data } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
-        headers: { Authorization: `Bearer ${token}` },
-        params: {
-          dimension: 'LISTING',
-          metric: VIEW_METRICS.join(','),
-          filter: `listing_ids:{${uncached.join('|')}},date_range:[${fmt(start)}..${fmt(yesterday)}]`,
-        },
-      });
-      for (const record of (data.records || [])) {
-        const lid = String(record.dimensionValues?.[0]?.value || '');
-        if (!lid) continue;
-        const total = Number(record.metricValues?.[0]?.value ?? 0);
-        result[lid] = total;
-        viewsCache.set(lid, { count: total, expiresAt: Date.now() + VIEWS_TTL });
-      }
-      // IDs with no records get 0
-      for (const id of uncached) {
-        if (result[id] == null) result[id] = 0;
-      }
-    } catch (apiErr) {
-      console.error('[eBay views] Analytics API error:', apiErr.response?.data || apiErr.message);
+    const now2 = Date.now();
+    if (now2 - viewsLastFetch < VIEWS_MIN_INTERVAL) {
+      // Too soon — serve zeros for uncached IDs rather than hitting the rate limit
       for (const id of uncached) result[id] = 0;
-      return res.json({ views: result, _error: apiErr.response?.data || apiErr.message });
+    } else {
+      try {
+        const token = await getAccessToken();
+        const { data } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            dimension: 'LISTING',
+            metric: VIEW_METRICS.join(','),
+            filter: `listing_ids:{${uncached.join('|')}},date_range:[${fmt(start)}..${fmt(yesterday)}]`,
+          },
+        });
+        viewsLastFetch = Date.now();
+        for (const record of (data.records || [])) {
+          const lid = String(record.dimensionValues?.[0]?.value || '');
+          if (!lid) continue;
+          const total = Number(record.metricValues?.[0]?.value ?? 0);
+          result[lid] = total;
+          viewsCache.set(lid, { count: total, expiresAt: Date.now() + VIEWS_TTL });
+        }
+        for (const id of uncached) {
+          if (result[id] == null) result[id] = 0;
+        }
+      } catch (apiErr) {
+        const errData = apiErr.response?.data;
+        const isRateLimit = errData?.errors?.some?.(e => e.errorId === 2001);
+        if (!isRateLimit) console.error('[eBay views] Analytics API error:', errData || apiErr.message);
+        viewsLastFetch = Date.now(); // back off even on rate limit
+        for (const id of uncached) result[id] = 0;
+        return res.json({ views: result });
+      }
     }
   }
 

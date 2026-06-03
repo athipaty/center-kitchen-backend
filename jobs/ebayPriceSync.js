@@ -85,7 +85,7 @@ async function syncEbayQty(listingId, variantLabel, qty) {
   const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
   if (varBlocks.length === 0) return; // single listing — qty not applicable here
 
-  const label = (variantLabel || '').toLowerCase();
+  const label = (variantLabel && variantLabel !== 'null') ? variantLabel.toLowerCase() : '';
   const variationXml = varBlocks.map(block => {
     const currentPriceM = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
     const currentPrice = currentPriceM ? parseFloat(currentPriceM[1]).toFixed(2) : '0.00';
@@ -93,12 +93,14 @@ async function syncEbayQty(listingId, variantLabel, qty) {
     const currentQty   = currentQtyM ? currentQtyM[1] : '1';
 
     const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
-    const isMatch = label ? labelMatch(valueMatch?.[1] || '', label) : false;
+    const varVal = valueMatch?.[1] || '';
+    // No label = update all variations; with label = match only the target variant
+    const isMatch = !label || labelMatch(varVal, label);
 
     const thisQty = isMatch ? String(qty) : currentQty;
     const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
     const sku = block.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
-    const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+    const skuXml = `<SKU>${sku || (cleanId + (varVal ? '-' + varVal.replace(/[^a-z0-9]/gi,'').slice(0,20) : '')).slice(0,50)}</SKU>`;
     return `<Variation>${skuXml}<StartPrice currencyID="USD">${currentPrice}</StartPrice><Quantity>${thisQty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
   }).join('');
 
