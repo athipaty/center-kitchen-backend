@@ -20,6 +20,22 @@ function calcEbayPrice(cost, saleMode = false) {
   return Math.floor(Math.max(c * m, (c + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE))) + 0.99;
 }
 
+// Returns the two ambiguous labels if any variant label is a substring of another.
+// e.g. "Yellow" inside "2pcs Yellow" → they clash on eBay because eBay normalises
+// the longer label to match the shorter one during reprice, causing wrong prices.
+function ambiguousVariantLabels(products) {
+  if (products.length < 2) return null;
+  const labels = products.map(p => (p.variant || '').toLowerCase().trim()).filter(Boolean);
+  for (let i = 0; i < labels.length; i++) {
+    for (let j = 0; j < labels.length; j++) {
+      if (i !== j && labels[j].includes(labels[i])) {
+        return { subset: labels[i], superset: labels[j] };
+      }
+    }
+  }
+  return null;
+}
+
 function detectVariantDimension(variants) {
   if (variants.some(v => (v.variant || v.label || '').match(/\d+["'\s]*(inch|in\b|cm\b|mm\b|oz\b|lb\b|ft\b)/i))) return 'Size';
   if (variants.some(v => (v.variant || v.label || '').match(/\b(red|blue|green|black|white|gray|grey|pink|purple|yellow|orange|brown|natural|carbonized|silver|gold|beige|navy|teal)\b/i))) return 'Color';
@@ -48,6 +64,18 @@ async function autoList(products, io) {
   console.log(`auto-list: starting for "${primary.title?.slice(0, 60)}" (${products.length} variant(s))`);
 
   try {
+    // ── 0. Guard: reject listings where variant labels overlap (e.g. "Yellow" ⊂ "2pcs Yellow")
+    //    These cause eBay reprice to match the wrong variant, giving wrong prices permanently.
+    if (isMultiVariant) {
+      const clash = ambiguousVariantLabels(products);
+      if (clash) {
+        const msg = `Ambiguous variant labels: "${clash.subset}" is contained in "${clash.superset}" — eBay cannot reprice these reliably. Remove one variant or rename both so neither label contains the other.`;
+        console.warn(`auto-list blocked: ${msg}`);
+        emit('tracker:auto-list:error', { error: msg });
+        return null;
+      }
+    }
+
     // ── 1. Upload images per variant (reuses saved images — no re-scrape) ──
     emit('tracker:auto-list:step', { step: 'images' });
     const variantCloudinaryImages = [];
