@@ -338,9 +338,10 @@ router.get("/profit-summary", async (req, res) => {
       'title ebayListingId current status variant'
     ).lean();
 
-    // 2% margin formula — mirrors src/utils/pricing.js
+    // 2% margin formula — mirrors src/utils/pricing.js (includes 8.5% Amazon tax)
     function calcEbayPrice(ap) {
-      return Math.floor((ap + 0.30) / (1 - 0.1325 - 0.05 - 0.02)) + 0.99;
+      const c = ap * 1.085;
+      return Math.floor((c + 0.30) / (1 - 0.1325 - 0.05 - 0.02)) + 0.99;
     }
     function calcFee(ep) { return +(ep * 0.1325 + 0.30).toFixed(2); }
 

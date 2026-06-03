@@ -2397,14 +2397,16 @@ router.post('/sale-mode', async (req, res) => {
     const PROMO     = 0.05;
     const MARGIN    = 0.02;
     const MIN_PROFIT = 4.50;
+    const AMAZON_TAX = 0.085;
     // Sale mode ON  → flat 2% margin formula
     // Sale mode OFF → tiered multiplier (same as normal mode pricing.js)
     const calcPrice = active
-      ? cost => (Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)) + 0.99).toFixed(2)
+      ? cost => { const c = cost * (1 + AMAZON_TAX); return (Math.floor((c + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)) + 0.99).toFixed(2); }
       : cost => {
-          let m = cost < 10 ? 2.2 : cost < 20 ? 1.7 : cost < 35 ? 1.55 : cost < 60 ? 1.45 : 1.35;
-          const tiered = cost * m;
-          const floor  = (cost + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
+          const c = cost * (1 + AMAZON_TAX);
+          let m = c < 10 ? 2.2 : c < 20 ? 1.7 : c < 35 ? 1.55 : c < 60 ? 1.45 : 1.35;
+          const tiered = c * m;
+          const floor  = (c + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
           return (Math.floor(Math.max(tiered, floor)) + 0.99).toFixed(2);
         };
 

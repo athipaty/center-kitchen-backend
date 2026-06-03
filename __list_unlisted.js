@@ -6,12 +6,14 @@ const BASE = `http://localhost:${process.env.PORT || 5000}`;
 const EBAY_FEE  = 0.1325;
 const FIXED_FEE = 0.30;
 const MIN_PROFIT = 4.50;
+const AMAZON_TAX = 0.085;
 
 function calcEbayPrice(cost, saleMode) {
-  if (saleMode) return Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - 0.05 - 0.02)) + 0.99;
-  const m = cost < 10 ? 2.2 : cost < 20 ? 1.7 : cost < 35 ? 1.55 : cost < 60 ? 1.45 : 1.35;
-  const floor = (cost + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
-  return Math.floor(Math.max(cost * m, floor)) + 0.99;
+  const c = cost * (1 + AMAZON_TAX);
+  if (saleMode) return Math.floor((c + FIXED_FEE) / (1 - EBAY_FEE - 0.05 - 0.02)) + 0.99;
+  const m = c < 10 ? 2.2 : c < 20 ? 1.7 : c < 35 ? 1.55 : c < 60 ? 1.45 : 1.35;
+  const floor = (c + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
+  return Math.floor(Math.max(c * m, floor)) + 0.99;
 }
 
 mongoose.connect(process.env.MONGO_URI).then(async () => {

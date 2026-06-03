@@ -11,12 +11,13 @@ const TrackerSettings = require('../models/tracker/TrackerSettings');
 
 const BASE = `http://localhost:${process.env.PORT || 5000}`;
 
-const EBAY_FEE = 0.1325, FIXED_FEE = 0.30, PROMO = 0.05, MIN_PROFIT = 4.50;
+const EBAY_FEE = 0.1325, FIXED_FEE = 0.30, PROMO = 0.05, MIN_PROFIT = 4.50, AMAZON_TAX = 0.085;
 
 function calcEbayPrice(cost, saleMode = false) {
-  if (saleMode) return Math.floor((cost + FIXED_FEE) / (1 - EBAY_FEE - PROMO - 0.02)) + 0.99;
-  const m = cost < 10 ? 2.2 : cost < 20 ? 1.7 : cost < 35 ? 1.55 : cost < 60 ? 1.45 : 1.35;
-  return Math.floor(Math.max(cost * m, (cost + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE))) + 0.99;
+  const c = cost * (1 + AMAZON_TAX);
+  if (saleMode) return Math.floor((c + FIXED_FEE) / (1 - EBAY_FEE - PROMO - 0.02)) + 0.99;
+  const m = c < 10 ? 2.2 : c < 20 ? 1.7 : c < 35 ? 1.55 : c < 60 ? 1.45 : 1.35;
+  return Math.floor(Math.max(c * m, (c + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE))) + 0.99;
 }
 
 function detectVariantDimension(variants) {
