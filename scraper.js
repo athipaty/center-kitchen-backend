@@ -133,8 +133,9 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
         : data.currency === "THB" ? "฿"
         : "$";
 
-      const image = data.images?.[0] || data.main_image || null;
-      const images = Array.isArray(data.images) && data.images.length ? data.images : (image ? [image] : []);
+      const image = data.main_image || data.images?.[0] || null;
+      const rawImages = Array.isArray(data.images) && data.images.length ? data.images : [];
+      const images = [...new Set([image, ...rawImages].filter(Boolean))];
 
       const upc = data.upc
         || data.product_information?.upc

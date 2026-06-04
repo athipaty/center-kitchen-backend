@@ -196,8 +196,9 @@ router.post("/:id/refresh-images", async (req, res) => {
     }
 
     if (images.length) {
-      await Product.findByIdAndUpdate(product._id, { images });
+      await Product.findByIdAndUpdate(product._id, { images, image: images[0] });
       product.images = images;
+      product.image = images[0];
     }
 
     res.json({ ok: true, count: images.length, images });
