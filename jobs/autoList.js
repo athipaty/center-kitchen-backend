@@ -175,6 +175,44 @@ async function autoList(products, io) {
       }
     }
 
+    // ── 7. Verify live eBay prices match calculated prices ────────────
+    try {
+      await new Promise(r => setTimeout(r, 3000)); // wait for eBay to index
+      const { data: livePrices } = await axios.get(`${BASE}/api/ebay/listing/${ebayListingId}/prices`, { timeout: 15000 });
+      const mismatches = products.filter(p => {
+        const expected = calcEbayPrice(p.current, saleMode);
+        if (livePrices.variations?.length) {
+          const label = (p.variant || '').toLowerCase();
+          const live = livePrices.variations.find(v =>
+            Object.values(v.specs).some(val => val === label || label.includes(val) || val.includes(label))
+          );
+          return live && Math.abs(live.price - expected) >= 0.02;
+        }
+        return livePrices.base && Math.abs(livePrices.base - expected) >= 0.02;
+      });
+
+      if (mismatches.length) {
+        console.warn(`auto-list: ${mismatches.length} price mismatch(es) on ${ebayListingId} — auto-fixing`);
+        for (const p of mismatches) {
+          const expected = calcEbayPrice(p.current, saleMode);
+          try {
+            await axios.post(`${BASE}/api/ebay/listing/price`, {
+              listingId: ebayListingId,
+              price: expected,
+              variantLabel: p.variant || '',
+            }, { timeout: 15000 });
+            console.log(`auto-list: fixed price for variant "${p.variant}" → $${expected.toFixed(2)}`);
+          } catch (e) {
+            console.warn(`auto-list: price fix failed for variant "${p.variant}":`, e.message);
+          }
+        }
+      } else {
+        console.log(`auto-list: prices verified ✓ ${ebayListingId} (${products.length} variant(s))`);
+      }
+    } catch (e) {
+      console.warn(`auto-list: price verification skipped for ${ebayListingId}:`, e.message);
+    }
+
     emit('tracker:auto-list:done', { ebayListingId, title: ebayTitle });
     console.log(`auto-list: ✓ ${ebayListingId} "${ebayTitle.slice(0, 60)}" (${products.length} variant(s))`);
     return ebayListingId;

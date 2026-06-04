@@ -368,9 +368,7 @@ async function runProductDiscovery(io, slotsToFill) {
     qualified.sort((a, b) => b.baseProfit - a.baseProfit);
 
     // ── 4. Fill slots — each variant = 1 slot, cap + trim per product ────────
-    // Cap at 3 variants per product to spread slots across more products
-    // (2 listings in different niches = 2x search visibility vs 6 variants of 1 listing)
-    const MAX_VARIANTS_PER_PRODUCT = 3;
+    const MAX_VARIANTS_PER_PRODUCT = 6;
     const toProcess = [];
     let slotsRemaining = slotsToFill;
 
