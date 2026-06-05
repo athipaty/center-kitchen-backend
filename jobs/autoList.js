@@ -83,7 +83,7 @@ async function autoList(products, io) {
     for (const p of products) {
       const varImgs = [...new Set([p.image, ...(p.images || [])].filter(Boolean))].slice(0, 8);
       if (!varImgs.length) { variantCloudinaryImages.push([]); variantCloudinaryFolders.push(null); continue; }
-      const varSlug = slug + (p.variant ? '-' + p.variant.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) : '');
+      const varSlug = slug + (p.variant ? '-' + p.variant.toLowerCase().replace(/[^a-z0-9]/g, '') : '');
       try {
         const { data } = await axios.post(`${BASE}/api/ebay/upload-images`,
           { imageUrls: varImgs, slug: varSlug }, { timeout: 60000 });
