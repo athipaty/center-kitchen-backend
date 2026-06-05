@@ -2085,34 +2085,9 @@ router.get('/orphan-listings', async (req, res) => {
 
 router.delete('/orphan-listings', async (req, res) => {
   try {
-    const token = await getAccessToken();
-    const orphans = await getOrphanListings();
-    const tradingHeaders = {
-      'X-EBAY-API-SITEID': '0',
-      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-      'X-EBAY-API-IAF-TOKEN': token,
-      'Content-Type': 'text/xml',
-    };
-    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
-    let ended = 0;
-    const errors = [];
-    for (const item of orphans) {
-      const cleanId = String(item.listingId).replace(/\D/g, '');
-      const body = `<?xml version="1.0" encoding="utf-8"?><EndFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID><EndingReason>NotAvailable</EndingReason></EndFixedPriceItemRequest>`;
-      try {
-        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body,
-          { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'EndFixedPriceItem' } });
-        if (/<Ack>Failure<\/Ack>/.test(xml)) {
-          const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
-          errors.push({ listingId: item.listingId, error: msg });
-        } else {
-          ended++;
-        }
-      } catch (e) {
-        errors.push({ listingId: item.listingId, error: e.message });
-      }
-    }
-    res.json({ ended, errors, total: orphans.length });
+    // Delegate to the scheduler's shared function — also emits tracker:orphan:cleanup socket event
+    await require('../jobs/trackerScheduler').orphanCleanup();
+    res.json({ ok: true });
   } catch (err) {
     if (err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
     console.error('end-orphan-listings error:', err.message);

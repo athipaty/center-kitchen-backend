@@ -183,6 +183,64 @@ async function runWeeklyOptimize() {
   }
 }
 
+// Orphan cleanup: end any active eBay listings not linked to a tracker product
+async function runOrphanCleanup() {
+  try {
+    const { getAccessToken } = require('./ebayPriceSync');
+    const token = await getAccessToken();
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+
+    // Fetch ALL active eBay listings — paginate until no more
+    const allEbayIds = [];
+    for (let page = 1; page <= 10; page++) {
+      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
+      const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling' } });
+      if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
+      const ids = [...xmlResp.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1]);
+      allEbayIds.push(...ids);
+      if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
+    }
+
+    if (!allEbayIds.length) return;
+
+    // Get all tracked listing IDs from DB
+    const tracked = await Product.distinct('ebayListingId', { ebayListingId: { $exists: true, $ne: null } });
+    const trackedSet = new Set(tracked.map(String));
+
+    const orphanIds = [...new Set(allEbayIds)].filter(id => !trackedSet.has(id));
+    if (!orphanIds.length) {
+      console.log('orphan-cleanup: no orphans found');
+      return;
+    }
+
+    console.log(`orphan-cleanup: found ${orphanIds.length} orphan listing(s) → ending`);
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    let ended = 0;
+    for (const id of orphanIds) {
+      try {
+        const body = `<?xml version="1.0" encoding="utf-8"?><EndFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${id}</ItemID><EndingReason>NotAvailable</EndingReason></EndFixedPriceItemRequest>`;
+        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'EndFixedPriceItem' } });
+        if (!/<Ack>Failure<\/Ack>/.test(xml)) {
+          ended++;
+          console.log(`orphan-cleanup: ended orphan listing ${id}`);
+        }
+      } catch (e) {
+        console.error(`orphan-cleanup: failed to end ${id}:`, e.message);
+      }
+    }
+
+    if (io) io.emit('tracker:orphan:cleanup', { found: orphanIds.length, ended });
+    console.log(`orphan-cleanup: done — ended ${ended}/${orphanIds.length}`);
+  } catch (e) {
+    console.error('orphan-cleanup: error:', e.message);
+  }
+}
+
 // Auto-end listings 4+ days old with 0 eBay views, then fill freed slots with new discoveries
 async function runAutoEndZeroViews() {
   let slotsFreed = 0;
@@ -355,6 +413,10 @@ function start(socketIo) {
   cron.schedule("0 2 * * *", runAutoEndZeroViews);
   // Auto-restock sold listings back to qty 1 — runs every 15 minutes
   cron.schedule("*/15 * * * *", runAutoRestock);
+  // Orphan cleanup every 6 hours — ends any active eBay listings not in the tracker
+  cron.schedule("0 */6 * * *", runOrphanCleanup);
+  // Also run once shortly after startup to catch anything from the last session
+  setTimeout(runOrphanCleanup, 30 * 1000);
 }
 
 // Called when user clicks "Check Now" for a specific product or all products
@@ -395,4 +457,4 @@ function getNextCheck() {
   return null; // now per-product, not global
 }
 
-module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors, autoEndZeroViews: runAutoEndZeroViews, autoRestock: runAutoRestock };
+module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors, autoEndZeroViews: runAutoEndZeroViews, autoRestock: runAutoRestock, orphanCleanup: runOrphanCleanup };
