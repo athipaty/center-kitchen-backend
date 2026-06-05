@@ -209,7 +209,8 @@ async function fetchEbayViews(listingIds, token) {
 
 // slotsToFill comes directly from the delete job — no selling-limits API call needed.
 // Each variant counts as 1 slot. Multi-variant products are trimmed to fit remaining slots.
-async function runProductDiscovery(io, slotsToFill) {
+// opts.maxVariantsPerProduct caps how many variants one product can consume (default 6).
+async function runProductDiscovery(io, slotsToFill, opts = {}) {
   if (!slotsToFill || slotsToFill <= 0) {
     console.log('productDiscovery: 0 slots freed, skipping');
     return;
@@ -368,7 +369,7 @@ async function runProductDiscovery(io, slotsToFill) {
     qualified.sort((a, b) => b.baseProfit - a.baseProfit);
 
     // ── 4. Fill slots — each variant = 1 slot, cap + trim per product ────────
-    const MAX_VARIANTS_PER_PRODUCT = 6;
+    const MAX_VARIANTS_PER_PRODUCT = opts.maxVariantsPerProduct ?? 6;
     const toProcess = [];
     let slotsRemaining = slotsToFill;
 

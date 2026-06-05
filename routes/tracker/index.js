@@ -48,9 +48,11 @@ router.post("/discover", async (req, res) => {
       slots = Math.max(0, (limits.items?.remaining || 0) - 1);
     }
     if (!slots || slots <= 0) return res.status(400).json({ error: 'No available slots' });
-    res.json({ started: true, slots });
+    const opts = {};
+    if (req.body?.maxVariantsPerProduct) opts.maxVariantsPerProduct = Number(req.body.maxVariantsPerProduct);
+    res.json({ started: true, slots, opts });
     const io = req.app.get('io') || null;
-    runProductDiscovery(io, slots).catch(e => console.error('discovery trigger error:', e.message));
+    runProductDiscovery(io, slots, opts).catch(e => console.error('discovery trigger error:', e.message));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
