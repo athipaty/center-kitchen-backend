@@ -2034,6 +2034,92 @@ router.get('/all-active-listings', async (req, res) => {
   }
 });
 
+// ── Orphan listings: active on eBay but not linked in the tracker ──
+async function getOrphanListings() {
+  const Product = require('../models/tracker/Product');
+  const token = await getAccessToken();
+
+  // Fetch all active eBay listings (paginated, up to 200)
+  const allEbayItems = [];
+  for (let page = 1; page <= 2; page++) {
+    const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
+    const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
+      headers: {
+        'X-EBAY-API-SITEID': '0',
+        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+        'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling',
+        'X-EBAY-API-IAF-TOKEN': token,
+        'Content-Type': 'text/xml',
+      },
+    });
+    if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
+    const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
+    let m;
+    while ((m = itemRe.exec(xmlResp)) !== null) {
+      const block = m[1];
+      const get = tag => { const tm = block.match(new RegExp(`<${tag}[^>]*>([^<]+)<\/${tag}>`)); return tm ? tm[1].trim() : null; };
+      const listingId = get('ItemID');
+      if (listingId) allEbayItems.push({ listingId, title: get('Title') || listingId });
+    }
+    if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
+  }
+
+  // Get all tracked listing IDs from DB
+  const tracked = await Product.distinct('ebayListingId', { ebayListingId: { $exists: true, $ne: null } });
+  const trackedSet = new Set(tracked.map(String));
+
+  // Orphans = active on eBay but not linked to any tracker product
+  return allEbayItems.filter(item => !trackedSet.has(String(item.listingId)));
+}
+
+router.get('/orphan-listings', async (req, res) => {
+  try {
+    const orphans = await getOrphanListings();
+    res.json({ count: orphans.length, orphans });
+  } catch (err) {
+    if (err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
+    console.error('orphan-listings error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/orphan-listings', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const orphans = await getOrphanListings();
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    let ended = 0;
+    const errors = [];
+    for (const item of orphans) {
+      const cleanId = String(item.listingId).replace(/\D/g, '');
+      const body = `<?xml version="1.0" encoding="utf-8"?><EndFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID><EndingReason>NotAvailable</EndingReason></EndFixedPriceItemRequest>`;
+      try {
+        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body,
+          { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'EndFixedPriceItem' } });
+        if (/<Ack>Failure<\/Ack>/.test(xml)) {
+          const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+          errors.push({ listingId: item.listingId, error: msg });
+        } else {
+          ended++;
+        }
+      } catch (e) {
+        errors.push({ listingId: item.listingId, error: e.message });
+      }
+    }
+    res.json({ ended, errors, total: orphans.length });
+  } catch (err) {
+    if (err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
+    console.error('end-orphan-listings error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Update price — Inventory API offer ────────────────────────────
 router.patch('/offer/:offerId/price', async (req, res) => {
   try {

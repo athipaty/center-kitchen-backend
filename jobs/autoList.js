@@ -239,7 +239,7 @@ function scheduleGroupAutoList(groupId, io) {
       // Refresh frontend so eBay listing IDs appear on cards
       if (io) io.emit('tracker:check:done', { time: new Date().toISOString(), results: [] });
     } catch {}
-  }, 6000); // 6s — enough for frontend's 400ms inter-variant delay × up to ~10 variants
+  }, 180000); // 180s — ScraperAPI takes ~15s per variant; 6 variants = ~90s, 180s gives safe headroom
 }
 
 module.exports = { autoList, scheduleGroupAutoList, calcEbayPrice, detectVariantDimension };
