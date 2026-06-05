@@ -148,7 +148,22 @@ async function autoList(products, io) {
       } : {}),
     };
 
-    const { data: listData } = await axios.post(`${BASE}/api/ebay/trading-create-listing`, payload, { timeout: 60000 });
+    let listData;
+    try {
+      ({ data: listData } = await axios.post(`${BASE}/api/ebay/trading-create-listing`, payload, { timeout: 60000 }));
+    } catch (axErr) {
+      if (axErr.response?.status === 429 || axErr.response?.data?.error === 'selling_limit_reached') {
+        const limitErr = new Error('eBay selling limit reached — listing blocked by velocity check');
+        limitErr.code = 'SELLING_LIMIT';
+        throw limitErr;
+      }
+      throw axErr;
+    }
+    if (listData?.error === 'selling_limit_reached') {
+      const limitErr = new Error('eBay selling limit reached — listing blocked by velocity check');
+      limitErr.code = 'SELLING_LIMIT';
+      throw limitErr;
+    }
     const ebayListingId = listData.listingId || listData.itemId;
     if (!ebayListingId) throw new Error('No listing ID returned from eBay');
 

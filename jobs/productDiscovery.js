@@ -228,6 +228,32 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
     const settings = await TrackerSettings.findById('tracker').lean().catch(() => null);
     const saleMode = settings?.saleModeActive ?? false;
 
+    // ── 0. Retry any products already in tracker but not yet listed ───────
+    // These are left over from a previous run that hit the selling limit.
+    const { autoList } = require('./autoList');
+    const pending = await Product.find({ ebayListingId: null, isPrime: true, groupId: { $exists: true } }).lean();
+    if (pending.length) {
+      const pendingGroups = {};
+      for (const p of pending) {
+        if (!pendingGroups[p.groupId]) pendingGroups[p.groupId] = [];
+        pendingGroups[p.groupId].push(p);
+      }
+      console.log(`productDiscovery: retrying ${Object.keys(pendingGroups).length} pending group(s) from previous run`);
+      for (const [gid, variants] of Object.entries(pendingGroups)) {
+        try {
+          const docs = await Product.find({ groupId: gid, ebayListingId: null });
+          if (docs.length) await autoList(docs, io);
+          await new Promise(r => setTimeout(r, 2000));
+        } catch (e) {
+          if (e.code === 'SELLING_LIMIT') {
+            console.warn('productDiscovery: selling limit hit during pending retry — stopping');
+            return;
+          }
+          console.error(`productDiscovery: pending retry failed for group ${gid}:`, e.message);
+        }
+      }
+    }
+
     // ── 1. Get top-viewed listings ────────────────────────────────────────
     const { getAccessToken } = require('./ebayPriceSync');
     const token = await getAccessToken();
@@ -428,6 +454,10 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
 
         await new Promise(r => setTimeout(r, 2000));
       } catch (e) {
+        if (e.code === 'SELLING_LIMIT') {
+          console.warn(`productDiscovery: selling limit hit on ${asin} — products saved to tracker, will retry next run`);
+          break; // stop adding — remaining products stay in tracker as pending, retried next discovery
+        }
         const detail = e.response?.data?.error || e.response?.data || e.message || String(e);
         console.error(`productDiscovery: failed to add ${asin}:`, detail);
       }
