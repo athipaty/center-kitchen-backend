@@ -119,7 +119,7 @@ async function autoList(products, io) {
         bullets: primary.bullets || [],
         upc: primary.upc,
         variant: primary.variant,
-      }, { timeout: 30000 });
+      }, { timeout: 60000 });
       description = data.html || null;
     } catch {}
 
@@ -153,7 +153,7 @@ async function autoList(products, io) {
 
     let listData;
     try {
-      ({ data: listData } = await axios.post(`${BASE}/api/ebay/trading-create-listing`, payload, { timeout: 60000 }));
+      ({ data: listData } = await axios.post(`${BASE}/api/ebay/trading-create-listing`, payload, { timeout: 180000 }));
     } catch (axErr) {
       if (axErr.response?.status === 429 || axErr.response?.data?.error === 'selling_limit_reached') {
         const limitErr = new Error('eBay selling limit reached — listing blocked by velocity check');
