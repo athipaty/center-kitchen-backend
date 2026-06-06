@@ -169,6 +169,36 @@ router.patch("/:id/ebay", async (req, res) => {
   }
 });
 
+// POST end the existing eBay listing for a group and relist it with current settings
+router.post("/relist-group", async (req, res) => {
+  try {
+    const { groupId } = req.body;
+    if (!groupId) return res.status(400).json({ error: "groupId is required" });
+
+    const products = await Product.find({ groupId });
+    if (!products.length) return res.status(404).json({ error: "No products found for this groupId" });
+
+    // End the existing eBay listing if any
+    const existingListingId = products.find(p => p.ebayListingId)?.ebayListingId;
+    if (existingListingId) {
+      const PORT = process.env.PORT || 5000;
+      await axios.delete(`http://localhost:${PORT}/api/ebay/listing/${existingListingId}`).catch(e => {
+        console.warn(`relist-group: failed to end listing ${existingListingId}:`, e.message);
+      });
+      await Product.updateMany({ groupId }, { $set: { ebayListingId: null } });
+      console.log(`relist-group: ended listing ${existingListingId} and cleared IDs for group ${groupId}`);
+    }
+
+    const io = req.app.get('io');
+    const { scheduleGroupAutoList } = require('../../jobs/autoList');
+    scheduleGroupAutoList(groupId, io);
+
+    res.json({ ok: true, groupId, clearedListingId: existingListingId || null, status: 'auto-list scheduled' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST re-fetch all hi-res images for a product directly from Amazon page
 // Uses a lightweight regex extraction (no ScraperAPI needed) and updates the DB
 router.post("/:id/refresh-images", async (req, res) => {

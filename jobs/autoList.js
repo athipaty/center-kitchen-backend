@@ -37,8 +37,11 @@ function ambiguousVariantLabels(products) {
 }
 
 function detectVariantDimension(variants) {
-  if (variants.some(v => (v.variant || v.label || '').match(/\d+["'\s]*(inch|in\b|cm\b|mm\b|oz\b|lb\b|ft\b)/i))) return 'Size';
-  if (variants.some(v => (v.variant || v.label || '').match(/\b(red|blue|green|black|white|gray|grey|pink|purple|yellow|orange|brown|natural|carbonized|silver|gold|beige|navy|teal)\b/i))) return 'Color';
+  const labels = variants.map(v => v.variant || v.label || '');
+  if (labels.some(l => /\d+["'\s]*(inch|in\b|cm\b|mm\b|oz\b|lb\b|ft\b)/i.test(l))) return 'Size';
+  // Compound labels (contain / + or start with digit) are Style, not Color
+  if (labels.some(l => /[\/+]/.test(l) || /^\d/.test(l))) return 'Style';
+  if (labels.some(l => /\b(red|blue|green|black|white|gray|grey|pink|purple|yellow|orange|brown|natural|carbonized|silver|gold|beige|navy|teal|turquoise|coral|rose|lavender|mint|charcoal|walnut|bamboo|oak|mahogany|cherry|maple|ebony)\b/i.test(l))) return 'Color';
   return 'Style';
 }
 
