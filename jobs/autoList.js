@@ -23,14 +23,19 @@ function calcEbayPrice(cost, saleMode = false) {
 // Returns the two ambiguous labels if any variant label is a substring of another.
 // e.g. "Yellow" inside "2pcs Yellow" → they clash on eBay because eBay normalises
 // the longer label to match the shorter one during reprice, causing wrong prices.
+// Compound labels joined by , / + (e.g. "blue,green") are intentionally distinct
+// from their components and are excluded from this check.
 function ambiguousVariantLabels(products) {
   if (products.length < 2) return null;
   const labels = products.map(p => (p.variant || '').toLowerCase().trim()).filter(Boolean);
   for (let i = 0; i < labels.length; i++) {
     for (let j = 0; j < labels.length; j++) {
-      if (i !== j && labels[j].includes(labels[i])) {
-        return { subset: labels[i], superset: labels[j] };
-      }
+      if (i === j) continue;
+      if (!labels[j].includes(labels[i])) continue;
+      // Compound supersets (joined by , / +) are clearly distinct from their
+      // components on eBay — "blue,green" won't be confused with "blue".
+      if (/[,/+]/.test(labels[j])) continue;
+      return { subset: labels[i], superset: labels[j] };
     }
   }
   return null;
