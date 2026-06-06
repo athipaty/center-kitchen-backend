@@ -6,6 +6,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const EbayToken = require('../models/shared/EbayToken');
 
 const Product = require('../models/tracker/Product');
+const { bestVariantMatch, calcEbayPrice } = require('../jobs/ebayPriceSync');
 
 let _io = null;
 function setIo(socketIo) { _io = socketIo; }
@@ -2453,23 +2454,6 @@ router.post('/sale-mode', async (req, res) => {
     const TrackerSettings = require('../models/tracker/TrackerSettings');
     const active = req.body?.active !== false; // default true; pass active:false to turn off
     await TrackerSettings.findByIdAndUpdate('tracker', { saleModeActive: active }, { upsert: true });
-    const EBAY_FEE  = 0.1325;
-    const FIXED_FEE = 0.30;
-    const PROMO     = 0.05;
-    const MARGIN    = 0.02;
-    const MIN_PROFIT = 4.50;
-    const AMAZON_TAX = 0.085;
-    // Sale mode ON  → flat 2% margin formula
-    // Sale mode OFF → tiered multiplier (same as normal mode pricing.js)
-    const calcPrice = active
-      ? cost => { const c = cost * (1 + AMAZON_TAX); return (Math.floor((c + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)) + 0.99).toFixed(2); }
-      : cost => {
-          const c = cost * (1 + AMAZON_TAX);
-          let m = c < 10 ? 2.2 : c < 20 ? 1.7 : c < 35 ? 1.55 : c < 60 ? 1.45 : 1.35;
-          const tiered = c * m;
-          const floor  = (c + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
-          return (Math.floor(Math.max(tiered, floor)) + 0.99).toFixed(2);
-        };
 
     const products = await Product.find({ ebayListingId: { $ne: null } });
 
@@ -2510,16 +2494,15 @@ router.post('/sale-mode', async (req, res) => {
 
         if (varBlocks.length) {
           // Multi-variation: match each variant's cost by label
-          const { bestVariantMatch } = require('../jobs/ebayPriceSync');
           const variationXml = varBlocks.map(vBlock => {
             const specifics = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
             const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
             const ebayVal = specifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
             const matched = bestVariantMatch(variants, ebayVal);
             const cost = matched?.current || 0;
-            const newPrice = cost > 0 ? calcPrice(cost) : null;
-            if (!newPrice) return null;
-            const skuXml = `<SKU>${sku || sanitizeSku(`${cleanId}-${labelMatch}`)}</SKU>`;
+            if (!cost) return null;
+            const newPrice = calcEbayPrice(cost, active).toFixed(2);
+            const skuXml = `<SKU>${sku || sanitizeSku(`${cleanId}-${ebayVal}`)}</SKU>`;
             return `<Variation>${skuXml}<StartPrice currencyID="USD">${newPrice}</StartPrice><VariationSpecifics>${specifics}</VariationSpecifics></Variation>`;
           }).filter(Boolean).join('');
 
@@ -2531,7 +2514,7 @@ router.post('/sale-mode', async (req, res) => {
           // Single listing
           const cost = variants[0]?.current || 0;
           if (!cost) { results.skipped++; continue; }
-          const newPrice = calcPrice(cost);
+          const newPrice = calcEbayPrice(cost, active).toFixed(2);
           const body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${newPrice}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`;
           const { data: xml } = await tradingPost('ReviseInventoryStatus', body);
           if (/<Ack>Failure<\/Ack>/.test(xml)) { results.failed++; } else { results.done++; }
