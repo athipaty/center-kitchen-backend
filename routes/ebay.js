@@ -2925,9 +2925,46 @@ router.post('/trading-create-listing', async (req, res) => {
       }
     };
 
+    // Helper to rebuild varSpecsXml with a different dimension name (used for 21920061 fallback)
+    function rebuildVarSpecsXml(dim) {
+      if (!variants?.length) return '';
+      const varXml = variants.map(v => {
+        const varPrice = v.price || price;
+        return `<Variation>
+          <StartPrice currencyID="USD">${Number(varPrice).toFixed(2)}</StartPrice>
+          <Quantity>${Number(v.quantity) || 1}</Quantity>
+          <VariationSpecifics>
+            <NameValueList><Name>${escXml(dim)}</Name><Value>${escXml(v.label)}</Value></NameValueList>
+          </VariationSpecifics>
+        </Variation>`;
+      }).join('');
+      const withImgs = variants.filter(v => v.images?.length || v.image);
+      const picXml = withImgs.length ? `<Pictures>
+        <VariationSpecificName>${escXml(dim)}</VariationSpecificName>
+        ${withImgs.map(v => { const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []); return `<VariationSpecificPictureSet><VariationSpecificValue>${escXml(v.label)}</VariationSpecificValue>${imgs.map(img => `<PictureURL>${escXml(img)}</PictureURL>`).join('')}</VariationSpecificPictureSet>`; }).join('')}
+      </Pictures>` : '';
+      return `<Variations>${varXml}<VariationSpecificsSet><NameValueList><Name>${escXml(dim)}</Name>${variants.map(v => `<Value>${escXml(v.label)}</Value>`).join('')}</NameValueList></VariationSpecificsSet>${picXml}</Variations>`;
+    }
+
     // First attempt
     let xml;
+    let activeDimension = variantDimension; // tracks the dimension currently in varSpecsXml
     ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
+
+    // 21920061 — this dimension is not allowed as a variation specific for this category.
+    // Fall back through Color → Size until eBay accepts one.
+    if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21920061<\/ErrorCode>/.test(xml) && variants?.length) {
+      const fallbacks = ['Color', 'Size', 'Style'].filter(d => d !== activeDimension);
+      for (const fallbackDim of fallbacks) {
+        console.log(`trading-create-listing: 21920061 — "${activeDimension}" not allowed for cat ${catId}, retrying with "${fallbackDim}"`);
+        varSpecsXml = rebuildVarSpecsXml(fallbackDim);
+        delete aspects[activeDimension];
+        delete aspects[fallbackDim];
+        activeDimension = fallbackDim;
+        ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
+        if (/<ItemID>\d+<\/ItemID>/.test(xml) || !/<ErrorCode>21920061<\/ErrorCode>/.test(xml)) break;
+      }
+    }
 
     // 21916564 — category doesn't support multi-variation: strip variants and retry as single listing
     if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21916564<\/ErrorCode>/.test(xml) && variants?.length) {
