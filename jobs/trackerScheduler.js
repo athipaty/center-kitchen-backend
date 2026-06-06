@@ -2,7 +2,7 @@ const cron = require("node-cron");
 const axios = require("axios");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
-const { syncEbayPrice, syncEbayQty, endListing } = require("./ebayPriceSync");
+const { syncEbayPrice, syncEbayQty, endListing, calcEbayPrice } = require("./ebayPriceSync");
 const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 
 let io = null;
@@ -64,18 +64,31 @@ async function checkProduct(p, saleMode = false) {
     p.unavailableSince = null;
 
     if (p.ebayListingId) {
-      try {
-        await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
-        // Restore qty if recovering from any non-active status
-        if (previousStatus !== 'active') {
-          await syncEbayQty(p.ebayListingId, p.variant, 1);
-          console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1 (was ${previousStatus})`);
+      let syncErr = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
+          if (previousStatus !== 'active') {
+            await syncEbayQty(p.ebayListingId, p.variant, 1);
+            console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1 (was ${previousStatus})`);
+          }
+          const expected = calcEbayPrice(info.price, saleMode);
+          console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" amazon=$${info.price} → ebay=$${expected}`);
+          syncErr = null;
+          break;
+        } catch (e) {
+          syncErr = e;
+          if (attempt < 2) {
+            console.warn(`eBay sync attempt ${attempt} failed for ${p.ebayListingId}: ${e.message} — retrying in 8s`);
+            await new Promise(r => setTimeout(r, 8000));
+          }
         }
-        console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" → $${info.price}`);
+      }
+      if (syncErr) {
+        console.error(`eBay price sync failed for listing ${p.ebayListingId} after 2 attempts:`, syncErr.message);
+        if (io) io.emit('tracker:ebay:sync:fail', { productId: String(p._id), error: syncErr.message });
+      } else {
         if (io) io.emit('tracker:ebay:sync:ok', { productId: String(p._id) });
-      } catch (ebayErr) {
-        console.error(`eBay price sync failed for listing ${p.ebayListingId}:`, ebayErr.message);
-        if (io) io.emit('tracker:ebay:sync:fail', { productId: String(p._id), error: ebayErr.message });
       }
     }
     p.nextCheck = nextCheckDate(p);

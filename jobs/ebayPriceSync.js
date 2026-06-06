@@ -1,6 +1,31 @@
 const axios = require('axios');
 const EbayToken = require('../models/shared/EbayToken');
 
+// ── Pricing constants — must stay in sync with frontend src/utils/pricing.js ──
+const EBAY_FEE_RATE  = 0.1325;
+const EBAY_FEE_FIXED = 0.30;
+const MIN_PROFIT     = 4.50;
+const PROMO_RATE     = 0.05;
+const SALE_MARGIN    = 0.02;
+const AMAZON_TAX     = 0.085;
+
+function calcEbayPrice(amazonPrice, saleMode = false) {
+  const cost = amazonPrice * (1 + AMAZON_TAX);
+  if (saleMode) {
+    const price = (cost + EBAY_FEE_FIXED) / (1 - EBAY_FEE_RATE - PROMO_RATE - SALE_MARGIN);
+    return Math.floor(price) + 0.99;
+  }
+  let multiplier;
+  if (cost < 10)      multiplier = 2.2;
+  else if (cost < 20) multiplier = 1.7;
+  else if (cost < 35) multiplier = 1.55;
+  else if (cost < 60) multiplier = 1.45;
+  else                multiplier = 1.35;
+  const tieredPrice = cost * multiplier;
+  const minPrice    = (cost + MIN_PROFIT + EBAY_FEE_FIXED) / (1 - EBAY_FEE_RATE);
+  return Math.floor(Math.max(tieredPrice, minPrice)) + 0.99;
+}
+
 let tokens = { access_token: null, refresh_token: null, expires_at: 0 };
 
 (async () => {
@@ -132,9 +157,7 @@ async function syncEbayQty(listingId, variantLabel, qty) {
 async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = false) {
   const token = await getAccessToken();
   const cleanId = String(listingId).trim().replace(/\D/g, '');
-  const ap = Number(amazonPrice);
-  const margin = saleMode ? 0.02 : 0.02; // both 2% for now — change sale margin here when needed
-  const ebayPrice = Math.floor((ap + 0.30) / (1 - 0.1325 - 0.05 - margin)) + 0.99;
+  const ebayPrice = calcEbayPrice(Number(amazonPrice), saleMode);
   const priceStr = ebayPrice.toFixed(2);
   const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
@@ -194,4 +217,4 @@ async function endListing(listingId) {
   if (err) throw new Error(err);
 }
 
-module.exports = { syncEbayPrice, syncEbayQty, endListing, getAccessToken, bestVariantMatch };
+module.exports = { syncEbayPrice, syncEbayQty, endListing, getAccessToken, bestVariantMatch, calcEbayPrice };
