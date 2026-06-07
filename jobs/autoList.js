@@ -41,6 +41,28 @@ function ambiguousVariantLabels(products) {
   return null;
 }
 
+// Pause new listings once active eBay listing usage reaches this many slots —
+// keeps headroom below eBay's monthly velocity limit (200) — and resume
+// automatically once usage drops back below it. Cached briefly since the
+// underlying /selling-limits call hits both eBay and an FX API.
+const LISTING_CAP = 170;
+let _usedListingsCache = { used: null, at: 0 };
+const USED_LISTINGS_CACHE_MS = 5 * 60 * 1000;
+
+async function getUsedListingCount() {
+  const now = Date.now();
+  if (_usedListingsCache.used != null && now - _usedListingsCache.at < USED_LISTINGS_CACHE_MS) {
+    return _usedListingsCache.used;
+  }
+  try {
+    const { data } = await axios.get(`${BASE}/api/ebay/selling-limits`, { timeout: 20000 });
+    _usedListingsCache = { used: data.items?.used ?? null, at: now };
+  } catch {
+    // keep the last known value (or null if we've never fetched successfully)
+  }
+  return _usedListingsCache.used;
+}
+
 function detectVariantDimension(variants) {
   const labels = variants.map(v => v.variant || v.label || '');
   if (labels.some(l => /\d+["'\s]*(inch|in\b|cm\b|mm\b|oz\b|lb\b|ft\b)/i.test(l))) return 'Size';
@@ -63,6 +85,14 @@ function detectVariantDimension(variants) {
 // also picks up the same group) from racing and creating duplicate eBay listings.
 const _inFlight = new Set();
 
+// Global serial queue — listing pipelines run strictly one at a time, in the
+// order they were triggered, regardless of which path (manual track, nightly
+// discovery, debounced group trigger, or the periodic retry sweep) kicked them
+// off. Keeps the slot-count gate above accurate (no racing creations that could
+// blow past LISTING_CAP between one check and the next) and avoids hammering
+// eBay with concurrent AddFixedPriceItem calls.
+let _queue = Promise.resolve();
+
 async function autoList(products, io) {
   if (!products.length) return null;
 
@@ -75,8 +105,10 @@ async function autoList(products, io) {
     _inFlight.add(groupId);
   }
 
+  const task = _queue.then(() => _runAutoList(products, io));
+  _queue = task.catch(() => {}); // keep the chain alive even if this run fails
   try {
-    return await _runAutoList(products, io);
+    return await task;
   } finally {
     if (groupId) _inFlight.delete(groupId);
   }
@@ -89,6 +121,16 @@ async function _runAutoList(products, io) {
   const slug = (primary.specs?.asin || String(primary._id).slice(-8)).toLowerCase().replace(/[^a-z0-9]/g, '');
 
   function emit(event, data) { if (io) io.emit(event, { ...data, productIds: ids }); }
+
+  // ── Gate: pause new listings while we're at/above the slot cap ──────────
+  // Don't emit a start/error — that would show a permanent "failed" badge on
+  // the card. Just leave the group pending; retryPendingGroups picks it back
+  // up automatically (every 20 min) once usage drops back below the cap.
+  const usedListings = await getUsedListingCount();
+  if (usedListings != null && usedListings >= LISTING_CAP) {
+    console.log(`auto-list: paused for "${primary.title?.slice(0, 60)}" — ${usedListings}/${LISTING_CAP} listing slots used; waiting until usage drops below ${LISTING_CAP}`);
+    return null;
+  }
 
   emit('tracker:auto-list:start', { title: primary.title });
   console.log(`auto-list: starting for "${primary.title?.slice(0, 60)}" (${products.length} variant(s))`);
