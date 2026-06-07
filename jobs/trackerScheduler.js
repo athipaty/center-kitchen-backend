@@ -411,8 +411,14 @@ async function runAutoRestock() {
             return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specs}</VariationSpecifics></Variation>`;
           }).join('');
 
+          // Re-include the existing <Pictures> block (per-variant photo mapping) verbatim —
+          // ReviseFixedPriceItem replaces the whole <Variations> container, and omitting
+          // <Pictures> makes eBay fall back to its default photo-to-variant assignment,
+          // scrambling carefully-fixed per-variant photos on every restock.
+          const picturesXml = getXml.match(/<Variations>[\s\S]*?(<Pictures>[\s\S]*?<\/Pictures>)[\s\S]*?<\/Variations>/)?.[1] || '';
+
           await tradingPost('ReviseFixedPriceItem',
-            `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${itemId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`
+            `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${itemId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
           );
         } else {
           // Single listing: set qty back to 1

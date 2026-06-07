@@ -588,6 +588,14 @@ function sanitizeSku(raw) {
   return String(raw || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 50) || 'ITEM';
 }
 
+// Extract the <Pictures> block (per-variant photo mapping) from a GetItem response so it
+// can be re-included verbatim in ReviseFixedPriceItem requests. ReviseFixedPriceItem replaces
+// the entire <Variations> container — omitting <Pictures> makes eBay fall back to its default
+// photo-to-variant assignment, scrambling carefully-fixed per-variant photos.
+function extractVariationPictures(getItemXml) {
+  return getItemXml.match(/<Variations>[\s\S]*?(<Pictures>[\s\S]*?<\/Pictures>)[\s\S]*?<\/Variations>/)?.[1] || '';
+}
+
 function sanitizeTitle(raw) {
   return String(raw || '')
     .replace(/[^\x20-\x7E]/g, ' ')      // non-ASCII → space (catches ™ ® © etc.)
@@ -2395,8 +2403,10 @@ router.post('/listing/price', async (req, res) => {
         return `<Variation>${skuXml}<StartPrice currencyID="USD">${thisPrice}</StartPrice><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
       }).join('');
 
-      console.log(`listing/price: id=${cleanId} label="${label}" → ReviseFixedPriceItem (${varBlocks.length} variations)`);
-      const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+      const picturesXml = extractVariationPictures(getItemXml);
+
+      console.log(`listing/price: id=${cleanId} label="${label}" → ReviseFixedPriceItem (${varBlocks.length} variations, pictures=${picturesXml ? 'preserved' : 'none'})`);
+      const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
       const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
       console.log('listing/price: ReviseFixedPriceItem response:', xml.slice(0, 2000));
       const err = checkFailure(xml);
@@ -2507,7 +2517,8 @@ router.post('/sale-mode', async (req, res) => {
           }).filter(Boolean).join('');
 
           if (!variationXml) { results.skipped++; continue; }
-          const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+          const picturesXml = extractVariationPictures(getXml);
+          const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
           const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
           if (/<Ack>Failure<\/Ack>/.test(xml)) { results.failed++; } else { results.done++; }
         } else {
@@ -2598,7 +2609,8 @@ router.post('/bulk-set-quantity', async (req, res) => {
             const skuXml = `<SKU>${sku || sanitizeSku(`${itemId}-${varVal}`)}</SKU>`;
             return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
           }).join('');
-          body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${itemId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+          const picturesXml = extractVariationPictures(getXml);
+          body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${itemId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
         } else {
           body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>${qty}</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`;
         }
@@ -2668,7 +2680,8 @@ router.post('/listing/:id/quantity', async (req, res) => {
         const skuXml = `<SKU>${sku || sanitizeSku(`${cleanId}-${varVal}`)}</SKU>`;
         return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
       }).join('');
-      body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+      const picturesXml = extractVariationPictures(getXml);
+      body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
       callName = 'ReviseFixedPriceItem';
     } else {
       body = `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><Quantity>${qty}</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`;
