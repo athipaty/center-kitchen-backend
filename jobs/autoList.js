@@ -58,9 +58,31 @@ function detectVariantDimension(variants) {
  *
  * Emits: tracker:auto-list:start → :step → :done | :error
  */
+// Groups currently running through the listing pipeline — prevents two triggers
+// (e.g. scheduleGroupAutoList's debounce firing right as the periodic retry sweep
+// also picks up the same group) from racing and creating duplicate eBay listings.
+const _inFlight = new Set();
+
 async function autoList(products, io) {
   if (!products.length) return null;
 
+  const groupId = products[0]?.groupId || null;
+  if (groupId) {
+    if (_inFlight.has(groupId)) {
+      console.log(`auto-list: skipping — group ${groupId} is already being listed`);
+      return null;
+    }
+    _inFlight.add(groupId);
+  }
+
+  try {
+    return await _runAutoList(products, io);
+  } finally {
+    if (groupId) _inFlight.delete(groupId);
+  }
+}
+
+async function _runAutoList(products, io) {
   const primary = products.find(p => p.title && p.title !== 'Unknown product') || products[0];
   const isMultiVariant = products.length > 1;
   const ids = products.map(p => String(p._id));
@@ -265,4 +287,52 @@ function scheduleGroupAutoList(groupId, io) {
   }, 180000); // 180s — ScraperAPI takes ~15s per variant; 6 variants = ~90s, 180s gives safe headroom
 }
 
-module.exports = { autoList, scheduleGroupAutoList, calcEbayPrice, detectVariantDimension };
+// Safety net for groups whose scheduleGroupAutoList timer was lost (e.g. a server
+// restart mid-debounce) — the only other trigger (productDiscovery's pending retry)
+// only runs when listing slots get freed, so groups can otherwise stay stuck forever
+// showing "Will auto-list when Prime confirmed" despite isPrime already being true.
+//
+// Finds Prime groups with no listing whose newest variant is "stable" (created more
+// than STALE_MS ago, so we don't race scheduleGroupAutoList while a group is still
+// being populated), and runs the listing pipeline for them.
+const STALE_MS = 10 * 60 * 1000; // 10 min — comfortably longer than the 180s debounce
+let _retryRunning = false;
+
+async function retryPendingGroups(io) {
+  if (_retryRunning) return;
+  _retryRunning = true;
+  try {
+    const cutoff = new Date(Date.now() - STALE_MS);
+    const pending = await Product.find({ ebayListingId: null, isPrime: true, groupId: { $exists: true, $ne: null } }).lean();
+    if (!pending.length) return;
+
+    const groups = {};
+    for (const p of pending) {
+      (groups[p.groupId] ||= []).push(p);
+    }
+
+    for (const [groupId, variants] of Object.entries(groups)) {
+      if (_pending[groupId]) continue; // scheduleGroupAutoList already has this queued
+      const newestCreatedAt = variants.reduce((max, p) => (p.createdAt > max ? p.createdAt : max), variants[0].createdAt);
+      if (new Date(newestCreatedAt) > cutoff) continue; // still mid-add — let the debounce handle it
+
+      try {
+        const docs = await Product.find({ groupId, ebayListingId: null });
+        if (!docs.length) continue;
+        console.log(`auto-list retry: picking up stale pending group ${groupId} (${docs.length} variant(s))`);
+        await autoList(docs, io);
+        await new Promise(r => setTimeout(r, 2000));
+      } catch (e) {
+        if (e.code === 'SELLING_LIMIT') {
+          console.warn('auto-list retry: selling limit reached — stopping sweep');
+          return;
+        }
+        console.error(`auto-list retry: failed for group ${groupId}:`, e.message);
+      }
+    }
+  } finally {
+    _retryRunning = false;
+  }
+}
+
+module.exports = { autoList, scheduleGroupAutoList, retryPendingGroups, calcEbayPrice, detectVariantDimension };

@@ -334,6 +334,20 @@ async function runAutoEndZeroViews() {
   }
 }
 
+// Safety net: pick up Prime products that never made it onto eBay — e.g. a
+// scheduleGroupAutoList debounce timer lost to a server restart mid-wait.
+// (productDiscovery also runs this, but only when listing slots get freed up,
+// so groups can otherwise sit stuck indefinitely showing "Will auto-list when
+// Prime confirmed" in the UI.)
+async function runPendingAutoListRetry() {
+  try {
+    const { retryPendingGroups } = require('./autoList');
+    await retryPendingGroups(io);
+  } catch (e) {
+    console.error('pending-auto-list-retry: error:', e.message);
+  }
+}
+
 // Auto-restock: after a sale, set qty back to 1 so listing stays live
 async function runAutoRestock() {
   try {
@@ -426,6 +440,10 @@ function start(socketIo) {
   cron.schedule("0 2 * * *", runAutoEndZeroViews);
   // Auto-restock sold listings back to qty 1 — runs every 15 minutes
   cron.schedule("*/15 * * * *", runAutoRestock);
+  // Pick up any Prime products stuck without an eBay listing — runs every 20 minutes
+  cron.schedule("*/20 * * * *", runPendingAutoListRetry);
+  // Also run once shortly after startup to catch anything stuck from the last session
+  setTimeout(runPendingAutoListRetry, 60 * 1000);
   // Orphan cleanup every 6 hours — ends any active eBay listings not in the tracker
   cron.schedule("0 */6 * * *", runOrphanCleanup);
   // Also run once shortly after startup to catch anything from the last session
