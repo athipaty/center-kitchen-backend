@@ -298,12 +298,23 @@ function scheduleGroupAutoList(groupId, io) {
 const STALE_MS = 10 * 60 * 1000; // 10 min — comfortably longer than the 180s debounce
 let _retryRunning = false;
 
+// How many times a group can hit eBay's [240] "selling limit" error before we treat
+// it as a permanent block (e.g. brand/trademark restriction — eBay returns the same
+// generic 240 + "request a limit increase" templated text for both a real account-wide
+// velocity limit AND a per-listing policy/VeRO block, so the message text alone can't
+// tell them apart). Real velocity limits affect every listing attempt; if OTHER groups
+// keep listing successfully while this one keeps failing, it's the listing, not the limit.
+const LISTING_BLOCK_THRESHOLD = 2;
+
 async function retryPendingGroups(io) {
   if (_retryRunning) return;
   _retryRunning = true;
   try {
     const cutoff = new Date(Date.now() - STALE_MS);
-    const pending = await Product.find({ ebayListingId: null, isPrime: true, groupId: { $exists: true, $ne: null } }).lean();
+    const pending = await Product.find({
+      ebayListingId: null, isPrime: true, listingBlocked: { $ne: true },
+      groupId: { $exists: true, $ne: null },
+    }).lean();
     if (!pending.length) return;
 
     const groups = {};
@@ -324,8 +335,24 @@ async function retryPendingGroups(io) {
         await new Promise(r => setTimeout(r, 2000));
       } catch (e) {
         if (e.code === 'SELLING_LIMIT') {
-          console.warn('auto-list retry: selling limit reached — stopping sweep');
-          return;
+          // Atomic increment+read on one representative doc avoids a stale-count race
+          // when multiple sweeps (e.g. startup sweep + cron) overlap on the same group.
+          const sample = await Product.findOneAndUpdate(
+            { _id: variants[0]._id },
+            { $inc: { listFailCount: 1 } },
+            { new: true }
+          ).select('listFailCount specs').lean();
+          const failCount = sample.listFailCount;
+          if (failCount >= LISTING_BLOCK_THRESHOLD) {
+            const brand = sample.specs?.brand_name || sample.specs?.manufacturer || null;
+            const reason = `eBay rejected this listing with error 240 ("selling limit"/policy block) ${failCount} times while other groups listed successfully in between — likely a brand/trademark restriction${brand ? ` (brand: "${brand}")` : ''}, not a real account-wide limit. Giving up automatic retries; relist manually if you have authorization to sell this brand.`;
+            await Product.updateMany({ groupId }, { listingBlocked: true, listingBlockReason: reason, listFailCount: failCount });
+            console.warn(`auto-list retry: group ${groupId} permanently blocked — ${reason}`);
+          } else {
+            await Product.updateMany({ groupId, _id: { $ne: sample._id } }, { listFailCount: failCount });
+            console.warn(`auto-list retry: selling limit hit for group ${groupId} (attempt ${failCount}/${LISTING_BLOCK_THRESHOLD}) — will retry later`);
+          }
+          continue; // don't abort the whole sweep — other groups aren't necessarily affected
         }
         console.error(`auto-list retry: failed for group ${groupId}:`, e.message);
       }
