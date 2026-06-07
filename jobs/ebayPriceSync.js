@@ -130,11 +130,14 @@ function extractVariationPictures(getItemXml) {
 // permanently short a variant — this is how listing 358647894021 lost its "Trap Jaw" variant.
 async function buildMissingVariationXml(cleanId, varBlocks) {
   if (!varBlocks.length) return '';
-  const tracked = await Product.find({ ebayListingId: cleanId }, 'variant').lean();
+  const tracked = await Product.find({ ebayListingId: cleanId }, 'variant status').lean();
   if (tracked.length <= varBlocks.length) return '';
 
   const liveLabels = varBlocks.map(b => decodeEntities(b.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '').toLowerCase().trim());
-  const missing = tracked.filter(p => p.variant && !liveLabels.includes(p.variant.toLowerCase().trim()));
+  // Only re-add variants that are currently 'active' — re-adding an out-of-stock/unavailable
+  // variant would immediately fight the next OOS check (which can't safely zero it back out,
+  // since eBay deletes zero-quantity variations rather than marking them OOS).
+  const missing = tracked.filter(p => p.variant && p.status === 'active' && !liveLabels.includes(p.variant.toLowerCase().trim()));
   if (!missing.length) return '';
 
   const dimName = varBlocks[0].match(/<NameValueList>[\s\S]*?<Name>([\s\S]*?)<\/Name>/)?.[1] || 'Style';

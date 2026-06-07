@@ -114,15 +114,12 @@ async function checkProduct(p, saleMode = false) {
       p.unavailableSince = new Date();
     }
 
-    // Push qty=0 to eBay so the variant shows as Out of Stock
-    if (p.ebayListingId && (p.status === 'out_of_stock' || p.status === 'unavailable')) {
-      try {
-        await syncEbayQty(p.ebayListingId, p.variant, 0);
-        console.log(`eBay qty set to 0: listing ${p.ebayListingId} variant="${p.variant}" (${p.status})`);
-      } catch (qtyErr) {
-        console.error(`eBay qty sync failed for listing ${p.ebayListingId}:`, qtyErr.message);
-      }
-    }
+    // Deliberately NOT pushing qty=0 to eBay here: ReviseFixedPriceItem silently deletes any
+    // <Variation> whose quantity is 0 (eBay returns "Variations with quantity '0' will be
+    // removed"), permanently dropping the variant from the listing rather than marking it OOS.
+    // That's how listing 358647894021 lost its "Trap Jaw" variation. We leave the live quantity
+    // as-is; buildMissingVariationXml in ebayPriceSync.js re-adds any variant that's missing
+    // once it becomes active again.
 
     if (io) io.emit('tracker:product:status', { productId: String(p._id), status: p.status, failCount: p.failCount });
 
