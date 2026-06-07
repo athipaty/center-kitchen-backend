@@ -1,5 +1,6 @@
 const axios = require('axios');
 const EbayToken = require('../models/shared/EbayToken');
+const Product = require('../models/tracker/Product');
 
 // ── Pricing constants — must stay in sync with frontend src/utils/pricing.js ──
 const EBAY_FEE_RATE  = 0.1325;
@@ -111,6 +112,43 @@ function bestVariantMatch(variants, ebayVal) {
   return variants[0];
 }
 
+function escXml(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+// Extract the <Pictures> block (per-variant photo mapping) from a GetItem response so it
+// can be re-included verbatim in ReviseFixedPriceItem requests. ReviseFixedPriceItem replaces
+// the entire <Variations> container — omitting <Pictures> makes eBay fall back to its default
+// photo-to-variant assignment, scrambling carefully-fixed per-variant photos.
+function extractVariationPictures(getItemXml) {
+  return getItemXml.match(/<Variations>[\s\S]*?(<Pictures>[\s\S]*?<\/Pictures>)[\s\S]*?<\/Variations>/)?.[1] || '';
+}
+
+// Self-heal: if the tracker has more variants for this listing than eBay currently shows,
+// rebuild <Variation> entries for the missing ones (matching a sibling's live price/SKU
+// convention) so the next ReviseFixedPriceItem re-adds them instead of leaving the listing
+// permanently short a variant — this is how listing 358647894021 lost its "Trap Jaw" variant.
+async function buildMissingVariationXml(cleanId, varBlocks) {
+  if (!varBlocks.length) return '';
+  const tracked = await Product.find({ ebayListingId: cleanId }, 'variant').lean();
+  if (tracked.length <= varBlocks.length) return '';
+
+  const liveLabels = varBlocks.map(b => decodeEntities(b.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '').toLowerCase().trim());
+  const missing = tracked.filter(p => p.variant && !liveLabels.includes(p.variant.toLowerCase().trim()));
+  if (!missing.length) return '';
+
+  const dimName = varBlocks[0].match(/<NameValueList>[\s\S]*?<Name>([\s\S]*?)<\/Name>/)?.[1] || 'Style';
+  // Match a sibling's current live price so the re-added variation lines up with the rest of the listing
+  const fallbackPrice = varBlocks[0].match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0.00';
+
+  return missing.map(p => {
+    const label = p.variant;
+    const sku = `${cleanId}-${label.replace(/[^a-zA-Z0-9]/g, '')}`.slice(0, 50);
+    console.warn(`ebayPriceSync: re-adding variation "${label}" missing from live listing ${cleanId} (SKU ${sku}, price $${fallbackPrice})`);
+    return `<Variation><SKU>${sku}</SKU><StartPrice currencyID="USD">${fallbackPrice}</StartPrice><Quantity>1</Quantity><VariationSpecifics><NameValueList><Name>${escXml(dimName)}</Name><Value>${escXml(label)}</Value></NameValueList></VariationSpecifics></Variation>`;
+  }).join('');
+}
+
 // Set eBay variation quantity to 0 (OOS) or back to qty (in-stock)
 async function syncEbayQty(listingId, variantLabel, qty) {
   const token = await getAccessToken();
@@ -145,8 +183,11 @@ async function syncEbayQty(listingId, variantLabel, qty) {
     return `<Variation>${skuXml}<StartPrice currencyID="USD">${currentPrice}</StartPrice><Quantity>${thisQty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
   }).join('');
 
+  const missingXml = await buildMissingVariationXml(cleanId, varBlocks).catch(() => '');
+  const picturesXml = extractVariationPictures(getItemXml);
+
   const { data: reviseXml } = await tradingPost(token, 'ReviseFixedPriceItem',
-    `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`
+    `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${missingXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
   );
   const err = checkFailure(reviseXml);
   if (err) throw new Error(err);
@@ -197,8 +238,11 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = fa
       return `<Variation>${skuXml}<StartPrice currencyID="USD">${thisPrice}</StartPrice><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
     }).join('');
 
+    const missingXml = await buildMissingVariationXml(cleanId, varBlocks).catch(() => '');
+    const picturesXml = extractVariationPictures(getItemXml);
+
     const { data: reviseXml } = await tradingPost(token, 'ReviseFixedPriceItem',
-      `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}</Variations></Item></ReviseFixedPriceItemRequest>`
+      `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${missingXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
     );
     const err = checkFailure(reviseXml);
     if (err) throw new Error(err);
