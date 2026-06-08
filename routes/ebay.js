@@ -3354,6 +3354,63 @@ router.get('/listings/watchers', async (req, res) => {
   res.json({ watchers: result });
 });
 
+// ── One-time backfill: populate listedAt for already-listed products ──
+// using eBay's real listing StartTime (Trading API), for products that
+// have an ebayListingId but no listedAt yet (listings created before
+// listedAt tracking was added).
+router.post('/backfill-listed-at', async (req, res) => {
+  try {
+    const products = await Product.find(
+      { ebayListingId: { $exists: true, $ne: null }, listedAt: null },
+      'ebayListingId'
+    ).lean();
+    if (!products.length) return res.json({ ok: true, updated: 0, message: 'Nothing to backfill' });
+
+    const token = await getAccessToken();
+    const startTimes = new Map(); // listingId → Date
+
+    for (let page = 1; page <= 3; page++) {
+      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
+      const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
+        headers: {
+          'X-EBAY-API-SITEID': '0',
+          'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+          'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling',
+          'X-EBAY-API-IAF-TOKEN': token,
+          'Content-Type': 'text/xml',
+        },
+      });
+      if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
+      const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
+      let m;
+      while ((m = itemRe.exec(xmlResp)) !== null) {
+        const block = m[1];
+        const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+        const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
+        if (itemId && startTime) startTimes.set(itemId, new Date(startTime));
+      }
+      if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
+    }
+
+    let updated = 0;
+    let notFound = 0;
+    for (const p of products) {
+      const cleanId = String(p.ebayListingId).replace(/\D/g, '');
+      const startTime = startTimes.get(cleanId);
+      if (!startTime) { notFound++; continue; }
+      await Product.findByIdAndUpdate(p._id, { listedAt: startTime });
+      updated++;
+    }
+
+    res.json({ ok: true, candidates: products.length, updated, notFoundOnEbay: notFound });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    console.error('backfill-listed-at error:', err.response?.data || err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Audit + fix return policy and handling time on all listings ────
 router.post('/fix-policies', async (req, res) => {
   const token = await getAccessToken();
