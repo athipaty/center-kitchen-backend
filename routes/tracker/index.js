@@ -108,12 +108,16 @@ router.post("/preview", async (req, res) => {
 // GET search Amazon for items currently on sale (have a strikethrough/original price)
 router.get("/search-deals", async (req, res) => {
   try {
-    const query = (req.query.query || "").trim();
-    if (!query) return res.status(400).json({ error: "query is required" });
+    const rawQuery = (req.query.query || "").trim();
+    const category = (req.query.category || "").trim();
+    // A category alone isn't a great search query on its own — pairing it with
+    // "deals" steers Amazon's search toward discounted listings in that category.
+    const searchTerm = rawQuery || (category ? `${category} deals` : "");
+    if (!searchTerm) return res.status(400).json({ error: "query or category is required" });
     if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
 
     const { data } = await axios.get("https://api.scraperapi.com/structured/amazon/search/v1", {
-      params: { api_key: process.env.SCRAPER_API_KEY, query, country: "us" },
+      params: { api_key: process.env.SCRAPER_API_KEY, query: searchTerm, country: "us" },
       timeout: 30000,
     });
 
@@ -145,7 +149,7 @@ router.get("/search-deals", async (req, res) => {
       })
       .sort((a, b) => b.discountPercent - a.discountPercent);
 
-    res.json({ query, deals });
+    res.json({ query: searchTerm, category: category || null, deals });
   } catch (err) {
     res.status(502).json({ error: err.response?.data?.message || err.message });
   }
