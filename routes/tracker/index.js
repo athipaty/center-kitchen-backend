@@ -105,6 +105,52 @@ router.post("/preview", async (req, res) => {
   }
 });
 
+// GET search Amazon for items currently on sale (have a strikethrough/original price)
+router.get("/search-deals", async (req, res) => {
+  try {
+    const query = (req.query.query || "").trim();
+    if (!query) return res.status(400).json({ error: "query is required" });
+    if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
+
+    const { data } = await axios.get("https://api.scraperapi.com/structured/amazon/search/v1", {
+      params: { api_key: process.env.SCRAPER_API_KEY, query, country: "us" },
+      timeout: 30000,
+    });
+
+    const results = data.results || data.organic_results || data.products || [];
+    const seen = new Set();
+    const deals = results
+      .filter(r => {
+        if (!r.asin || !(r.original_price?.price > r.price) || seen.has(r.asin)) return false;
+        seen.add(r.asin);
+        return true;
+      })
+      .map(r => {
+        const price = r.price;
+        const originalPrice = r.original_price.price;
+        return {
+          asin: r.asin,
+          title: r.name,
+          image: r.image || null,
+          url: `https://www.amazon.com/dp/${r.asin}`,
+          price,
+          originalPrice,
+          currency: r.price_symbol || "$",
+          discountPercent: Math.round((1 - price / originalPrice) * 100),
+          rating: r.stars || null,
+          reviewCount: r.total_reviews || 0,
+          isPrime: !!r.has_prime,
+          isLimitedDeal: !!r.is_limited_deal,
+        };
+      })
+      .sort((a, b) => b.discountPercent - a.discountPercent);
+
+    res.json({ query, deals });
+  } catch (err) {
+    res.status(502).json({ error: err.response?.data?.message || err.message });
+  }
+});
+
 // POST add a product to track
 router.post("/", async (req, res) => {
   try {
