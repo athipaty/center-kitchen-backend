@@ -173,6 +173,7 @@ router.post("/", async (req, res) => {
       currency: info.currency,
       current: info.price,
       lowest: info.price,
+      listPrice: info.listPrice ?? null,
       history: [{ price: info.price }],
       isPrime: info.isPrime || false,
       variant: info.variant || null,

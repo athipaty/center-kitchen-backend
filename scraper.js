@@ -127,6 +127,10 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
       const price = parsePrice(data.pricing || data.original_price);
       if (!price) throw new Error("Price not found in ScraperAPI response.");
 
+      // Amazon's strikethrough "list price" — only present when the item is discounted
+      const listPriceRaw = parsePrice(data.list_price);
+      const listPrice = listPriceRaw && listPriceRaw > price ? listPriceRaw : null;
+
       const currency = data.currency === "USD" ? "$"
         : data.currency === "GBP" ? "£"
         : data.currency === "EUR" ? "€"
@@ -190,7 +194,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
         : false;
       const isNewRelease = hasNewReleaseBSR || isRecentRelease;
 
-      return { title, price, currency, image, images, upc, variants, isPrime, variant, specs, bullets, rating, reviewCount, isNewRelease };
+      return { title, price, currency, listPrice, image, images, upc, variants, isPrime, variant, specs, bullets, rating, reviewCount, isNewRelease };
     } catch (err) {
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }

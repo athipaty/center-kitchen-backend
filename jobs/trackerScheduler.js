@@ -46,6 +46,7 @@ async function checkProduct(p, saleMode = false) {
 
     p.current = info.price;
     if (info.price < p.lowest) p.lowest = info.price;
+    if (info.listPrice !== undefined) p.listPrice = info.listPrice;
     if (info.image  && !p.image)  p.image  = info.image;
     if (info.images?.length && (!p.images?.length)) p.images = info.images;
     if (info.upc    && !p.upc)    p.upc    = info.upc;
