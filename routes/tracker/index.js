@@ -159,7 +159,7 @@ router.post("/", async (req, res) => {
 router.patch("/:id/ebay", async (req, res) => {
   try {
     const { ebayListingId, cloudinaryFolder } = req.body;
-    const update = { ebayListingId: ebayListingId || null };
+    const update = { ebayListingId: ebayListingId || null, listedAt: ebayListingId ? new Date() : null };
     if (cloudinaryFolder !== undefined) update.cloudinaryFolder = cloudinaryFolder || null;
     const product = await Product.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!product) return res.status(404).json({ error: "Product not found" });
@@ -185,7 +185,7 @@ router.post("/relist-group", async (req, res) => {
       await axios.delete(`http://localhost:${PORT}/api/ebay/listing/${existingListingId}`).catch(e => {
         console.warn(`relist-group: failed to end listing ${existingListingId}:`, e.message);
       });
-      await Product.updateMany({ groupId }, { $set: { ebayListingId: null } });
+      await Product.updateMany({ groupId }, { $set: { ebayListingId: null, listedAt: null } });
       console.log(`relist-group: ended listing ${existingListingId} and cleared IDs for group ${groupId}`);
     }
 

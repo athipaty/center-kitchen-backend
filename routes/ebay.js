@@ -3287,6 +3287,73 @@ router.get('/listing/:id/views', async (req, res) => {
   }
 });
 
+const watchersCache = new Map(); // listingId → { count, expiresAt }
+const WATCHERS_TTL = 60 * 60 * 1000; // 1 hour cache
+let watchersLastFetch = 0;
+const WATCHERS_MIN_INTERVAL = 2 * 60 * 1000; // throttle Trading API calls
+
+// Batch endpoint: GET /api/ebay/listings/watchers?ids=id1,id2,id3
+// Returns { watchers: { id1: N, id2: N, ... } } — fetched via GetMyeBaySelling(IncludeWatchCount)
+router.get('/listings/watchers', async (req, res) => {
+  const rawIds = String(req.query.ids || '');
+  const ids = [...new Set(rawIds.split(',').map(s => s.replace(/\D/g, '')).filter(Boolean))];
+  if (!ids.length) return res.status(400).json({ error: 'ids query param required' });
+
+  const result = {};
+  const uncached = [];
+  for (const id of ids) {
+    const cached = watchersCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) result[id] = cached.count;
+    else uncached.push(id);
+  }
+
+  if (uncached.length) {
+    const now = Date.now();
+    if (now - watchersLastFetch < WATCHERS_MIN_INTERVAL) {
+      for (const id of uncached) result[id] = 0;
+    } else {
+      try {
+        const token = await getAccessToken();
+        watchersLastFetch = Date.now();
+        for (let page = 1; page <= 2; page++) {
+          const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
+          const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
+            headers: {
+              'X-EBAY-API-SITEID': '0',
+              'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+              'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling',
+              'X-EBAY-API-IAF-TOKEN': token,
+              'Content-Type': 'text/xml',
+            },
+          });
+          if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
+          const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
+          let m;
+          while ((m = itemRe.exec(xmlResp)) !== null) {
+            const block = m[1];
+            const get = tag => { const tm = block.match(new RegExp(`<${tag}[^>]*>([^<]+)<\/${tag}>`)); return tm ? tm[1].trim() : null; };
+            const listingId = get('ItemID');
+            if (!listingId) continue;
+            const count = parseInt(get('WatchCount') || '0', 10) || 0;
+            watchersCache.set(listingId, { count, expiresAt: Date.now() + WATCHERS_TTL });
+          }
+          if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
+        }
+        for (const id of uncached) {
+          const cached = watchersCache.get(id);
+          result[id] = cached ? cached.count : 0;
+        }
+      } catch (apiErr) {
+        console.error('[eBay watchers] Trading API error:', apiErr.response?.data || apiErr.message);
+        for (const id of uncached) result[id] = 0;
+        return res.json({ watchers: result });
+      }
+    }
+  }
+
+  res.json({ watchers: result });
+});
+
 // ── Audit + fix return policy and handling time on all listings ────
 router.post('/fix-policies', async (req, res) => {
   const token = await getAccessToken();

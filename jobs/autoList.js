@@ -243,6 +243,7 @@ async function _runAutoList(products, io) {
     for (let i = 0; i < products.length; i++) {
       await Product.findByIdAndUpdate(products[i]._id, {
         ebayListingId,
+        listedAt: new Date(),
         cloudinaryFolder: variantCloudinaryFolders[i] || null,
       });
     }
