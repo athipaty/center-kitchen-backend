@@ -381,11 +381,13 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
 
     // ── 4. Fill slots — each variant = 1 slot, cap + trim per product ────────
     const MAX_VARIANTS_PER_PRODUCT = opts.maxVariantsPerProduct ?? 10;
+    const MAX_PRODUCTS = opts.maxProducts ?? Infinity;
     const toProcess = [];
     let slotsRemaining = slotsToFill;
 
     for (const candidate of qualified) {
       if (slotsRemaining <= 0) break;
+      if (toProcess.length >= MAX_PRODUCTS) break;
       const capped   = candidate.variantsToAdd.slice(0, MAX_VARIANTS_PER_PRODUCT);
       const trimmed  = capped.slice(0, slotsRemaining);
       toProcess.push({ ...candidate, variantsToAdd: trimmed });

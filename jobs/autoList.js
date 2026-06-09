@@ -405,4 +405,4 @@ async function retryPendingGroups(io) {
   }
 }
 
-module.exports = { autoList, scheduleGroupAutoList, retryPendingGroups, calcEbayPrice, detectVariantDimension };
+module.exports = { autoList, scheduleGroupAutoList, retryPendingGroups, calcEbayPrice, detectVariantDimension, getUsedListingCount };

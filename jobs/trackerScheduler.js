@@ -346,6 +346,31 @@ async function runPendingAutoListRetry() {
   }
 }
 
+// Slot target — keep this many active eBay listings by auto-discovering + listing
+// one new product per hour whenever the count falls below this threshold.
+const SLOT_FILL_TARGET = 175;
+
+async function runHourlySlotFill() {
+  try {
+    const { getUsedListingCount } = require('./autoList');
+    const used = await getUsedListingCount();
+    if (used == null) {
+      console.log('hourly-slot-fill: could not read slot count, skipping');
+      return;
+    }
+    if (used >= SLOT_FILL_TARGET) {
+      console.log(`hourly-slot-fill: at target (${used}/${SLOT_FILL_TARGET}), skipping`);
+      return;
+    }
+    const slotsAvailable = SLOT_FILL_TARGET - used;
+    console.log(`hourly-slot-fill: ${used}/${SLOT_FILL_TARGET} active listings — discovering 1 product (up to ${slotsAvailable} variant slot(s) available)`);
+    const { runProductDiscovery } = require('./productDiscovery');
+    await runProductDiscovery(io, slotsAvailable, { maxProducts: 1 });
+  } catch (e) {
+    console.error('hourly-slot-fill: error:', e.message);
+  }
+}
+
 // Auto-restock: after a sale, set qty back to 1 so listing stays live
 async function runAutoRestock() {
   try {
@@ -448,6 +473,8 @@ function start(socketIo) {
   cron.schedule("*/20 * * * *", runPendingAutoListRetry);
   // Also run once shortly after startup to catch anything stuck from the last session
   setTimeout(runPendingAutoListRetry, 60 * 1000);
+  // Auto-fill slots: if active listings < 175, discover + list 1 new product per hour
+  cron.schedule("0 * * * *", runHourlySlotFill);
   // Orphan cleanup every 6 hours — ends any active eBay listings not in the tracker
   cron.schedule("0 */6 * * *", runOrphanCleanup);
   // Also run once shortly after startup to catch anything from the last session
