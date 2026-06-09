@@ -45,7 +45,7 @@ function ambiguousVariantLabels(products) {
 // keeps headroom below eBay's monthly velocity limit (200) — and resume
 // automatically once usage drops back below it. Cached briefly since the
 // underlying /selling-limits call hits both eBay and an FX API.
-const LISTING_CAP = 170;
+const LISTING_CAP = 180;
 let _usedListingsCache = { used: null, at: 0 };
 const USED_LISTINGS_CACHE_MS = 5 * 60 * 1000;
 
