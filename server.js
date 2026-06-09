@@ -6,12 +6,17 @@ const { createServer } = require("http");
 const { Server } = require("socket.io");
 require("dotenv").config();
 
+const rateLimit = require('express-rate-limit');
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: "*", methods: ["GET", "POST"] },
 });
 app.set('io', io);
+
+// Rate limiters — protect ScraperAPI-backed endpoints from accidental runaway frontend loops
+const addProductLimiter = rateLimit({ windowMs: 60_000, max: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many add requests — slow down' } });
+const checkLimiter      = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many check requests — slow down' } });
 
 /* =====================
    MIDDLEWARE
@@ -80,6 +85,9 @@ app.use('/api/ingredients', require('./routes/recipe/ingredients'));
 app.use('/auth', require('./routes/shared/auth'));
 
 // --- Amazon Tracker ---
+app.post('/api/tracker',            addProductLimiter);
+app.post('/api/tracker/check',      checkLimiter);
+app.post('/api/tracker/check/:id',  checkLimiter);
 app.use('/api/tracker', require('./routes/tracker'));
 
 // --- eBay ---

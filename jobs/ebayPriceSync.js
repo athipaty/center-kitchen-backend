@@ -46,6 +46,10 @@ async function saveTokens() {
   } catch {}
 }
 
+// In-flight refresh promise — coalesces concurrent callers so only one HTTP round-trip
+// is made when many price syncs run simultaneously with an expired token.
+let _refreshPromise = null;
+
 async function getAccessToken() {
   if (!tokens.refresh_token) {
     try {
@@ -55,15 +59,23 @@ async function getAccessToken() {
   }
   if (tokens.access_token && Date.now() < tokens.expires_at - 60000) return tokens.access_token;
   if (!tokens.refresh_token) throw new Error('eBay not connected');
-  const { data } = await axios.post(
-    'https://api.ebay.com/identity/v1/oauth2/token',
-    new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }),
-    { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
-  );
-  tokens.access_token = data.access_token;
-  tokens.expires_at = Date.now() + data.expires_in * 1000;
-  await saveTokens();
-  return tokens.access_token;
+  if (_refreshPromise) return _refreshPromise;
+  _refreshPromise = (async () => {
+    try {
+      const { data } = await axios.post(
+        'https://api.ebay.com/identity/v1/oauth2/token',
+        new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }),
+        { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' } }
+      );
+      tokens.access_token = data.access_token;
+      tokens.expires_at = Date.now() + data.expires_in * 1000;
+      await saveTokens();
+      return tokens.access_token;
+    } finally {
+      _refreshPromise = null;
+    }
+  })();
+  return _refreshPromise;
 }
 
 function tradingPost(token, callName, body) {
@@ -130,7 +142,9 @@ function extractVariationPictures(getItemXml) {
 // permanently short a variant — this is how listing 358647894021 lost its "Trap Jaw" variant.
 async function buildMissingVariationXml(cleanId, varBlocks) {
   if (!varBlocks.length) return '';
-  const tracked = await Product.find({ ebayListingId: cleanId }, 'variant status').lean();
+  // Fetch current Amazon price so we can calculate the correct eBay price for re-added variants,
+  // rather than inheriting a sibling's price which may be for a completely different size/style.
+  const tracked = await Product.find({ ebayListingId: cleanId }, 'variant status current').lean();
   if (tracked.length <= varBlocks.length) return '';
 
   const liveLabels = varBlocks.map(b => decodeEntities(b.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '').toLowerCase().trim());
@@ -141,14 +155,16 @@ async function buildMissingVariationXml(cleanId, varBlocks) {
   if (!missing.length) return '';
 
   const dimName = varBlocks[0].match(/<NameValueList>[\s\S]*?<Name>([\s\S]*?)<\/Name>/)?.[1] || 'Style';
-  // Match a sibling's current live price so the re-added variation lines up with the rest of the listing
-  const fallbackPrice = varBlocks[0].match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0.00';
+  const siblingFallbackPrice = varBlocks[0].match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0.00';
 
   return missing.map(p => {
     const label = p.variant;
+    // Use the variant's own current Amazon price to calculate the correct eBay price.
+    // Fall back to the sibling's live price if current is missing (shouldn't happen in practice).
+    const price = p.current ? calcEbayPrice(p.current, false).toFixed(2) : siblingFallbackPrice;
     const sku = `${cleanId}-${label.replace(/[^a-zA-Z0-9]/g, '')}`.slice(0, 50);
-    console.warn(`ebayPriceSync: re-adding variation "${label}" missing from live listing ${cleanId} (SKU ${sku}, price $${fallbackPrice})`);
-    return `<Variation><SKU>${sku}</SKU><StartPrice currencyID="USD">${fallbackPrice}</StartPrice><Quantity>1</Quantity><VariationSpecifics><NameValueList><Name>${escXml(dimName)}</Name><Value>${escXml(label)}</Value></NameValueList></VariationSpecifics></Variation>`;
+    console.warn(`ebayPriceSync: re-adding variation "${label}" missing from live listing ${cleanId} (SKU ${sku}, price $${price})`);
+    return `<Variation><SKU>${sku}</SKU><StartPrice currencyID="USD">${price}</StartPrice><Quantity>1</Quantity><VariationSpecifics><NameValueList><Name>${escXml(dimName)}</Name><Value>${escXml(label)}</Value></NameValueList></VariationSpecifics></Variation>`;
   }).join('');
 }
 

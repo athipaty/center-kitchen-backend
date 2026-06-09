@@ -74,10 +74,10 @@ router.get("/debug-raw", async (req, res) => {
   }
 });
 
-// GET all tracked products
+// GET all tracked products (excludes archived — zero-view listings ended by the auto-end job)
 router.get("/", async (req, res) => {
   try {
-    const products = await Product.find().sort({ createdAt: -1 });
+    const products = await Product.find({ status: { $ne: 'archived' } }).sort({ createdAt: -1 });
     res.json(products);
   } catch (err) {
     res.status(500).json({ error: err.message });

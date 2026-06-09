@@ -30,14 +30,16 @@ function titleFingerprint(title) {
     .slice(0, 5);
 }
 
-// Returns true if candidateTitle shares 2+ key words with any existing product title
+// Returns true if candidateTitle shares 3+ key words with any existing product title.
+// 3-word threshold (raised from 2) prevents false positives like "Ninja Blender 32oz"
+// vs "Ninja Blender 64oz" which share 2 words but are distinct, listable products.
 function isTooSimilar(candidateTitle, existingProducts) {
   const cWords = new Set(titleFingerprint(candidateTitle));
   for (const p of existingProducts) {
     if (!p.title) continue;
     const eWords = titleFingerprint(p.title);
     const overlap = eWords.filter(w => cWords.has(w)).length;
-    if (overlap >= 2) return true;
+    if (overlap >= 3) return true;
   }
   return false;
 }
@@ -250,7 +252,7 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
     const { getAccessToken } = require('./ebayPriceSync');
     const token = await getAccessToken();
 
-    const allProducts = await Product.find({}).lean();
+    const allProducts = await Product.find({ status: { $ne: 'archived' } }).lean();
     const listedProducts = allProducts.filter(p => p.ebayListingId);
     if (!listedProducts.length) return;
 
@@ -281,7 +283,14 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
       `"${p.title.slice(0, 40)}" (${views[p.ebayListingId] ?? 0}v)`));
 
     // ── 2. Find new release ASINs in the same categories as top products ─────
-    const existingAsins = new Set(allProducts.map(p => p.groupId).filter(Boolean));
+    // Build dedup set from both groupId (for discovery-added products) and URL-extracted ASIN
+    // (for manually-tracked products whose groupId is not an ASIN). Without the URL check,
+    // discovery would waste 5 ScraperAPI credits fetching a structured product page before
+    // hitting MongoDB's unique-URL constraint.
+    const existingAsins = new Set([
+      ...allProducts.map(p => p.groupId).filter(Boolean),
+      ...allProducts.map(p => { const m = (p.url || '').match(/\/dp\/([A-Z0-9]{10})/i); return m ? m[1] : null; }).filter(Boolean),
+    ]);
     const candidates = [];
     const seenAsins = new Set(existingAsins);
     const seenCategories = new Set();
@@ -362,6 +371,15 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
           images: v.image ? [v.image, ...(info.images || [])] : (info.images || []),
           _hasOwnPrice: !!v.price,
         }));
+
+        // Drop variants priced at or above $50 — same threshold as the base product check.
+        // Without this, a $25 base product could include $60+ size/material variants.
+        variantList = variantList.filter(v => v.price < 50);
+        if (variantList.length < 4) {
+          console.log(`productDiscovery: skipping ${asin} "${info.title.slice(0, 40)}" — only ${variantList.length} variant(s) under $50 after price filter (need 4)`);
+          continue;
+        }
+
         if (variantList.length > 10) {
           variantList.sort((a, b) =>
             (Number(b._hasOwnPrice) - Number(a._hasOwnPrice)) || (a.price - b.price)

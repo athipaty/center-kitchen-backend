@@ -356,6 +356,7 @@ async function retryPendingGroups(io) {
     const pending = await Product.find({
       ebayListingId: null, isPrime: true, listingBlocked: { $ne: true },
       groupId: { $exists: true, $ne: null },
+      status: { $ne: 'archived' },
     }).lean();
     if (!pending.length) return;
 

@@ -12,8 +12,12 @@ let io = null;
 // - Unchanged 3–7 days              → 8–14h (moderate)
 // - Unchanged 7+ days               → 20–28h (slow — saves ~4× ScraperAPI calls)
 function adaptiveInterval(product) {
-  const daysSinceChange = product.history?.length >= 2
-    ? (Date.now() - new Date(product.history[product.history.length - 1].createdAt || 0)) / 86400000
+  // Use the last history entry's timestamp regardless of how many entries exist.
+  // The old check (history.length >= 2) forced daysSinceChange=0 for products that
+  // have never had a price change, causing them to be checked at 3–6h forever.
+  const lastEntry = product.history?.[product.history.length - 1];
+  const daysSinceChange = lastEntry?.createdAt
+    ? (Date.now() - new Date(lastEntry.createdAt).getTime()) / 86400000
     : 0;
   if (daysSinceChange >= 7)  return (Math.random() * 8  + 20) * 3600 * 1000; // 20–28h
   if (daysSinceChange >= 3)  return (Math.random() * 6  + 8)  * 3600 * 1000; // 8–14h
@@ -311,11 +315,17 @@ async function runAutoEndZeroViews() {
         const folders = [...new Set(linked.map(p => p.cloudinaryFolder).filter(Boolean))];
         // Each variant that was linked = 1 freed slot
         slotsFreed += linked.length;
-        await Product.deleteMany({ ebayListingId: listingId });
+        // Soft-delete: archive rather than hard-delete so price history and product info
+        // are retained for auditing. Archived products are excluded from the UI, price
+        // checks, and future discovery runs.
+        await Product.updateMany(
+          { ebayListingId: listingId },
+          { $set: { ebayListingId: null, status: 'archived', archivedAt: new Date() } }
+        );
         for (const folder of folders) {
           await deleteCloudinaryFolder(folder).catch(() => {});
         }
-        console.log(`auto-end-zero-views: ended listing ${listingId} (${linked.length} variant slot(s) freed)`);
+        console.log(`auto-end-zero-views: archived listing ${listingId} (${linked.length} variant slot(s) freed)`);
       } catch (e) {
         console.error(`auto-end-zero-views: failed to end ${listingId}:`, e.message);
       }
