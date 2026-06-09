@@ -1852,6 +1852,131 @@ router.get('/selling-limits/debug', async (req, res) => {
   }
 });
 
+// eBay doesn't expose the selling-limit cycle's reset date via any API (confirmed: getPrivileges
+// only returns the static thresholds). We calibrate the day-of-month it resets on against the
+// real "used" number shown in Seller Hub (via /selling-limits/calibrate) and persist it on
+// EbayToken.limitCycleStartDay, then derive each cycle's start from that day going forward.
+function cycleStartFor(day, ref = new Date()) {
+  let start = new Date(ref.getFullYear(), ref.getMonth(), day);
+  if (start > ref) start = new Date(ref.getFullYear(), ref.getMonth() - 1, day);
+  return start;
+}
+
+// Counts items used toward the monthly selling limit from a GetMyeBaySelling response,
+// given a cycle-start boundary. Mirrors eBay's "1 slot per variation" counting rule.
+function countUsedItems(xmlResp, monthStart) {
+  let totalQtyListed = 0;
+  let soldRevenueUsd = 0;
+  const activeItemIds = new Set();
+
+  const activeSection = xmlResp.match(/<ActiveList>([\s\S]*?)<\/ActiveList>/)?.[1] || '';
+  for (const [, block] of [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
+    const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+    if (itemId) activeItemIds.add(itemId);
+    const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
+    if (varBlocks.length) {
+      for (const [, vb] of varBlocks) {
+        const qty  = parseInt(vb.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
+        const sold = parseInt(vb.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+        totalQtyListed += qty + sold;
+        if (sold) {
+          const price = parseFloat(vb.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
+          soldRevenueUsd += price * sold;
+        }
+      }
+    } else {
+      const qty  = parseInt(block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
+      const sold = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+      totalQtyListed += qty + sold;
+      if (sold) {
+        const price = parseFloat(block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
+        soldRevenueUsd += price * sold;
+      }
+    }
+  }
+
+  const soldSection = xmlResp.match(/<SoldList>([\s\S]*?)<\/SoldList>/)?.[1] || '';
+  const countedSoldIds = new Set();
+  for (const [, tx] of [...soldSection.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)]) {
+    const itemId = tx.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+    if (!itemId || activeItemIds.has(itemId) || countedSoldIds.has(itemId)) continue;
+    const dateStr = tx.match(/<CreatedDate>([\s\S]*?)<\/CreatedDate>/)?.[1];
+    if (dateStr && new Date(dateStr) < monthStart) continue;
+    countedSoldIds.add(itemId);
+    totalQtyListed += 1;
+  }
+
+  const unsoldSection = xmlResp.match(/<UnsoldList>([\s\S]*?)<\/UnsoldList>/)?.[1] || '';
+  for (const [, block] of [...unsoldSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
+    const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+    if (!itemId || activeItemIds.has(itemId)) continue;
+    const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
+    if (startTime && new Date(startTime) < monthStart) continue;
+    const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
+    totalQtyListed += varBlocks.length || 1;
+  }
+
+  return { usedItems: totalQtyListed, soldRevenueUsd };
+}
+
+async function fetchMyeBaySellingXml(token) {
+  const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+    <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      ${creds}
+      <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList>
+      <SoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
+      <UnsoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></UnsoldList>
+    </GetMyeBaySellingRequest>`;
+  const { data } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
+    headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' },
+  });
+  return data;
+}
+
+// Calibrate the cycle-reset day-of-month against the real "used" count from Seller Hub.
+// Tries every day-of-month, finds the contiguous range of days whose resulting count matches,
+// and persists the smallest (earliest) day in that range — the tightest boundary consistent
+// with the data, since later items pushing the count higher would shrink the matching range.
+router.post('/selling-limits/calibrate', async (req, res) => {
+  try {
+    const actualUsed = parseInt(req.body?.actualUsed);
+    if (!Number.isFinite(actualUsed)) return res.status(400).json({ error: 'actualUsed (number) is required' });
+
+    const token = await getAccessToken();
+    const xmlResp = await fetchMyeBaySellingXml(token);
+    const today = new Date();
+
+    const matches = [];
+    for (let day = 1; day <= 28; day++) {
+      const monthStart = cycleStartFor(day, today);
+      const { usedItems } = countUsedItems(xmlResp, monthStart);
+      matches.push({ day, monthStart: monthStart.toISOString(), usedItems, isMatch: usedItems === actualUsed });
+    }
+
+    const matchingDays = matches.filter(m => m.isMatch).map(m => m.day);
+    if (!matchingDays.length) {
+      return res.status(404).json({ error: 'no_matching_cycle_day', message: `No day-of-month produces a count of ${actualUsed}`, attempts: matches });
+    }
+
+    const calibratedDay = Math.min(...matchingDays);
+    await EbayToken.findByIdAndUpdate('ebay', { limitCycleStartDay: calibratedDay }, { upsert: true, new: true });
+
+    res.json({
+      ok: true,
+      calibratedDay,
+      matchingDays,
+      cycleStart: cycleStartFor(calibratedDay, today).toISOString(),
+      message: `Cycle reset day calibrated to the ${calibratedDay}${['th','st','nd','rd'][(calibratedDay % 10 === 1 || calibratedDay % 10 === 2 || calibratedDay % 10 === 3) && ![11,12,13].includes(calibratedDay) ? calibratedDay % 10 : 0]} of each month.`,
+    });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Monthly selling limits usage ──────────────────────────────────
 router.get('/selling-limits', async (req, res) => {
   try {
@@ -1868,84 +1993,13 @@ router.get('/selling-limits', async (req, res) => {
     const itemLimit    = parseInt(process.env.EBAY_ITEM_LIMIT       || '200');
     const revLimitSgd  = parseFloat(process.env.EBAY_REVENUE_LIMIT_SGD || '8958.60');
 
-    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const xmlResp = await fetchMyeBaySellingXml(token);
 
-    // Fetch active + sold + unsold(ended) listings for this month
-    const xml = `<?xml version="1.0" encoding="utf-8"?>
-      <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-        ${creds}
-        <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList>
-        <SoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
-        <UnsoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></UnsoldList>
-      </GetMyeBaySellingRequest>`;
-
-    const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
-      headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-        'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' },
-    });
-
-    // eBay counts 1 per variation (not qty × variations). Parse each section separately:
-    // ActiveList = currently listed, SoldList = sold & ended, UnsoldList = ended with no sales.
-    let totalQtyListed = 0;
-    let soldRevenueUsd = 0;
-    let soldCount = 0;
-    const activeItemIds = new Set();
-    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-
-    // 1. Active listings: count qty per variation (eBay counts available + sold quantity per slot)
-    const activeSection = xmlResp.match(/<ActiveList>([\s\S]*?)<\/ActiveList>/)?.[1] || '';
-    for (const [, block] of [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
-      const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-      if (itemId) activeItemIds.add(itemId);
-      const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
-      if (varBlocks.length) {
-        for (const [, vb] of varBlocks) {
-          const qty  = parseInt(vb.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
-          const sold = parseInt(vb.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
-          totalQtyListed += qty + sold;
-          soldCount += sold;
-          if (sold) {
-            const price = parseFloat(vb.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
-            soldRevenueUsd += price * sold;
-          }
-        }
-      } else {
-        const qty  = parseInt(block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
-        const sold = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
-        totalQtyListed += qty + sold;
-        soldCount += sold;
-        if (sold) {
-          const price = parseFloat(block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
-          soldRevenueUsd += price * sold;
-        }
-      }
-    }
-
-    // 2. Sold & ended listings not in active list: count 1 per unique item (sold transactions)
-    const soldSection = xmlResp.match(/<SoldList>([\s\S]*?)<\/SoldList>/)?.[1] || '';
-    const countedSoldIds = new Set();
-    for (const [, tx] of [...soldSection.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)]) {
-      const itemId = tx.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-      if (!itemId || activeItemIds.has(itemId) || countedSoldIds.has(itemId)) continue;
-      const dateStr = tx.match(/<CreatedDate>([\s\S]*?)<\/CreatedDate>/)?.[1];
-      if (dateStr && new Date(dateStr) < monthStart) continue;
-      countedSoldIds.add(itemId);
-      totalQtyListed += 1;
-    }
-
-    // 3. Unsold/ended listings: count 1 per variation (eBay counts slots used, not qty)
-    const unsoldSection = xmlResp.match(/<UnsoldList>([\s\S]*?)<\/UnsoldList>/)?.[1] || '';
-    for (const [, block] of [...unsoldSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
-      const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-      if (!itemId || activeItemIds.has(itemId)) continue;
-      const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
-      if (startTime && new Date(startTime) < monthStart) continue;
-      const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
-      totalQtyListed += varBlocks.length || 1; // 1 per variation; 1 for single-item
-    }
-
-
-    const usedItems = totalQtyListed;
+    // eBay's selling-limit cycle resets on a fixed day-of-month it doesn't expose via any API.
+    // Use the calibrated day if we have one (see /selling-limits/calibrate); default to the 1st.
+    const tokenDoc = await EbayToken.findById('ebay');
+    const monthStart = cycleStartFor(tokenDoc?.limitCycleStartDay || 1);
+    const { usedItems, soldRevenueUsd } = countUsedItems(xmlResp, monthStart);
     const revLimitUsd = revLimitSgd * sgdToUsd;
 
     // Try Finances API for accurate revenue (requires sell.finances scope — granted after reconnect)
@@ -3352,6 +3406,54 @@ router.get('/listings/watchers', async (req, res) => {
   }
 
   res.json({ watchers: result });
+});
+
+// Batch endpoint: GET /api/ebay/listings/photo-status?ids=id1,id2,id3
+// Returns { [id]: { hasPhoto: bool, count: int } } — no user auth needed, uses Shopping API
+const photoStatusCache = new Map();
+const PHOTO_STATUS_TTL = 30 * 60 * 1000; // 30 min
+
+router.get('/listings/photo-status', async (req, res) => {
+  const rawIds = String(req.query.ids || '');
+  const ids = [...new Set(rawIds.split(',').map(s => s.replace(/\D/g, '')).filter(Boolean))];
+  if (!ids.length) return res.json({});
+
+  const result = {};
+  const uncached = [];
+  for (const id of ids) {
+    const cached = photoStatusCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) {
+      result[id] = { hasPhoto: cached.hasPhoto, count: cached.count };
+    } else {
+      uncached.push(id);
+    }
+  }
+
+  for (let i = 0; i < uncached.length; i += 20) {
+    const batch = uncached.slice(i, i + 20);
+    try {
+      const { data } = await axios.get('https://open.api.ebay.com/shopping', {
+        params: {
+          callname: 'GetMultipleItems',
+          responseencoding: 'JSON',
+          appid: process.env.EBAY_APP_ID,
+          version: '967',
+          ItemID: batch.join(','),
+          IncludeSelector: 'Details',
+        },
+        timeout: 10000,
+      });
+      (data.Item || []).forEach(item => {
+        const pics = item.PictureURL || [];
+        const entry = { hasPhoto: pics.length > 0, count: pics.length };
+        result[item.ItemID] = entry;
+        photoStatusCache.set(item.ItemID, { ...entry, expiresAt: Date.now() + PHOTO_STATUS_TTL });
+      });
+    } catch { /* skip batch on error */ }
+    batch.forEach(id => { if (!result[id]) result[id] = { hasPhoto: null, count: 0 }; });
+  }
+
+  res.json(result);
 });
 
 // ── One-time backfill: populate listedAt for already-listed products ──
