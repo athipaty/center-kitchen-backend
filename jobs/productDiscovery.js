@@ -333,31 +333,36 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
 
         const variants = info.variants?.filter(v => v.asin) || [];
 
-        if (variants.length === 0) {
-          // Single product — 1 slot, use base price
-          if (info.price >= 50) continue; // only source products costing under $50
-          const profit = calcProfit(info.price, saleMode);
-          if (profit <= 0) continue;
-          qualified.push({
-            asin, url, info, baseProfit: profit,
-            variantsToAdd: [{ asin, url, label: null, price: info.price, image: info.image, images: info.images }],
-          });
-        } else {
-          // Multi-variant — each variant = 1 slot
-          // Use base price for all variants (individual prices fetched lazily below if needed)
-          const variantList = variants.map(v => ({
-            asin: v.asin,
-            url: `https://www.amazon.com/dp/${v.asin}`,
-            label: v.label,
-            price: v.price || info.price, // prefer per-variant price, fall back to base
-            image: v.image || info.image,
-            images: v.image ? [v.image, ...(info.images || [])] : (info.images || []),
-          }));
-          if (info.price >= 50) continue; // only source products costing under $50
-          const baseProfit = calcProfit(info.price, saleMode);
-          if (baseProfit <= 0) continue;
-          qualified.push({ asin, url, info, baseProfit, variantsToAdd: variantList });
+        // Require 4–10 variants — single products and small-variant products are skipped
+        if (variants.length < 4) {
+          console.log(`productDiscovery: skipping ${asin} "${info.title.slice(0, 40)}" — ${variants.length} variant(s) (need 4–10)`);
+          continue;
         }
+
+        // Build variant list; if more than 10, keep the best 10:
+        // prefer variants with their own price (more reliable), then lowest cost (= highest profit)
+        let variantList = variants.map(v => ({
+          asin: v.asin,
+          url: `https://www.amazon.com/dp/${v.asin}`,
+          label: v.label,
+          price: v.price || info.price,
+          image: v.image || info.image,
+          images: v.image ? [v.image, ...(info.images || [])] : (info.images || []),
+          _hasOwnPrice: !!v.price,
+        }));
+        if (variantList.length > 10) {
+          variantList.sort((a, b) =>
+            (Number(b._hasOwnPrice) - Number(a._hasOwnPrice)) || (a.price - b.price)
+          );
+          variantList = variantList.slice(0, 10);
+          console.log(`productDiscovery: ${asin} has ${variants.length} variants → trimmed to best 10`);
+        }
+        const cleanVariantList = variantList.map(({ _hasOwnPrice: _, ...v }) => v);
+
+        if (info.price >= 50) continue; // only source products costing under $50
+        const baseProfit = calcProfit(info.price, saleMode);
+        if (baseProfit <= 0) continue;
+        qualified.push({ asin, url, info, baseProfit, variantsToAdd: cleanVariantList });
 
         console.log(`productDiscovery: qualified ${asin} — ${info.variants?.length || 0} variant(s), baseProfit=$${calcProfit(info.price, saleMode)}, rating=${info.rating}, reviews=${info.reviewCount}, newRelease=${info.isNewRelease}`);
         await new Promise(r => setTimeout(r, 800));
@@ -375,7 +380,7 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
     qualified.sort((a, b) => b.baseProfit - a.baseProfit);
 
     // ── 4. Fill slots — each variant = 1 slot, cap + trim per product ────────
-    const MAX_VARIANTS_PER_PRODUCT = opts.maxVariantsPerProduct ?? 6;
+    const MAX_VARIANTS_PER_PRODUCT = opts.maxVariantsPerProduct ?? 10;
     const toProcess = [];
     let slotsRemaining = slotsToFill;
 
