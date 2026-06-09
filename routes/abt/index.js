@@ -23,7 +23,8 @@ const AbtComplaint = require('../../models/abt/AbtComplaint')
 const AbtDocument = require('../../models/abt/AbtDocument')
 const AbtPage     = require('../../models/abt/AbtPage')
 const AbtVisitor  = require('../../models/abt/AbtVisitor')
-const AbtBanner   = require('../../models/abt/AbtBanner')
+const AbtBanner          = require('../../models/abt/AbtBanner')
+const AbtContactMessage  = require('../../models/abt/AbtContactMessage')
 
 // â”€â”€ Cloudinary setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 cloudinary.config({
@@ -1305,6 +1306,48 @@ router.get('/facebook-page', async (req, res) => {
     _fbCache   = data
     _fbCacheAt = Date.now()
     res.json({ data })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONTACT MESSAGES
+// ═══════════════════════════════════════════════════════════════════════════
+
+router.get('/contact-messages', requireAuth, async (req, res) => {
+  try {
+    const items = await AbtContactMessage.find().sort({ createdAt: -1 })
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/contact-messages', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtContactMessage.create(req.body)
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/contact-messages/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtContactMessage.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/contact-messages/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtContactMessage.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
