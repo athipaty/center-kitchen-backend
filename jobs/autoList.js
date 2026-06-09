@@ -8,17 +8,9 @@
 const axios = require('axios');
 const Product = require('../models/tracker/Product');
 const TrackerSettings = require('../models/tracker/TrackerSettings');
+const { calcEbayPrice } = require('./ebayPriceSync');
 
 const BASE = `http://localhost:${process.env.PORT || 5000}`;
-
-const EBAY_FEE = 0.1325, FIXED_FEE = 0.30, PROMO = 0.05, MIN_PROFIT = 4.50, AMAZON_TAX = 0.085;
-
-function calcEbayPrice(cost, saleMode = false) {
-  const c = cost * (1 + AMAZON_TAX);
-  if (saleMode) return Math.floor((c + FIXED_FEE) / (1 - EBAY_FEE - PROMO - 0.02)) + 0.99;
-  const m = c < 10 ? 2.2 : c < 20 ? 1.7 : c < 35 ? 1.55 : c < 60 ? 1.45 : 1.35;
-  return Math.floor(Math.max(c * m, (c + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE))) + 0.99;
-}
 
 // Returns the two ambiguous labels if any variant label is a substring of another.
 // e.g. "Yellow" inside "2pcs Yellow" → they clash on eBay because eBay normalises
@@ -162,11 +154,18 @@ async function _runAutoList(products, io) {
         variantCloudinaryImages.push(data.cloudinaryUrls || []);
         variantCloudinaryFolders.push(`ebay-listings/${varSlug}`);
       } catch {
-        variantCloudinaryImages.push(varImgs);
+        // Don't fall back to Amazon CDN URLs — eBay's image fetcher is blocked by Amazon and
+        // would silently create a blank-photo listing. Push empty so the abort guard below fires.
+        variantCloudinaryImages.push([]);
         variantCloudinaryFolders.push(null);
       }
     }
     const allCloudinaryUrls = [...new Set(variantCloudinaryImages.flat())].slice(0, 12);
+    if (!allCloudinaryUrls.length) {
+      const msg = 'No product images could be uploaded to Cloudinary — listing aborted to prevent a blank-photo eBay listing. Check Cloudinary credentials and retry.';
+      emit('tracker:auto-list:error', { error: msg });
+      throw new Error(msg);
+    }
 
     // ── 2. SEO title (Claude Haiku — cheap) ──────────────────────────────
     emit('tracker:auto-list:step', { step: 'title' });

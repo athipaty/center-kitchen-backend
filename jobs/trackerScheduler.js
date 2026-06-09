@@ -397,7 +397,7 @@ async function runAutoRestock() {
     const to   = new Date().toISOString();
 
     const { data: ordersXml } = await tradingPost('GetOrders',
-      `<GetOrdersRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<CreateTimeFrom>${from}</CreateTimeFrom><CreateTimeTo>${to}</CreateTimeTo><OrderStatus>Active</OrderStatus><DetailLevel>ReturnAll</DetailLevel></GetOrdersRequest>`
+      `<GetOrdersRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<CreateTimeFrom>${from}</CreateTimeFrom><CreateTimeTo>${to}</CreateTimeTo><OrderStatus>All</OrderStatus><DetailLevel>ReturnAll</DetailLevel></GetOrdersRequest>`
     );
 
     // Extract (ItemID, VariationSpecifics) pairs from all transactions
@@ -473,8 +473,10 @@ function start(socketIo) {
   cron.schedule("*/20 * * * *", runPendingAutoListRetry);
   // Also run once shortly after startup to catch anything stuck from the last session
   setTimeout(runPendingAutoListRetry, 60 * 1000);
-  // Auto-fill slots: if active listings < 175, discover + list 1 new product per hour
-  cron.schedule("0 * * * *", runHourlySlotFill);
+  // Auto-fill slots: if active listings < 175, discover + list 1 new product per hour.
+  // Runs at :30 (not :00) to avoid colliding with runAutoEndZeroViews at 2:00am which
+  // also chains into runProductDiscovery.
+  cron.schedule("30 * * * *", runHourlySlotFill);
   // Orphan cleanup every 6 hours — ends any active eBay listings not in the tracker
   cron.schedule("0 */6 * * *", runOrphanCleanup);
   // Also run once shortly after startup to catch anything from the last session

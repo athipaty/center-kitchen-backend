@@ -6,11 +6,12 @@ const { fetchProduct, extractAsin } = require('../scraper');
 
 const { calcEbayPrice, detectVariantDimension } = require('./autoList');
 
-const EBAY_FEE = 0.1325, FIXED_FEE = 0.30;
+const EBAY_FEE = 0.1325, FIXED_FEE = 0.30, AMAZON_TAX = 0.085;
 
 function calcProfit(cost, saleMode) {
   const cp = calcEbayPrice(cost, saleMode);
-  return +(cp - cost - (cp * EBAY_FEE + FIXED_FEE)).toFixed(2);
+  const trueCost = cost * (1 + AMAZON_TAX);
+  return +(cp - trueCost - (cp * EBAY_FEE + FIXED_FEE)).toFixed(2);
 }
 
 // Returns the 5 most meaningful words from a product title (used for similarity check)
@@ -210,15 +211,23 @@ async function fetchEbayViews(listingIds, token) {
 // slotsToFill comes directly from the delete job — no selling-limits API call needed.
 // Each variant counts as 1 slot. Multi-variant products are trimmed to fit remaining slots.
 // opts.maxVariantsPerProduct caps how many variants one product can consume (default 6).
+let _discoveryRunning = false;
+
 async function runProductDiscovery(io, slotsToFill, opts = {}) {
   if (!slotsToFill || slotsToFill <= 0) {
     console.log('productDiscovery: 0 slots freed, skipping');
     return;
   }
+  if (_discoveryRunning) {
+    console.log('productDiscovery: already running, skipping concurrent trigger');
+    return;
+  }
+  _discoveryRunning = true;
 
   const scraperKey = process.env.SCRAPER_API_KEY;
   if (!scraperKey) {
     console.log('productDiscovery: no SCRAPER_API_KEY, skipping');
+    _discoveryRunning = false;
     return;
   }
 
@@ -229,10 +238,13 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
     const saleMode = settings?.saleModeActive ?? false;
 
     // ── 0. Retry any products already in tracker but not yet listed ───────
-    // These are left over from a previous run that hit the selling limit (or
-    // whose scheduleGroupAutoList debounce timer was lost on a server restart).
-    const { retryPendingGroups } = require('./autoList');
-    await retryPendingGroups(io);
+    // Skip when maxProducts is set (e.g. hourly slot filler with maxProducts:1) — retryPendingGroups
+    // has no own cap and would list all stuck groups, blowing past the 1-per-hour guarantee.
+    // Stuck groups are picked up every 20 min by runPendingAutoListRetry in trackerScheduler.
+    if (!opts.maxProducts) {
+      const { retryPendingGroups } = require('./autoList');
+      await retryPendingGroups(io);
+    }
 
     // ── 1. Get top-viewed listings ────────────────────────────────────────
     const { getAccessToken } = require('./ebayPriceSync');
@@ -462,6 +474,7 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
   } catch (e) {
     console.error('productDiscovery: fatal error:', e.message);
   } finally {
+    _discoveryRunning = false;
     // Always stamp the run time so the UI/monitor can tell it completed
     await TrackerSettings.findByIdAndUpdate('tracker',
       { $set: { lastDiscoveryRun: new Date() } },
