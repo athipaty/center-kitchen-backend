@@ -512,13 +512,33 @@ async function bgFetchEgp(anounceType) {
     const seeds = [
       {
         link: 'https://process.gprocurement.go.th/egp2procmainWeb/jsp/procsearch.sch?servlet=gojsp&proc_id=ShowHTMLFile&processFlows=Procure&projectId=69059483466&templateType=W2&temp_Announ=A&temp_itemNo=0&seqNo=1',
-        anounceType: 'W0',
-        title: 'ซื้ออาหารเสริมนม สำหรับเด็กนักเรียนของโรงเรียนชุมชนบ้านแม่ใส ภาคเรียนที่ ๑/๒๕๖๙ ประจำปีงบประมาณ ๒๕๖๙',
-        winner: 'องค์การส่งเสริมกิจการโคนมแห่งประเทศไทย (อ.ส.ค.) (ผู้ผลิต)',
-        amount: 111670,
-        method: 'วิธีเฉพาะเจาะจง',
-        date: new Date('2026-05-28'),
-        enriched: true,
+        anounceType: 'W0', title: 'ซื้ออาหารเสริมนม สำหรับเด็กนักเรียนของโรงเรียนชุมชนบ้านแม่ใส ภาคเรียนที่ ๑/๒๕๖๙ ประจำปีงบประมาณ ๒๕๖๙',
+        winner: 'องค์การส่งเสริมกิจการโคนมแห่งประเทศไทย (อ.ส.ค.) (ผู้ผลิต)', amount: 111670, method: 'วิธีเฉพาะเจาะจง', date: new Date('2026-05-28'), enriched: true,
+      },
+      {
+        link: 'https://process.gprocurement.go.th/egp2procmainWeb/jsp/procsearch.sch?servlet=gojsp&proc_id=ShowHTMLFile&processFlows=Procure&projectId=69059483666&templateType=W2&temp_Announ=A&temp_itemNo=0&seqNo=1',
+        anounceType: 'W0', title: 'ซื้ออาหารเสริมนม สำหรับเด็กนักเรียนของศูนย์พัฒนาเด็กเล็ก อบต.แม่ใส ภาคเรียนที่ ๑/๒๕๖๙ ประจำปีงบประมาณ ๒๕๖๙',
+        winner: 'องค์การส่งเสริมกิจการโคนมแห่งประเทศไทย (อ.ส.ค.) (ผู้ผลิต)', amount: 24567.40, method: 'วิธีเฉพาะเจาะจง', date: new Date('2026-05-28'), enriched: true,
+      },
+      {
+        link: 'https://process.gprocurement.go.th/egp2procmainWeb/jsp/procsearch.sch?servlet=gojsp&proc_id=ShowHTMLFile&processFlows=Procure&projectId=69059217606&templateType=W2&temp_Announ=A&temp_itemNo=0&seqNo=1',
+        anounceType: 'W0', title: 'จ้างซ่อมแซมฝายตำบลแม่ใส อำเภอเมืองพะเยา จังหวัดพะเยา',
+        winner: 'ห้างหุ้นส่วนจำกัด อินทร์จันทร์ ก่อสร้าง (ให้บริการ)', amount: 163000, method: 'วิธีเฉพาะเจาะจง', date: new Date('2026-05-29'), enriched: true,
+      },
+      {
+        link: 'https://process.gprocurement.go.th/egp2procmainWeb/jsp/procsearch.sch?servlet=gojsp&proc_id=ShowHTMLFile&processFlows=Procure&projectId=69059399173&templateType=W2&temp_Announ=A&temp_itemNo=0&seqNo=1',
+        anounceType: 'W0', title: 'จ้างโครงการปรับปรุงรางระบายน้ำ แบบวางท่อระบายน้ำ ค.ส.ล. พร้อมบ่อพัก ค.ส.ล. ถนนสายปฏิบัติธรรม บ้านแม่ใสหัวขัว หมู่ที่ ๘ ตำบลแม่ใส',
+        winner: 'บริษัท เวสสุวรรณ คอนสตรัคชั่น (1984) จำกัด (ขายส่ง,ขายปลีก,ให้บริการ)', amount: 485700, method: 'วิธีเฉพาะเจาะจง', date: new Date('2026-05-29'), enriched: true,
+      },
+      {
+        link: 'https://process.gprocurement.go.th/egp2procmainWeb/jsp/procsearch.sch?servlet=gojsp&proc_id=ShowHTMLFile&processFlows=Procure&projectId=69059471444&templateType=W2&temp_Announ=D&temp_itemNo=1&seqNo=2',
+        anounceType: 'W0', title: 'ยกเลิกประกาศผู้ได้รับการคัดเลือก จ้างโครงการกำจัดวัชพืชข้างคลองส่งน้ำ บ้านบ่อแฮ้ว หมู่ที่ ๕ ตำบลแม่ใส',
+        method: 'วิธีเฉพาะเจาะจง', date: new Date('2026-05-28'), enriched: true,
+      },
+      {
+        link: 'https://process.gprocurement.go.th/egp2procmainWeb/jsp/procsearch.sch?servlet=gojsp&proc_id=ShowHTMLFile&processFlows=Procure&projectId=69059471444&templateType=W2&temp_Announ=A&temp_itemNo=0&seqNo=3',
+        anounceType: 'W0', title: 'จ้างโครงการกำจัดวัชพืชข้างคลองส่งน้ำ บ้านบ่อแฮ้ว หมู่ที่ ๕ ตำบลแม่ใส',
+        winner: 'นายอุดม หลวงบุญมี', amount: 13300, method: 'วิธีเฉพาะเจาะจง', date: new Date('2026-05-28'), enriched: true,
       },
     ]
     for (const item of seeds) {
