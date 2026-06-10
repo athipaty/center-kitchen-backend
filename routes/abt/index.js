@@ -26,6 +26,7 @@ const AbtVisitor  = require('../../models/abt/AbtVisitor')
 const AbtBanner          = require('../../models/abt/AbtBanner')
 const AbtContactMessage  = require('../../models/abt/AbtContactMessage')
 const AbtEgpItem         = require('../../models/abt/AbtEgpItem')
+const AbtNotice          = require('../../models/abt/AbtNotice')
 
 // â”€â”€ Cloudinary setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 cloudinary.config({
@@ -505,6 +506,50 @@ async function bgFetchEgp(anounceType) {
     console.error('[egp-rss bgFetch] error:', err.message)
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTICES (หัวข้อประกาศ)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/notices', async (req, res) => {
+  try {
+    const filter = req.query.all === '1' ? {} : { isActive: true }
+    if (req.query.topic) filter.topic = req.query.topic
+    const items = await AbtNotice.find(filter).sort({ publishedAt: -1 })
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/notices', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtNotice.create(req.body)
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/notices/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtNotice.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/notices/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtNotice.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
 // Seed known items that aren't in the RSS feed
 ;(async () => {
