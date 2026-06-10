@@ -25,6 +25,7 @@ const AbtPage     = require('../../models/abt/AbtPage')
 const AbtVisitor  = require('../../models/abt/AbtVisitor')
 const AbtBanner          = require('../../models/abt/AbtBanner')
 const AbtContactMessage  = require('../../models/abt/AbtContactMessage')
+const AbtEgpItem         = require('../../models/abt/AbtEgpItem')
 
 // â”€â”€ Cloudinary setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 cloudinary.config({
@@ -363,19 +364,12 @@ ${content}
   }
 })
 
-// e-GP RSS proxy — persistent MongoDB cache survives server restarts
-// (Render free tier restarts after idle, wiping any in-memory state)
+// ── e-GP helpers ──────────────────────────────────────────────────────────────
 
 function isMaintenanceText(str) {
   return /ไม่พร้อมให้บริการ|ปิดปรับปรุง|not available|maintenance/i.test(str || '')
 }
 
-async function egpCacheRead(key) {
-  const doc = await AbtSettings.findOne({ key: `egp_cache_${key}` })
-  return doc?.value || null
-}
-
-// ── Enrich one e-GP item by fetching its announcement page ───────────────────
 function thaiToNum(str) {
   if (!str) return null
   const thai = '๐๑๒๓๔๕๖๗๘๙'
@@ -385,7 +379,7 @@ function thaiToNum(str) {
 }
 
 async function enrichEgpItem(item) {
-  if (!item.link || item.winner != null) return item  // already enriched or no link
+  if (!item.link || item.enriched) return null
   try {
     const { data: buf } = await require('axios').get(item.link, {
       responseType: 'arraybuffer', timeout: 15000,
@@ -394,82 +388,20 @@ async function enrichEgpItem(item) {
     const text = new TextDecoder('windows-874').decode(buf)
       .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
 
-    // ชื่อโครงการ — text after "ประกาศผู้ชนะ..." up to "นั้น|โดย|ตาม"
     const titleM  = text.match(/ประกาศผู้ชนะการเสนอราคา\s+(.+?)\s+(?:นั้น|โดย|ตาม)/)
-    // ผู้ชนะ — "ผู้ได้รับการคัดเลือก ได้แก่ X โดยเสนอ..."
     const winnerM = text.match(/ผู้(?:ได้รับการคัดเลือก|ชนะการเสนอราคา)[^ก-๙]*ได้แก่\s+(.+?)\s+(?:โดยเสนอราคา|ซึ่งมี|งวด|เป็นเงิน)/)
-    // วงเงิน — "เป็นเงินทั้งสิ้น 111,670.00 บาท"
     const amountM = text.match(/เป็นเงินทั้งสิ้น\s+([๐-๙\d,.]+)\s+บาท/)
-    // วิธีการ
     const methodM = text.match(/โดย(วิธี[ก-๙a-zA-Z\s\-]+?)(?=\s|$|[,\.])/)
 
     return {
-      ...item,
-      title:  titleM  ? titleM[1].trim()  : item.title,
+      title:  titleM  ? titleM[1].trim()  : undefined,
       winner: winnerM ? winnerM[1].trim() : null,
       amount: amountM ? thaiToNum(amountM[1]) : null,
       method: methodM ? methodM[1].trim() : null,
+      enriched: true,
     }
   } catch {
-    return item
-  }
-}
-
-function sortByDateDesc(items) {
-  return [...items].sort((a, b) => {
-    const da = a.date ? new Date(a.date) : new Date(0)
-    const db = b.date ? new Date(b.date) : new Date(0)
-    return db - da
-  })
-}
-
-async function egpCacheWrite(key, newItems) {
-  // Merge with existing cache so we accumulate all announcements over time.
-  const existing   = await egpCacheRead(key)
-  const oldItems   = existing?.items || []
-  const knownLinks = new Set(oldItems.map(i => i.link).filter(Boolean))
-  const fresh      = newItems.filter(i => !knownLinks.has(i.link))
-
-  // Auto-enrich fresh items by fetching their detail pages (max 5 at a time)
-  const toEnrich = fresh.slice(0, 5)
-  const enriched = []
-  for (const item of toEnrich) {
-    enriched.push(await enrichEgpItem(item))
-    if (toEnrich.length > 1) await new Promise(r => setTimeout(r, 500))
-  }
-  const rest = fresh.slice(5)  // unenriched tail (will be enriched next cron run)
-
-  const merged = sortByDateDesc([...enriched, ...rest, ...oldItems])
-
-  await AbtSettings.findOneAndUpdate(
-    { key: `egp_cache_${key}` },
-    { value: { items: merged, cachedAt: new Date().toISOString() } },
-    { upsert: true }
-  )
-}
-
-// Re-enrich existing items that never got detail data (runs in background)
-async function enrichPending(key) {
-  const cached = await egpCacheRead(key)
-  if (!cached?.items?.length) return
-  let changed = false
-  const updated = []
-  for (const item of cached.items) {
-    if (!item.winner && item.link) {
-      const rich = await enrichEgpItem(item)
-      updated.push(rich)
-      changed = changed || rich.winner !== item.winner
-      await new Promise(r => setTimeout(r, 500))
-    } else {
-      updated.push(item)
-    }
-  }
-  if (changed) {
-    await AbtSettings.findOneAndUpdate(
-      { key: `egp_cache_${key}` },
-      { value: { items: updated, cachedAt: cached.cachedAt } },
-      { upsert: true }
-    )
+    return { enriched: true }  // mark done even on failure so we don't retry forever
   }
 }
 
@@ -477,7 +409,6 @@ async function enrichPending(key) {
 const EGP_RSS_URL = 'https://process3.gprocurement.go.th/EPROCRssFeedWeb/egpannouncerss.xml'
 
 async function fetchEgpXml(params) {
-  // Try up to 2 times — first request often wakes up the Render server + e-GP
   let lastErr
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -485,42 +416,39 @@ async function fetchEgpXml(params) {
         { params, timeout: 30000, maxRedirects: 5, responseType: 'arraybuffer',
           headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' } }
       )
-      // e-GP RSS is Windows-874 (TIS-620) encoded — decode to UTF-8
       return new TextDecoder('windows-874').decode(buf)
     } catch (err) {
       lastErr = err
-      if (attempt === 0) await new Promise(r => setTimeout(r, 2000)) // brief pause before retry
+      if (attempt === 0) await new Promise(r => setTimeout(r, 2000))
     }
   }
   throw lastErr
 }
 
-router.get('/egp-rss', async (req, res) => {
-  const cheerio  = require('cheerio')
-  // Read dept ID from settings so admin can change it without redeploying
-  // deptsubId = 10-digit sub-unit code (e.g. 0300400070)
-  // deptId    = 4-digit main dept code  (e.g. 0304)
-  const deptSetting    = await AbtSettings.findOne({ key: 'egpDeptSubId' })
-  const deptIdSetting  = await AbtSettings.findOne({ key: 'egpDeptId' })
-  const DEPT_SUB_ID    = deptSetting?.value   || '1509903843'
-  const DEPT_ID        = deptIdSetting?.value || ''
-  const cacheKey = req.query.anounceType || ''
-  const now      = new Date().toISOString()
+// Fetch live RSS and save new items to AbtEgpItem — runs in background after response
+async function bgFetchEgp(anounceType) {
+  const cheerio = require('cheerio')
+  const deptSetting   = await AbtSettings.findOne({ key: 'egpDeptSubId' })
+  const deptIdSetting = await AbtSettings.findOne({ key: 'egpDeptId' })
+  const DEPT_SUB_ID   = deptSetting?.value  || '1509903843'
+  const DEPT_ID       = deptIdSetting?.value || ''
+  const metaKey       = `egp_meta_${anounceType}`
+  const now           = new Date().toISOString()
+
+  const params = {}
+  if (DEPT_SUB_ID) params.deptsubId = DEPT_SUB_ID
+  else if (DEPT_ID) params.deptId   = DEPT_ID
+  if (anounceType) params.anounceType = anounceType
+
   try {
-    const params = {}
-    if (DEPT_SUB_ID) params.deptsubId = DEPT_SUB_ID
-    else if (DEPT_ID) params.deptId   = DEPT_ID
-    // Always specify anounceType — omitting it returns only D0 (ประกาศเชิญชวน)
-    if (req.query.anounceType) params.anounceType = req.query.anounceType
     const xml = await fetchEgpXml(params)
     const $ = cheerio.load(xml, { xmlMode: true })
 
     const channelTitle = $('channel > title').first().text()
     const channelDesc  = $('channel > description').first().text()
-
-    const items = []
+    const rssItems = []
     $('item').each((_, el) => {
-      items.push({
+      rssItems.push({
         title: $(el).find('title').text(),
         link:  $(el).find('link').text(),
         date:  $(el).find('pubDate').text(),
@@ -528,43 +456,81 @@ router.get('/egp-rss', async (req, res) => {
       })
     })
 
-    // e-GP returns fake items with maintenance text during downtime — detect it
-    const allText = [channelTitle, channelDesc, ...items.map(i => i.title)].join(' ')
-    if (isMaintenanceText(allText) || (items.length > 0 && items.every(i => isMaintenanceText(i.title)))) {
-      const notice = items.map(i => i.title).filter(Boolean).join(' — ')
-        || channelTitle
-        || 'ระบบ e-GP ไม่พร้อมให้บริการในขณะนี้'
-      const cached = await egpCacheRead(cacheKey)
-      if (cached?.items?.length > 0) {
-        return res.json({ items: cached.items, stale: true, staleAt: cached.cachedAt, notice })
-      }
-      return res.status(503).json({ maintenance: true, notice, hours: '17:01–08:59 น.' })
+    const allText = [channelTitle, channelDesc, ...rssItems.map(i => i.title)].join(' ')
+    if (isMaintenanceText(allText) || (rssItems.length > 0 && rssItems.every(i => isMaintenanceText(i.title)))) {
+      const notice = rssItems.map(i => i.title).filter(Boolean).join(' — ')
+        || channelTitle || 'ระบบ e-GP ไม่พร้อมให้บริการในขณะนี้'
+      await AbtSettings.findOneAndUpdate(
+        { key: metaKey },
+        { value: { maintenance: true, notice, checkedAt: now } },
+        { upsert: true }
+      )
+      return
     }
 
-    // Feed returned 0 items — serve last known cache rather than an empty page
-    if (items.length === 0) {
-      const cached = await egpCacheRead(cacheKey)
-      if (cached?.items?.length > 0) {
-        return res.json({ items: cached.items, stale: true, staleAt: cached.cachedAt,
-          notice: 'ยังไม่มีประกาศใหม่ในระบบ e-GP แสดงข้อมูลล่าสุดที่มี' })
-      }
-      return res.json({ items: [], fetchedAt: now, live: true })
+    if (rssItems.length > 0) {
+      // Upsert — $setOnInsert means existing enriched items are never overwritten
+      await AbtEgpItem.bulkWrite(
+        rssItems.map(item => ({
+          updateOne: {
+            filter: { link: item.link },
+            update: { $setOnInsert: {
+              anounceType,
+              title: item.title,
+              date:  item.date ? new Date(item.date) : null,
+              desc:  item.desc,
+              enriched: false,
+            }},
+            upsert: true,
+          }
+        })),
+        { ordered: false }
+      )
     }
 
-    // Real data — merge+enrich new items, persist to MongoDB
-    await egpCacheWrite(cacheKey, items)
-    const saved = await egpCacheRead(cacheKey)
-    res.json({ items: saved?.items || items, fetchedAt: now, live: true })
+    await AbtSettings.findOneAndUpdate(
+      { key: metaKey },
+      { value: { maintenance: false, lastFetchAt: now } },
+      { upsert: true }
+    )
 
-    // Background: enrich any older items that still lack detail data
-    setImmediate(() => enrichPending(cacheKey).catch(() => {}))
+    // Enrich up to 5 new items that don't have winner/amount yet
+    const pending = await AbtEgpItem.find({ anounceType, enriched: false }).limit(5).lean()
+    for (const item of pending) {
+      const update = await enrichEgpItem(item)
+      if (update) await AbtEgpItem.findByIdAndUpdate(item._id, update)
+      if (pending.length > 1) await new Promise(r => setTimeout(r, 500))
+    }
   } catch (err) {
-    const cached = await egpCacheRead(cacheKey).catch(() => null)
-    if (cached?.items?.length > 0) {
-      return res.json({ items: cached.items, stale: true, staleAt: cached.cachedAt })
-    }
-    res.status(502).json({ error: 'ไม่สามารถเชื่อมต่อระบบ e-GP ได้: ' + err.message })
+    console.error('[egp-rss bgFetch] error:', err.message)
   }
+}
+
+router.get('/egp-rss', async (req, res) => {
+  const anounceType = req.query.anounceType || ''
+  const metaKey     = `egp_meta_${anounceType}`
+
+  // Serve from DB immediately, then refresh in background
+  const [items, meta] = await Promise.all([
+    AbtEgpItem.find({ anounceType }).sort({ date: -1 }).limit(100).lean(),
+    AbtSettings.findOne({ key: metaKey }),
+  ])
+
+  const m = meta?.value || {}
+
+  if (items.length === 0 && m.maintenance) {
+    res.status(503).json({ maintenance: true, notice: m.notice, hours: '17:01–08:59 น.' })
+  } else {
+    res.json({
+      items,
+      fetchedAt: m.maintenance ? undefined : (m.lastFetchAt || null),
+      stale:     m.maintenance && items.length > 0 ? true : undefined,
+      staleAt:   m.maintenance && items.length > 0 ? m.checkedAt : undefined,
+      notice:    m.maintenance ? m.notice : undefined,
+    })
+  }
+
+  setImmediate(() => bgFetchEgp(anounceType).catch(() => {}))
 })
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
