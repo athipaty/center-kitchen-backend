@@ -506,6 +506,33 @@ async function bgFetchEgp(anounceType) {
   }
 }
 
+// Seed known items that aren't in the RSS feed
+;(async () => {
+  try {
+    const seeds = [
+      {
+        link: 'https://process.gprocurement.go.th/egp2procmainWeb/jsp/procsearch.sch?servlet=gojsp&proc_id=ShowHTMLFile&processFlows=Procure&projectId=69059483466&templateType=W2&temp_Announ=A&temp_itemNo=0&seqNo=1',
+        anounceType: 'W0',
+        title: 'ซื้ออาหารเสริมนม สำหรับเด็กนักเรียนของโรงเรียนชุมชนบ้านแม่ใส ภาคเรียนที่ ๑/๒๕๖๙ ประจำปีงบประมาณ ๒๕๖๙',
+        winner: 'องค์การส่งเสริมกิจการโคนมแห่งประเทศไทย (อ.ส.ค.) (ผู้ผลิต)',
+        amount: 111670,
+        method: 'วิธีเฉพาะเจาะจง',
+        date: new Date('2026-05-28'),
+        enriched: true,
+      },
+    ]
+    for (const item of seeds) {
+      await AbtEgpItem.updateOne(
+        { link: item.link },
+        { $setOnInsert: item },
+        { upsert: true }
+      )
+    }
+  } catch (e) {
+    console.error('[egp seed]', e.message)
+  }
+})()
+
 router.get('/egp-rss', async (req, res) => {
   const anounceType = req.query.anounceType || ''
   const metaKey     = `egp_meta_${anounceType}`
