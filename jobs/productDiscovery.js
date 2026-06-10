@@ -334,7 +334,7 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
     const qualified = [];
 
     for (const { asin, rating: preRating, reviewCount: preReviews, price: prePrice, fromNewReleasePage } of candidates) {
-      if (qualified.length >= Math.max(slotsToFill * 3, 5)) break; // enough candidates, stop scraping
+      if (qualified.length >= Math.max(slotsToFill * 2, 3)) break; // enough candidates, stop scraping
 
       // Skip structured fetch (5 credits) if pre-filter data already disqualifies
       if (preRating  > 0 && preRating  < 4)  continue;

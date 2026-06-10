@@ -8,9 +8,10 @@ const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 let io = null;
 
 // Adaptive interval based on price stability:
-// - Recently changed (last 3 days)  → 3–6h  (watch actively)
-// - Unchanged 3–7 days              → 8–14h (moderate)
-// - Unchanged 7+ days               → 20–28h (slow — saves ~4× ScraperAPI calls)
+// - Recently changed (last 3 days)  → 3–6h   (watch actively)
+// - Unchanged 3–7 days              → 8–14h  (moderate)
+// - Unchanged 7–14 days             → 36–48h (slow — saves ~6× ScraperAPI calls)
+// - Unchanged 14+ days              → 48–72h (very slow — prices rarely move)
 function adaptiveInterval(product) {
   // Use the last history entry's timestamp regardless of how many entries exist.
   // The old check (history.length >= 2) forced daysSinceChange=0 for products that
@@ -19,7 +20,8 @@ function adaptiveInterval(product) {
   const daysSinceChange = lastEntry?.createdAt
     ? (Date.now() - new Date(lastEntry.createdAt).getTime()) / 86400000
     : 0;
-  if (daysSinceChange >= 7)  return (Math.random() * 8  + 20) * 3600 * 1000; // 20–28h
+  if (daysSinceChange >= 14) return (Math.random() * 24 + 48) * 3600 * 1000; // 48–72h
+  if (daysSinceChange >= 7)  return (Math.random() * 12 + 36) * 3600 * 1000; // 36–48h
   if (daysSinceChange >= 3)  return (Math.random() * 6  + 8)  * 3600 * 1000; // 8–14h
   return                            (Math.random() * 3  + 3)  * 3600 * 1000; // 3–6h
 }
@@ -42,7 +44,7 @@ async function checkProduct(p, saleMode = false) {
   try {
     // Use price-only direct fetch for routine checks — saves ScraperAPI credits.
     // Full scrape (priceOnly=false) only when metadata is missing or on first check.
-    const needsFullScrape = !p.title || !p.image || !p.upc || (p.failCount || 0) > 0;
+    const needsFullScrape = !p.title || !p.image || !p.upc;
     const info = await fetchProduct(p.url, { priceOnly: !needsFullScrape });
     const oldPrice = p.current;
     const dropped = info.price < oldPrice;
@@ -483,10 +485,10 @@ function start(socketIo) {
   cron.schedule("*/20 * * * *", runPendingAutoListRetry);
   // Also run once shortly after startup to catch anything stuck from the last session
   setTimeout(runPendingAutoListRetry, 60 * 1000);
-  // Auto-fill slots: if active listings < 175, discover + list 1 new product per hour.
+  // Auto-fill slots: if active listings < 175, discover + list 1 new product every 3h.
   // Runs at :30 (not :00) to avoid colliding with runAutoEndZeroViews at 2:00am which
   // also chains into runProductDiscovery.
-  cron.schedule("30 * * * *", runHourlySlotFill);
+  cron.schedule("30 */3 * * *", runHourlySlotFill);
   // Orphan cleanup every 6 hours — ends any active eBay listings not in the tracker
   cron.schedule("0 */6 * * *", runOrphanCleanup);
   // Also run once shortly after startup to catch anything from the last session
