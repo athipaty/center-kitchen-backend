@@ -86,6 +86,7 @@ app.use('/api/ingredients', require('./routes/recipe/ingredients'));
 app.use('/auth', require('./routes/shared/auth'));
 
 // --- Accounting (Express) ---
+app.use('/api/accounting/auth',      require('./routes/accounting/auth'));
 app.use('/api/accounting/gl',        require('./routes/accounting/gl'));
 app.use('/api/accounting/accounts',  require('./routes/accounting/accounts'));
 app.use('/api/accounting/materials', require('./routes/accounting/materials'));
