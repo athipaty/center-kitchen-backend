@@ -38,7 +38,8 @@ app.use(
       "https://maesaiphayao.vercel.app",
       "https://my-react-app-eight-rust.vercel.app",
       "https://tong-alpha.vercel.app",
-      "https://amazon-theta-liard.vercel.app"
+      "https://amazon-theta-liard.vercel.app",
+      "https://pu-accounting.vercel.app"
     ],
     credentials: true,
   }),
@@ -83,6 +84,12 @@ app.use('/api/ingredients', require('./routes/recipe/ingredients'));
 
 // --- Shared ---
 app.use('/auth', require('./routes/shared/auth'));
+
+// --- Accounting (Express) ---
+app.use('/api/accounting/gl',        require('./routes/accounting/gl'));
+app.use('/api/accounting/accounts',  require('./routes/accounting/accounts'));
+app.use('/api/accounting/materials', require('./routes/accounting/materials'));
+app.use('/api/accounting/fgcost',    require('./routes/accounting/fgcost'));
 
 // --- Amazon Tracker ---
 app.post('/api/tracker',            addProductLimiter);
