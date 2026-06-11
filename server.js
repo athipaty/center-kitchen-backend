@@ -92,6 +92,7 @@ app.use('/api/accounting/gl',        require('./routes/accounting/gl'));
 app.use('/api/accounting/accounts',  require('./routes/accounting/accounts'));
 app.use('/api/accounting/materials', require('./routes/accounting/materials'));
 app.use('/api/accounting/fgcost',    require('./routes/accounting/fgcost'));
+app.use('/api/accounting/contact',   require('./routes/accounting/contact'));
 
 // --- Amazon Tracker ---
 app.post('/api/tracker',            addProductLimiter);
