@@ -44,7 +44,7 @@ async function checkProduct(p, saleMode = false) {
   try {
     // Use price-only direct fetch for routine checks — saves ScraperAPI credits.
     // Full scrape (priceOnly=false) only when metadata is missing or on first check.
-    const needsFullScrape = !p.title || !p.image || !p.upc;
+    const needsFullScrape = !p.title || !p.image;
     const info = await fetchProduct(p.url, { priceOnly: !needsFullScrape });
     const oldPrice = p.current;
     const dropped = info.price < oldPrice;
