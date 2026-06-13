@@ -1,6 +1,12 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 
+// 24h in-memory cache for structured ScraperAPI product responses (keyed by ASIN).
+// Discovery runs multiple times per day and often re-evaluates the same ASINs —
+// this avoids spending 5 credits on a product we already fetched today.
+const _productCache = new Map(); // asin → { data, expiresAt }
+const PRODUCT_CACHE_TTL = 24 * 60 * 60 * 1000;
+
 function cleanUrl(url) {
   const full = url.startsWith('http') ? url : `https://${url}`;
   const match = full.match(
@@ -102,13 +108,18 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   // Use ScraperAPI structured endpoint when key + ASIN available
   if (scraperKey && asin) {
     try {
-      const { data } = await axios.get(
-        `https://api.scraperapi.com/structured/amazon/product/v1`,
-        {
-          params: { api_key: scraperKey, asin },
-          timeout: 60000,
-        }
-      );
+      // Check cache before spending 5 credits
+      const cached = _productCache.get(asin);
+      const data = (cached && cached.expiresAt > Date.now())
+        ? (console.log(`scraper: cache hit for ${asin} — 0 credits used`), cached.data)
+        : await (async () => {
+            const { data } = await axios.get(
+              `https://api.scraperapi.com/structured/amazon/product/v1`,
+              { params: { api_key: scraperKey, asin }, timeout: 60000 }
+            );
+            _productCache.set(asin, { data, expiresAt: Date.now() + PRODUCT_CACHE_TTL });
+            return data;
+          })();
 
       const title = data.name || "Unknown product";
 

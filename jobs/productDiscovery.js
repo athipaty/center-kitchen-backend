@@ -93,6 +93,12 @@ function extractCategorySlug(product) {
 async function fetchNewReleaseCandidates(categorySlug, scraperKey, seenAsins) {
   const url = `https://www.amazon.com/gp/new-releases/${categorySlug}/`;
   try {
+    const cached = _newReleasesCache.get(categorySlug);
+    if (cached && cached.expiresAt > Date.now()) {
+      const fresh = cached.candidates.filter(c => !seenAsins.has(c.asin));
+      console.log(`productDiscovery: new-releases/${categorySlug} cache hit — ${fresh.length} unseen candidates (0 credits)`);
+      return fresh;
+    }
     const { data: html } = await axios.get('https://api.scraperapi.com/', {
       params: { api_key: scraperKey, url },
       timeout: 30000,
@@ -135,8 +141,10 @@ async function fetchNewReleaseCandidates(categorySlug, scraperKey, seenAsins) {
     );
 
     const dropped = candidates.length - preFiltered.length;
+    const result = preFiltered.slice(0, 24);
+    _newReleasesCache.set(categorySlug, { candidates: result, expiresAt: Date.now() + NEW_RELEASES_CACHE_TTL });
     console.log(`productDiscovery: new-releases/${categorySlug} → ${candidates.length} ASINs, ${dropped} pre-filtered (saved ${dropped * 5} credits)`);
-    return preFiltered.slice(0, 24);
+    return result.filter(c => !seenAsins.has(c.asin));
   } catch (e) {
     console.error(`productDiscovery: failed to fetch new-releases/${categorySlug}:`, e.message);
     return [];
@@ -213,6 +221,11 @@ async function fetchEbayViews(listingIds, token) {
 // slotsToFill comes directly from the delete job — no selling-limits API call needed.
 // Each variant counts as 1 slot. Multi-variant products are trimmed to fit remaining slots.
 // opts.maxVariantsPerProduct caps how many variants one product can consume (default 6).
+// Cache new-releases page candidates per category for 4h — each page = 1 credit,
+// and the page only refreshes Amazon's own hourly, so re-scraping every 3h is wasteful.
+const _newReleasesCache = new Map(); // categorySlug → { candidates, expiresAt }
+const NEW_RELEASES_CACHE_TTL = 4 * 60 * 60 * 1000;
+
 let _discoveryRunning = false;
 
 async function runProductDiscovery(io, slotsToFill, opts = {}) {

@@ -2,6 +2,10 @@ const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 const Product = require("../../models/tracker/Product");
+
+// 30-minute cache for deal search results — each search costs 5 credits
+const _dealSearchCache = new Map(); // query → { deals, expiresAt }
+const DEAL_CACHE_TTL = 30 * 60 * 1000;
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
@@ -116,6 +120,13 @@ router.get("/search-deals", async (req, res) => {
     if (!searchTerm) return res.status(400).json({ error: "query or category is required" });
     if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
 
+    const cacheKey = searchTerm.toLowerCase();
+    const cached = _dealSearchCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      console.log(`search-deals: cache hit for "${searchTerm}" — 0 credits used`);
+      return res.json({ query: searchTerm, category: category || null, deals: cached.deals, cached: true });
+    }
+
     const { data } = await axios.get("https://api.scraperapi.com/structured/amazon/search/v1", {
       params: { api_key: process.env.SCRAPER_API_KEY, query: searchTerm, country: "us" },
       timeout: 30000,
@@ -149,6 +160,7 @@ router.get("/search-deals", async (req, res) => {
       })
       .sort((a, b) => b.discountPercent - a.discountPercent);
 
+    _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ query: searchTerm, category: category || null, deals });
   } catch (err) {
     res.status(502).json({ error: err.response?.data?.message || err.message });
