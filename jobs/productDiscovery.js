@@ -372,9 +372,15 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
     // (for manually-tracked products whose groupId is not an ASIN). Without the URL check,
     // discovery would waste 5 ScraperAPI credits fetching a structured product page before
     // hitting MongoDB's unique-URL constraint.
+    // Also include archived products so recently-ended zero-view listings are not immediately
+    // re-discovered and re-listed by the discovery pipeline that chains after auto-end.
+    const archivedProducts = await Product.find({ status: 'archived' }, 'groupId url').lean();
+    const asinFromUrl = p => { const m = (p.url || '').match(/\/dp\/([A-Z0-9]{10})/i); return m ? m[1] : null; };
     const existingAsins = new Set([
       ...allProducts.map(p => p.groupId).filter(Boolean),
-      ...allProducts.map(p => { const m = (p.url || '').match(/\/dp\/([A-Z0-9]{10})/i); return m ? m[1] : null; }).filter(Boolean),
+      ...allProducts.map(asinFromUrl).filter(Boolean),
+      ...archivedProducts.map(p => p.groupId).filter(Boolean),
+      ...archivedProducts.map(asinFromUrl).filter(Boolean),
     ]);
     const candidates = [];
     const seenAsins = new Set(existingAsins);
