@@ -63,6 +63,48 @@ function parseVariants(data) {
   }).filter(Boolean);
 }
 
+// Full ScraperAPI HTML fallback — 1 credit, parses raw Amazon HTML.
+// Used when the structured endpoint (5 credits) fails.
+async function tryScraperApiHtml(url, scraperKey) {
+  const { data: html } = await axios.get('https://api.scraperapi.com/', {
+    params: { api_key: scraperKey, url },
+    timeout: 60000,
+  });
+  if (html.includes('validateCaptcha') || html.includes('robot')) return null;
+  const $ = cheerio.load(html);
+
+  let title = 'Unknown product';
+  for (const sel of ['#productTitle', '#title', 'h1.a-size-large']) {
+    const text = $(sel).first().text().trim();
+    if (text) { title = text; break; }
+  }
+
+  let price = null;
+  for (const sel of ['.priceToPay .a-offscreen', '.apexPriceToPay .a-offscreen', '#priceblock_ourprice', '#priceblock_dealprice', '#price_inside_buybox', '.a-price .a-offscreen']) {
+    price = parsePrice($(sel).first().attr('content') || $(sel).first().text());
+    if (price) break;
+  }
+
+  const bodyText = $.text().toLowerCase();
+  if (!price && (bodyText.includes('currently unavailable') || bodyText.includes('out of stock'))) {
+    const err = new Error('Out of stock');
+    err.code = 'OUT_OF_STOCK';
+    throw err;
+  }
+  if (!price) return null;
+
+  let currency = '$';
+  for (const sym of ['฿', '£', '€', '$']) {
+    if (html.slice(0, 10000).includes(sym)) { currency = sym; break; }
+  }
+
+  const hiResMatches = [...html.matchAll(/"hiRes"\s*:\s*"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/g)];
+  const images = [...new Set(hiResMatches.map(m => m[1]))];
+  const image = images[0] || null;
+
+  return { title, price, currency, image, images, upc: null, variants: [], isPrime: null, variant: null, specs: {}, bullets: [], rating: null, reviewCount: 0, isNewRelease: false };
+}
+
 // Lightweight direct price check — no ScraperAPI credits used.
 // Returns { price, currency } or null if blocked/failed.
 async function tryDirectPrice(url) {
@@ -207,6 +249,17 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
 
       return { title, price, currency, listPrice, image, images, upc, variants, isPrime, variant, specs, bullets, rating, reviewCount, isNewRelease };
     } catch (err) {
+      console.log(`scraper: structured endpoint failed for ${asin} (${err.message}) — falling back to full ScraperAPI HTML`);
+      try {
+        const result = await tryScraperApiHtml(url, scraperKey);
+        if (result) {
+          console.log(`scraper: full HTML fallback OK for ${asin} ($${result.price})`);
+          return result;
+        }
+      } catch (htmlErr) {
+        if (htmlErr.code === 'OUT_OF_STOCK') throw htmlErr;
+        console.warn(`scraper: full HTML fallback also failed for ${asin}: ${htmlErr.message}`);
+      }
       throw new Error(`ScraperAPI error: ${err.response?.data?.message || err.message}`);
     }
   }
