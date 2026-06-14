@@ -175,7 +175,7 @@ router.post("/", async (req, res) => {
 
     const cleanedUrl = cleanUrl(url);
 
-    const existing = await Product.findOne({ url: cleanedUrl });
+    const existing = await Product.findOne({ url: cleanedUrl, status: { $ne: 'archived' } });
     if (existing) return res.status(409).json({ error: "Already tracking this product." });
 
     const info = await fetchProduct(cleanedUrl);
@@ -302,11 +302,25 @@ router.post("/:id/refresh-images", async (req, res) => {
   }
 });
 
-// DELETE remove a product
+// DELETE remove a product — soft-delete (archive) so discovery never re-lists the same ASIN
 router.delete("/:id", async (req, res) => {
   try {
-    const product = await Product.findByIdAndDelete(req.params.id);
-    if (product?.cloudinaryFolder) {
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { $set: { status: 'archived', archivedAt: new Date(), ebayListingId: null, listedAt: null } },
+      { new: false }
+    );
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    // End the eBay listing if one was active
+    if (product.ebayListingId) {
+      const PORT = process.env.PORT || 5000;
+      axios.delete(`http://localhost:${PORT}/api/ebay/listing/${product.ebayListingId}`).catch(e => {
+        console.warn(`delete: failed to end eBay listing ${product.ebayListingId}:`, e.message);
+      });
+    }
+
+    if (product.cloudinaryFolder) {
       deleteCloudinaryFolder(product.cloudinaryFolder).catch(() => {});
     }
     res.json({ success: true });
