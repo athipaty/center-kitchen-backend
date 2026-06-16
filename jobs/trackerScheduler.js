@@ -387,12 +387,6 @@ async function runAutoEndZeroViews() {
     console.error('auto-end-zero-views: error:', e.message);
   }
 
-  // Chain directly into discovery using the exact slots we just freed
-  if (slotsFreed > 0) {
-    console.log(`auto-end-zero-views: ${slotsFreed} slot(s) freed → triggering product discovery`);
-    const { runProductDiscovery } = require('./productDiscovery');
-    await runProductDiscovery(io, slotsFreed);
-  }
 }
 
 // Relist any recently-ended (unsold) listings that have views or watchers.
@@ -485,45 +479,6 @@ async function runRelistUnsoldWithEngagement() {
     console.log(`relist-unsold: done — relisted ${relisted}/${toRelist.length}`);
   } catch (e) {
     console.error('relist-unsold: error:', e.message);
-  }
-}
-
-// Safety net: pick up Prime products that never made it onto eBay — e.g. a
-// scheduleGroupAutoList debounce timer lost to a server restart mid-wait.
-// (productDiscovery also runs this, but only when listing slots get freed up,
-// so groups can otherwise sit stuck indefinitely showing "Will auto-list when
-// Prime confirmed" in the UI.)
-async function runPendingAutoListRetry() {
-  try {
-    const { retryPendingGroups } = require('./autoList');
-    await retryPendingGroups(io);
-  } catch (e) {
-    console.error('pending-auto-list-retry: error:', e.message);
-  }
-}
-
-// Slot target — keep this many active eBay listings by auto-discovering + listing
-// one new product per hour whenever the count falls below this threshold.
-const SLOT_FILL_TARGET = 175;
-
-async function runHourlySlotFill() {
-  try {
-    const { getUsedListingCount } = require('./autoList');
-    const used = await getUsedListingCount();
-    if (used == null) {
-      console.log('hourly-slot-fill: could not read slot count, skipping');
-      return;
-    }
-    if (used >= SLOT_FILL_TARGET) {
-      console.log(`hourly-slot-fill: at target (${used}/${SLOT_FILL_TARGET}), skipping`);
-      return;
-    }
-    const slotsAvailable = SLOT_FILL_TARGET - used;
-    console.log(`hourly-slot-fill: ${used}/${SLOT_FILL_TARGET} active listings — discovering 1 product (up to ${slotsAvailable} variant slot(s) available)`);
-    const { runProductDiscovery } = require('./productDiscovery');
-    await runProductDiscovery(io, slotsAvailable, { maxProducts: 1 });
-  } catch (e) {
-    console.error('hourly-slot-fill: error:', e.message);
   }
 }
 
@@ -621,18 +576,10 @@ function start(socketIo) {
   cron.schedule("*/5 * * * *", runDueChecks);
   // Re-optimize all listings every Sunday at 3am
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
-  // Auto-end listings 4+ days old with 0 views → immediately chains into product discovery
+  // Auto-end listings 4+ days old with 0 views
   cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
   // Auto-restock sold listings back to qty 1 — runs every 15 minutes
   cron.schedule("*/15 * * * *", runAutoRestock);
-  // Pick up any Prime products stuck without an eBay listing — runs every 20 minutes
-  cron.schedule("*/20 * * * *", runPendingAutoListRetry);
-  // Also run once shortly after startup to catch anything stuck from the last session
-  setTimeout(runPendingAutoListRetry, 60 * 1000);
-  // Auto-fill slots: if active listings < 175, discover + list 1 new product every 6h.
-  // Runs at :30 (not :00) to avoid colliding with runAutoEndZeroViews at 2:00am which
-  // also chains into runProductDiscovery. Reduced from every 3h to save ScraperAPI credits.
-  cron.schedule("30 */6 * * *", runHourlySlotFill);
   // Orphan cleanup every 6 hours — ends any active eBay listings not in the tracker
   cron.schedule("0 */6 * * *", runOrphanCleanup);
   // Also run once shortly after startup to catch anything from the last session

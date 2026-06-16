@@ -4,7 +4,7 @@ const Product = require('../models/tracker/Product');
 const TrackerSettings = require('../models/tracker/TrackerSettings');
 const { fetchProduct, extractAsin } = require('../scraper');
 
-const { calcEbayPrice, detectVariantDimension } = require('./autoList');
+const { calcEbayPrice } = require('./ebayPriceSync');
 
 const EBAY_FEE = 0.1325, FIXED_FEE = 0.30, AMAZON_TAX = 0.085;
 
@@ -324,15 +324,6 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
     const settings = await TrackerSettings.findById('tracker').lean().catch(() => null);
     const saleMode = settings?.saleModeActive ?? false;
 
-    // ── 0. Retry any products already in tracker but not yet listed ───────
-    // Skip when maxProducts is set (e.g. hourly slot filler with maxProducts:1) — retryPendingGroups
-    // has no own cap and would list all stuck groups, blowing past the 1-per-hour guarantee.
-    // Stuck groups are picked up every 20 min by runPendingAutoListRetry in trackerScheduler.
-    if (!opts.maxProducts) {
-      const { retryPendingGroups } = require('./autoList');
-      await retryPendingGroups(io);
-    }
-
     // ── 1. Get top-viewed listings ────────────────────────────────────────
     const { getAccessToken } = require('./ebayPriceSync');
     const token = await getAccessToken();
@@ -542,17 +533,13 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
 
     console.log(`productDiscovery: adding ${toProcess.length} product(s), filling ${slotsToFill - slotsRemaining} slot(s)`);
 
-    // ── 5. Add each product to tracker + auto-list on eBay ────────────────
+    // ── 5. Add each product to tracker ────────────────────────────────────
     const added = [];
-
-    const { autoList } = require('./autoList');
 
     for (const { asin, info, variantsToAdd } of toProcess) {
       try {
         const scheduler = require('./trackerScheduler');
 
-        // Save each variant as a Product document
-        const savedProducts = [];
         for (const v of variantsToAdd) {
           const product = new Product({
             url: v.url,
@@ -572,24 +559,12 @@ async function runProductDiscovery(io, slotsToFill, opts = {}) {
           });
           scheduler.scheduleNew(product);
           await product.save();
-          savedProducts.push(product);
         }
-
-        // Full listing pipeline (images → title → description → eBay → photos)
-        const ebayListingId = await autoList(savedProducts, io);
-        if (!ebayListingId) throw new Error('No listing ID returned');
 
         const profit = calcProfit(info.price, saleMode);
-        added.push({ asin, title: info.title, profit, ebayListingId, variantCount: variantsToAdd.length });
-        console.log(`productDiscovery: ✓ ${asin} → eBay ${ebayListingId} (${variantsToAdd.length} variant(s), +$${profit})`);
-        if (io) io.emit('tracker:discovery:added', { asin, title: info.title, ebayListingId, profit });
-
-        await new Promise(r => setTimeout(r, 2000));
+        added.push({ asin, title: info.title, profit, variantCount: variantsToAdd.length });
+        console.log(`productDiscovery: ✓ ${asin} saved (${variantsToAdd.length} variant(s), +$${profit})`);
       } catch (e) {
-        if (e.code === 'SELLING_LIMIT') {
-          console.warn(`productDiscovery: selling limit hit on ${asin} — products saved to tracker, will retry next run`);
-          break; // stop adding — remaining products stay in tracker as pending, retried next discovery
-        }
         const detail = e.response?.data?.error || e.response?.data || e.message || String(e);
         console.error(`productDiscovery: failed to add ${asin}:`, detail);
       }
