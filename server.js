@@ -39,7 +39,6 @@ app.use(
       "https://my-react-app-eight-rust.vercel.app",
       "https://tong-alpha.vercel.app",
       "https://amazon-theta-liard.vercel.app",
-      "https://pu-accounting.vercel.app",
       "https://puthailand.vercel.app"
     ],
     credentials: true,
