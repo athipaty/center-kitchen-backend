@@ -212,13 +212,11 @@ async function syncEbayQty(listingId, variantLabel, qty) {
   if (err) throw new Error(err);
 }
 
-// variantLabel — the color/variant name from Amazon (e.g. "purple"), used to match the right eBay variation
-// saleMode — when true, uses sale pricing formula (currently same margin; ready for future differentiation)
+// saleMode — when true, uses sale pricing formula
 async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = false) {
   const token = await getAccessToken();
   const cleanId = String(listingId).trim().replace(/\D/g, '');
-  const ebayPrice = calcEbayPrice(Number(amazonPrice), saleMode);
-  const priceStr = ebayPrice.toFixed(2);
+  const priceStr = calcEbayPrice(Number(amazonPrice), saleMode).toFixed(2);
   const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
   // Step 1: GetItem to check if this is a multi-variation listing
@@ -238,22 +236,33 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = fa
     const err = checkFailure(reviseXml);
     if (err) throw new Error(err);
   } else {
-    // Multi-variation — use ReviseFixedPriceItem (works for both SKU-based and non-SKU listings)
-    const label = (variantLabel || '').toLowerCase();
+    // Multi-variation: look up every DB variant for this listing and price each eBay
+    // variation independently using its own Amazon price. This prevents substring label
+    // collisions (e.g. "Colorful" matching "Yellow+colorful") from corrupting prices.
+    const dbVariants = await Product.find({ ebayListingId: cleanId, status: { $ne: 'archived' } }).lean();
+
     const variationXml = varBlocks.map(block => {
+      const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
+      const ebayLabel = valueMatch?.[1] || '';
       const currentPriceM = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
       const currentPrice = currentPriceM ? parseFloat(currentPriceM[1]).toFixed(2) : priceStr;
 
-      let isMatch = !label;
-      if (label) {
-        const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
-        isMatch = labelMatch(valueMatch?.[1] || '', label);
+      let thisPrice = currentPrice;
+      let dbMatch = null;
+      if (dbVariants.length) {
+        dbMatch = bestVariantMatch(dbVariants, ebayLabel);
+        if (dbMatch?.current) {
+          thisPrice = calcEbayPrice(dbMatch.current, saleMode).toFixed(2);
+        }
+      } else {
+        // No DB records found — fall back to single-price update for the triggering variant
+        thisPrice = labelMatch(ebayLabel, variantLabel || '') ? priceStr : currentPrice;
       }
 
-      const thisPrice = isMatch ? priceStr : currentPrice;
       const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
       const sku = block.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
       const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+      console.log(`ebayPriceSync: ${cleanId} "${ebayLabel}" → $${thisPrice} (db match: "${dbMatch?.variant || '?'}" @ $${dbMatch?.current?.toFixed(2) || '?'} Amazon)`);
       return `<Variation>${skuXml}<StartPrice currencyID="USD">${thisPrice}</StartPrice><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
     }).join('');
 
