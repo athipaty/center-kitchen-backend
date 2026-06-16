@@ -11,52 +11,13 @@ const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 const { deleteCloudinaryFolder } = require("../../utils/cloudinaryUtils");
 
-// GET current tracker settings (saleModeActive, discovery results, etc.)
+// GET current tracker settings (saleModeActive)
 router.get("/settings", async (req, res) => {
   try {
     const settings = await TrackerSettings.findById('tracker').lean();
     res.json({
       saleModeActive: settings?.saleModeActive ?? false,
-      lastDiscoveryRun: settings?.lastDiscoveryRun ?? null,
-      lastDiscoveryAdded: settings?.lastDiscoveryAdded ?? [],
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST dismiss the discovery banner (clears lastDiscoveryAdded)
-router.post("/settings/dismiss-discovery", async (req, res) => {
-  try {
-    await TrackerSettings.findByIdAndUpdate('tracker',
-      { $set: { lastDiscoveryAdded: [] } },
-      { upsert: true }
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST manually trigger product discovery
-// Body: { slots: N } — if omitted, falls back to checking selling limits
-router.post("/discover", async (req, res) => {
-  try {
-    const { runProductDiscovery } = require('../../jobs/productDiscovery');
-    let slots = req.body?.slots;
-    if (!slots || slots <= 0) {
-      // Fall back to selling limits API
-      const axios = require('axios');
-      const PORT = process.env.PORT || 5000;
-      const { data: limits } = await axios.get(`http://localhost:${PORT}/api/ebay/selling-limits`, { timeout: 30000 });
-      slots = Math.max(0, (limits.items?.remaining || 0) - 1);
-    }
-    if (!slots || slots <= 0) return res.status(400).json({ error: 'No available slots' });
-    const opts = {};
-    if (req.body?.maxVariantsPerProduct) opts.maxVariantsPerProduct = Number(req.body.maxVariantsPerProduct);
-    res.json({ started: true, slots, opts });
-    const io = req.app.get('io') || null;
-    runProductDiscovery(io, slots, opts).catch(e => console.error('discovery trigger error:', e.message));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -261,7 +222,7 @@ router.post("/:id/refresh-images", async (req, res) => {
   }
 });
 
-// DELETE remove a product — soft-delete (archive) so discovery never re-lists the same ASIN
+// DELETE remove a product — soft-delete (archive)
 router.delete("/:id", async (req, res) => {
   try {
     const product = await Product.findByIdAndUpdate(
