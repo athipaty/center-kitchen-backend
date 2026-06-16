@@ -321,7 +321,7 @@ function scheduleGroupAutoList(groupId, io) {
   _pending[groupId] = setTimeout(async () => {
     delete _pending[groupId];
     try {
-      const products = await Product.find({ groupId, ebayListingId: null, isPrime: true });
+      const products = await Product.find({ groupId, ebayListingId: null, isPrime: true, status: { $ne: 'archived' } });
       if (products.length) await autoList(products, io);
       // Refresh frontend so eBay listing IDs appear on cards
       if (io) io.emit('tracker:check:done', { time: new Date().toISOString(), results: [] });
@@ -371,7 +371,7 @@ async function retryPendingGroups(io) {
       if (new Date(newestCreatedAt) > cutoff) continue; // still mid-add — let the debounce handle it
 
       try {
-        const docs = await Product.find({ groupId, ebayListingId: null });
+        const docs = await Product.find({ groupId, ebayListingId: null, status: { $ne: 'archived' } });
         if (!docs.length) continue;
         console.log(`auto-list retry: picking up stale pending group ${groupId} (${docs.length} variant(s))`);
         await autoList(docs, io);
