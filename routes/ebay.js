@@ -1862,58 +1862,38 @@ function cycleStartFor(day, ref = new Date()) {
   return start;
 }
 
-// Counts items used toward the monthly selling limit from a GetMyeBaySelling response,
-// given a cycle-start boundary. Mirrors eBay's "1 slot per variation" counting rule.
+// Counts active listing slots and revenue from a GetMyeBaySelling response.
+// "Used slots" = number of variation slots currently live on eBay (1 per variation,
+// 1 for single listings). Sold/unsold ended listings are NOT counted — the question
+// the UI answers is "how many active slots am I using right now", not a monthly tally.
+// Previous approach (qty+sold per variation + unsold history) overcounted massively
+// because restocked variants counted twice and every relist burned another slot.
 function countUsedItems(xmlResp, monthStart) {
   let totalQtyListed = 0;
   let soldRevenueUsd = 0;
-  const activeItemIds = new Set();
 
   const activeSection = xmlResp.match(/<ActiveList>([\s\S]*?)<\/ActiveList>/)?.[1] || '';
   for (const [, block] of [...activeSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
-    const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-    if (itemId) activeItemIds.add(itemId);
     const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
+    // Count 1 slot per variation (regardless of qty or sales history), or 1 for a single listing.
+    totalQtyListed += varBlocks.length || 1;
+
+    // Revenue: sum sold value across variations for active listings
     if (varBlocks.length) {
       for (const [, vb] of varBlocks) {
-        const qty  = parseInt(vb.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
         const sold = parseInt(vb.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
-        totalQtyListed += qty + sold;
         if (sold) {
           const price = parseFloat(vb.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
           soldRevenueUsd += price * sold;
         }
       }
     } else {
-      const qty  = parseInt(block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
       const sold = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
-      totalQtyListed += qty + sold;
       if (sold) {
         const price = parseFloat(block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
         soldRevenueUsd += price * sold;
       }
     }
-  }
-
-  const soldSection = xmlResp.match(/<SoldList>([\s\S]*?)<\/SoldList>/)?.[1] || '';
-  const countedSoldIds = new Set();
-  for (const [, tx] of [...soldSection.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)]) {
-    const itemId = tx.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-    if (!itemId || activeItemIds.has(itemId) || countedSoldIds.has(itemId)) continue;
-    const dateStr = tx.match(/<CreatedDate>([\s\S]*?)<\/CreatedDate>/)?.[1];
-    if (dateStr && new Date(dateStr) < monthStart) continue;
-    countedSoldIds.add(itemId);
-    totalQtyListed += 1;
-  }
-
-  const unsoldSection = xmlResp.match(/<UnsoldList>([\s\S]*?)<\/UnsoldList>/)?.[1] || '';
-  for (const [, block] of [...unsoldSection.matchAll(/<Item>([\s\S]*?)<\/Item>/g)]) {
-    const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-    if (!itemId || activeItemIds.has(itemId)) continue;
-    const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
-    if (startTime && new Date(startTime) < monthStart) continue;
-    const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
-    totalQtyListed += varBlocks.length || 1;
   }
 
   return { usedItems: totalQtyListed, soldRevenueUsd };
