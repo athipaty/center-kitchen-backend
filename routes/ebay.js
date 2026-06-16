@@ -3664,6 +3664,17 @@ router.post('/auto-end-zero-views', async (req, res) => {
   }
 });
 
+// ── Manual trigger: relist unsold listings that have views or watchers ──
+router.post('/relist-unsold', async (req, res) => {
+  try {
+    const { relistUnsold } = require('../jobs/trackerScheduler');
+    await relistUnsold();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Set up Promoted Listings Standard campaign at a given ad rate ──────
 router.post('/promoted-listings/setup', async (req, res) => {
   try {

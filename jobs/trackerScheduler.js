@@ -201,6 +201,7 @@ async function runWeeklyOptimize() {
 }
 
 // Orphan cleanup: end any active eBay listings not linked to a tracker product
+// Listings with views or watchers are skipped — they have buyer interest worth keeping.
 async function runOrphanCleanup() {
   try {
     const { getAccessToken } = require('./ebayPriceSync');
@@ -212,14 +213,22 @@ async function runOrphanCleanup() {
       'Content-Type': 'text/xml',
     };
 
-    // Fetch ALL active eBay listings — paginate until no more
+    // Fetch ALL active eBay listings with watch counts — paginate until no more
     const allEbayIds = [];
+    const watchCountMap = {}; // listingId → watchCount
     for (let page = 1; page <= 10; page++) {
-      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
+      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
       const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling' } });
       if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
-      const ids = [...xmlResp.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1]);
-      allEbayIds.push(...ids);
+      const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
+      let m;
+      while ((m = itemRe.exec(xmlResp)) !== null) {
+        const block = m[1];
+        const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+        if (!itemId) continue;
+        allEbayIds.push(itemId);
+        watchCountMap[itemId] = parseInt(block.match(/<WatchCount>(\d+)<\/WatchCount>/)?.[1] || '0', 10);
+      }
       if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
     }
 
@@ -235,10 +244,44 @@ async function runOrphanCleanup() {
       return;
     }
 
-    console.log(`orphan-cleanup: found ${orphanIds.length} orphan listing(s) → ending`);
+    // Fetch view counts for orphans via Analytics API — skip any with views or watches
+    let viewCounts = {};
+    try {
+      const now = new Date();
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+      const { data: viewsData } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          dimension: 'LISTING',
+          metric: 'LISTING_VIEWS_TOTAL',
+          filter: `listing_ids:{${orphanIds.join('|')}},date_range:[${fmt(start)}..${fmt(yesterday)}]`,
+        },
+      });
+      for (const record of (viewsData.records || [])) {
+        const lid = String(record.dimensionValues?.[0]?.value || '');
+        if (lid) viewCounts[lid] = Number(record.metricValues?.[0]?.value ?? 0);
+      }
+    } catch (e) {
+      console.warn('orphan-cleanup: could not fetch view counts:', e.message);
+    }
+
+    const toEnd = orphanIds.filter(id => (viewCounts[id] || 0) === 0 && (watchCountMap[id] || 0) === 0);
+    const skipped = orphanIds.filter(id => (viewCounts[id] || 0) > 0 || (watchCountMap[id] || 0) > 0);
+    if (skipped.length) {
+      console.log(`orphan-cleanup: keeping ${skipped.length} orphan(s) with views/watches: ${skipped.map(id => `${id}(v:${viewCounts[id]||0},w:${watchCountMap[id]||0})`).join(', ')}`);
+    }
+
+    if (!toEnd.length) {
+      console.log('orphan-cleanup: no orphans to end (all have views or watches)');
+      return;
+    }
+
+    console.log(`orphan-cleanup: ending ${toEnd.length} orphan listing(s) with no engagement`);
     const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
     let ended = 0;
-    for (const id of orphanIds) {
+    for (const id of toEnd) {
       try {
         const body = `<?xml version="1.0" encoding="utf-8"?><EndFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${id}</ItemID><EndingReason>NotAvailable</EndingReason></EndFixedPriceItemRequest>`;
         const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'EndFixedPriceItem' } });
@@ -251,27 +294,29 @@ async function runOrphanCleanup() {
       }
     }
 
-    if (io) io.emit('tracker:orphan:cleanup', { found: orphanIds.length, ended });
-    console.log(`orphan-cleanup: done — ended ${ended}/${orphanIds.length}`);
+    if (io) io.emit('tracker:orphan:cleanup', { found: orphanIds.length, ended, skipped: skipped.length });
+    console.log(`orphan-cleanup: done — ended ${ended}/${toEnd.length} (${skipped.length} kept for views/watches)`);
   } catch (e) {
     console.error('orphan-cleanup: error:', e.message);
   }
 }
 
-// Auto-end listings 4+ days old with 0 eBay views, then fill freed slots with new discoveries
+// Auto-end listings 4+ days old with 0 eBay views AND 0 watchers, then fill freed slots
 async function runAutoEndZeroViews() {
   let slotsFreed = 0;
   try {
     const { getAccessToken } = require('./ebayPriceSync');
     const token = await getAccessToken();
 
+    // Fetch active listings with watch counts in one call
     const { data: listXml } = await axios.post('https://api.ebay.com/ws/api.dll',
-      `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList></GetMyeBaySellingRequest>`,
+      `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList></GetMyeBaySellingRequest>`,
       { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
     );
 
     const fourDaysAgo = Date.now() - 4 * 24 * 60 * 60 * 1000;
     const oldListings = [];
+    const watchCounts = {};
     const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
     let m;
     while ((m = itemRe.exec(listXml)) !== null) {
@@ -279,6 +324,7 @@ async function runAutoEndZeroViews() {
       const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
       const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
       if (!itemId || !startTime) continue;
+      watchCounts[itemId] = parseInt(block.match(/<WatchCount>(\d+)<\/WatchCount>/)?.[1] || '0', 10);
       if (new Date(startTime).getTime() <= fourDaysAgo) oldListings.push(itemId);
     }
 
@@ -307,8 +353,13 @@ async function runAutoEndZeroViews() {
       if (viewCounts[id] == null) viewCounts[id] = 0;
     }
 
-    const toEnd = oldListings.filter(id => viewCounts[id] === 0);
-    console.log(`auto-end-zero-views: ${toEnd.length} listings have 0 views → ending`);
+    // Only end listings with 0 views AND 0 watchers — keep anything with buyer interest
+    const toEnd = oldListings.filter(id => viewCounts[id] === 0 && (watchCounts[id] || 0) === 0);
+    const kept = oldListings.filter(id => viewCounts[id] > 0 || (watchCounts[id] || 0) > 0);
+    if (kept.length) {
+      console.log(`auto-end-zero-views: keeping ${kept.length} listing(s) with views/watches: ${kept.map(id => `${id}(v:${viewCounts[id]},w:${watchCounts[id]||0})`).join(', ')}`);
+    }
+    console.log(`auto-end-zero-views: ${toEnd.length} listings have 0 views and 0 watches → ending`);
 
     for (const listingId of toEnd) {
       try {
@@ -341,6 +392,99 @@ async function runAutoEndZeroViews() {
     console.log(`auto-end-zero-views: ${slotsFreed} slot(s) freed → triggering product discovery`);
     const { runProductDiscovery } = require('./productDiscovery');
     await runProductDiscovery(io, slotsFreed);
+  }
+}
+
+// Relist any recently-ended (unsold) listings that have views or watchers.
+// eBay's RelistFixedPriceItem creates a new listing with a new ID, preserving
+// the item title, price, and description from the original.
+async function runRelistUnsoldWithEngagement() {
+  try {
+    const { getAccessToken } = require('./ebayPriceSync');
+    const token = await getAccessToken();
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    // Fetch unsold listings (ended in the last 60 days) with watch counts
+    const unsoldIds = [];
+    const watchCounts = {};
+    for (let page = 1; page <= 5; page++) {
+      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<UnsoldList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination><DurationInDays>60</DurationInDays></UnsoldList></GetMyeBaySellingRequest>`;
+      const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling' } });
+      if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
+      const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
+      let m;
+      while ((m = itemRe.exec(xmlResp)) !== null) {
+        const block = m[1];
+        const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+        if (!itemId) continue;
+        unsoldIds.push(itemId);
+        watchCounts[itemId] = parseInt(block.match(/<WatchCount>(\d+)<\/WatchCount>/)?.[1] || '0', 10);
+      }
+      if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
+    }
+
+    if (!unsoldIds.length) {
+      console.log('relist-unsold: no unsold listings found');
+      return;
+    }
+
+    // Fetch view counts from Analytics API for all unsold IDs
+    const viewCounts = {};
+    try {
+      const now = new Date();
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+      const { data: viewsData } = await axios.get('https://api.ebay.com/sell/analytics/v1/traffic_report', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          dimension: 'LISTING',
+          metric: 'LISTING_VIEWS_TOTAL',
+          filter: `listing_ids:{${unsoldIds.join('|')}},date_range:[${fmt(start)}..${fmt(yesterday)}]`,
+        },
+      });
+      for (const record of (viewsData.records || [])) {
+        const lid = String(record.dimensionValues?.[0]?.value || '');
+        if (lid) viewCounts[lid] = Number(record.metricValues?.[0]?.value ?? 0);
+      }
+    } catch (e) {
+      console.warn('relist-unsold: could not fetch view counts:', e.message);
+    }
+
+    const toRelist = unsoldIds.filter(id => (viewCounts[id] || 0) > 0 || watchCounts[id] > 0);
+    console.log(`relist-unsold: ${unsoldIds.length} unsold listings, ${toRelist.length} have views/watches → relisting`);
+
+    let relisted = 0;
+    for (const oldId of toRelist) {
+      try {
+        const body = `<?xml version="1.0" encoding="utf-8"?><RelistFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${oldId}</ItemID><Quantity>1</Quantity></Item></RelistFixedPriceItemRequest>`;
+        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'RelistFixedPriceItem' } });
+        if (/<Ack>Failure<\/Ack>/.test(xml)) {
+          const errMsg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1] || 'unknown error';
+          console.warn(`relist-unsold: failed to relist ${oldId}: ${errMsg}`);
+          continue;
+        }
+        const newId = xml.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+        if (!newId) continue;
+        relisted++;
+        console.log(`relist-unsold: relisted ${oldId} → new listing ${newId} (v:${viewCounts[oldId]||0}, w:${watchCounts[oldId]||0})`);
+        // Update any tracker products still pointing at the old listing ID
+        await Product.updateMany({ ebayListingId: oldId }, { $set: { ebayListingId: newId } });
+        if (io) io.emit('tracker:listing:relisted', { oldId, newId });
+      } catch (e) {
+        console.error(`relist-unsold: error relisting ${oldId}:`, e.message);
+      }
+    }
+
+    console.log(`relist-unsold: done — relisted ${relisted}/${toRelist.length}`);
+  } catch (e) {
+    console.error('relist-unsold: error:', e.message);
   }
 }
 
@@ -493,6 +637,8 @@ function start(socketIo) {
   cron.schedule("0 */6 * * *", runOrphanCleanup);
   // Also run once shortly after startup to catch anything from the last session
   setTimeout(runOrphanCleanup, 30 * 1000);
+  // Relist unsold listings that have views or watchers — runs daily at 3:30am
+  cron.schedule("30 3 * * *", runRelistUnsoldWithEngagement);
 }
 
 // Called when user clicks "Check Now" for a specific product or all products
@@ -533,4 +679,4 @@ function getNextCheck() {
   return null; // now per-product, not global
 }
 
-module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors, autoEndZeroViews: runAutoEndZeroViews, autoRestock: runAutoRestock, orphanCleanup: runOrphanCleanup };
+module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors, autoEndZeroViews: runAutoEndZeroViews, autoRestock: runAutoRestock, orphanCleanup: runOrphanCleanup, relistUnsold: runRelistUnsoldWithEngagement };
