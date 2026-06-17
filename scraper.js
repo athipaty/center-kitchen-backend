@@ -80,9 +80,42 @@ async function tryScraperApiHtml(url, scraperKey) {
   }
 
   let price = null;
-  for (const sel of ['.priceToPay .a-offscreen', '.apexPriceToPay .a-offscreen', '#priceblock_ourprice', '#priceblock_dealprice', '#price_inside_buybox', '.a-price .a-offscreen']) {
+  for (const sel of [
+    '.priceToPay .a-offscreen',
+    '.apexPriceToPay .a-offscreen',
+    '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen',
+    '#corePrice_desktop .a-offscreen',
+    '#priceblock_ourprice',
+    '#priceblock_dealprice',
+    '#price_inside_buybox',
+    '#tp_price_block_total_price_ww .a-offscreen',
+    '.a-price[data-a-color="price"] .a-offscreen',
+    '.a-price .a-offscreen',
+    '#price',
+  ]) {
     price = parsePrice($(sel).first().attr('content') || $(sel).first().text());
     if (price) break;
+  }
+
+  // Coupon products: Amazon hides the base price — try JSON-LD and embedded JS
+  if (!price) {
+    $('script[type="application/ld+json"]').each((_, el) => {
+      if (price) return;
+      try {
+        const obj = JSON.parse($(el).html());
+        const offers = obj.offers || obj['@graph']?.find(n => n.offers)?.offers;
+        const offerList = Array.isArray(offers) ? offers : (offers ? [offers] : []);
+        for (const o of offerList) {
+          const p = parsePrice(o.price || o.lowPrice);
+          if (p) { price = p; break; }
+        }
+      } catch {}
+    });
+  }
+  if (!price) {
+    // "priceAmount" appears in Amazon's embedded window.P and feature JSON blobs
+    const m = html.match(/"priceAmount"\s*:\s*([\d.]+)/);
+    if (m) price = parseFloat(m[1]);
   }
 
   const bodyText = $.text().toLowerCase();
@@ -179,8 +212,9 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
 
       const priceRaw = data.pricing || data.original_price || data.price
         || data.price_lower_bound || data.buybox_winner?.price
-        || data.buybox_winner?.our_price || data.sale_price;
-      console.log(`scraper: price fields for ${asin} — pricing=${data.pricing} original_price=${data.original_price} price=${data.price} price_lower_bound=${data.price_lower_bound}`);
+        || data.buybox_winner?.our_price || data.sale_price
+        || data.product_information?.price || data.product_information?.list_price;
+      console.log(`scraper: price fields for ${asin} — pricing=${data.pricing} original_price=${data.original_price} price=${data.price} price_lower_bound=${data.price_lower_bound} product_information.price=${data.product_information?.price}`);
       const price = parsePrice(priceRaw);
       if (!price) {
         console.warn(`scraper: no price found for ${asin} — keys returned: ${Object.keys(data).join(', ')}`);
