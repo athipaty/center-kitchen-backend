@@ -211,13 +211,15 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
       const title = data.name || "Unknown product";
 
       // Detect out-of-stock before attempting price parse
-      const availability = (data.availability || '').toLowerCase();
+      // ScraperAPI uses either `availability` or `availability_status` depending on product type
+      const availabilityRaw = data.availability || data.availability_status || '';
+      const availability = availabilityRaw.toLowerCase();
       if (availability && (
         availability.includes('out of stock') ||
         availability.includes('currently unavailable') ||
         availability.includes('unavailable')
       )) {
-        const err = new Error(`Out of stock: ${data.availability}`);
+        const err = new Error(`Out of stock: ${availabilityRaw}`);
         err.code = 'OUT_OF_STOCK';
         throw err;
       }
