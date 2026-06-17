@@ -177,8 +177,15 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
         throw err;
       }
 
-      const price = parsePrice(data.pricing || data.original_price);
-      if (!price) throw new Error("Price not found in ScraperAPI response.");
+      const priceRaw = data.pricing || data.original_price || data.price
+        || data.price_lower_bound || data.buybox_winner?.price
+        || data.buybox_winner?.our_price || data.sale_price;
+      console.log(`scraper: price fields for ${asin} — pricing=${data.pricing} original_price=${data.original_price} price=${data.price} price_lower_bound=${data.price_lower_bound}`);
+      const price = parsePrice(priceRaw);
+      if (!price) {
+        console.warn(`scraper: no price found for ${asin} — keys returned: ${Object.keys(data).join(', ')}`);
+        throw new Error("Price not found in ScraperAPI response.");
+      }
 
       // Amazon's strikethrough "list price" — only present when the item is discounted
       const listPriceRaw = parsePrice(data.list_price);
