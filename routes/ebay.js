@@ -2538,6 +2538,93 @@ router.delete('/listing/:id/variation', async (req, res) => {
   }
 });
 
+// ── Add a new variation to an existing multi-variation listing ────────
+router.post('/listing/:id/add-variation', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    if (!cleanId) return res.status(400).json({ error: 'Listing ID must be numeric' });
+    const { variantLabel, price } = req.body;
+    if (!variantLabel || !price || isNaN(Number(price)) || Number(price) <= 0)
+      return res.status(400).json({ error: 'variantLabel and price are required' });
+
+    const priceStr = Number(price).toFixed(2);
+    const label = variantLabel.trim();
+
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
+      );
+    }
+    function checkFailure(xml) {
+      if (!/<Ack>Failure<\/Ack>/.test(xml)) return null;
+      return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
+        || 'eBay returned an error';
+    }
+
+    // Read current listing to get existing variations + dimension name
+    const { data: getItemXml } = await tradingPost('GetItem',
+      `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+    );
+    const getItemErr = checkFailure(getItemXml);
+    if (getItemErr) return res.status(400).json({ error: getItemErr });
+
+    const varBlocks = [];
+    const varRe = /<Variation>([\s\S]*?)<\/Variation>/g;
+    let vm;
+    while ((vm = varRe.exec(getItemXml)) !== null) varBlocks.push(vm[0]);
+    if (varBlocks.length === 0) return res.status(400).json({ error: 'Listing has no variations — cannot add a variation to a single-item listing' });
+
+    // Detect the variation dimension name (e.g. "Color", "Size")
+    const dimName = getItemXml.match(/<VariationSpecificName>([\s\S]*?)<\/VariationSpecificName>/)?.[1] || 'Color';
+
+    // Check the new label doesn't already exist
+    const existingLabels = varBlocks.map(b => {
+      const raw = b.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+      return raw.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+    });
+    if (existingLabels.some(l => l.toLowerCase() === label.toLowerCase()))
+      return res.status(409).json({ error: `Variation "${label}" already exists on this listing` });
+
+    // Rebuild existing variation XML preserving prices and SKUs
+    const existingXml = varBlocks.map(vBlock => {
+      const currentPriceM = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+      const currentPrice = currentPriceM ? parseFloat(currentPriceM[1]).toFixed(2) : '0.00';
+      const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+      const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+      const qty = vBlock.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '1';
+      const skuXml = `<SKU>${sku || sanitizeSku(`${cleanId}-${existingLabels[varBlocks.indexOf(vBlock)]}`)}</SKU>`;
+      return `<Variation>${skuXml}<StartPrice currencyID="USD">${currentPrice}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
+    }).join('');
+
+    // New variation XML
+    const newSku = sanitizeSku(`${cleanId}-${label}`);
+    const newVarXml = `<Variation><SKU>${newSku}</SKU><StartPrice currencyID="USD">${priceStr}</StartPrice><Quantity>1</Quantity><VariationSpecifics><NameValueList><Name>${dimName}</Name><Value>${label}</Value></NameValueList></VariationSpecifics></Variation>`;
+
+    const picturesXml = extractVariationPictures(getItemXml);
+    const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${existingXml}${newVarXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+    const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
+    const err = checkFailure(xml);
+    if (err) return res.status(400).json({ error: err });
+
+    console.log(`add-variation: added "${label}" at $${priceStr} to listing ${cleanId}`);
+    res.json({ ok: true, label, price: priceStr, totalVariations: varBlocks.length + 1 });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message || 'Failed to add variation' });
+  }
+});
+
 // ── End (delete) a listing via Trading API (EndFixedPriceItem) ─────────
 router.delete('/listing/:id', async (req, res) => {
   try {
