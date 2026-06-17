@@ -39,10 +39,10 @@ router.get("/debug-raw", async (req, res) => {
   }
 });
 
-// GET all tracked products (excludes archived — zero-view listings ended by the auto-end job)
+// GET all tracked products
 router.get("/", async (req, res) => {
   try {
-    const products = await Product.find({ status: { $ne: 'archived' } }).sort({ createdAt: -1 });
+    const products = await Product.find().sort({ createdAt: -1 });
     res.json(products);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -136,7 +136,7 @@ router.post("/", async (req, res) => {
 
     const cleanedUrl = cleanUrl(url);
 
-    const existing = await Product.findOne({ url: cleanedUrl, status: { $ne: 'archived' } });
+    const existing = await Product.findOne({ url: cleanedUrl });
     if (existing) return res.status(409).json({ error: "Already tracking this product." });
 
     const info = await fetchProduct(cleanedUrl);
@@ -222,14 +222,10 @@ router.post("/:id/refresh-images", async (req, res) => {
   }
 });
 
-// DELETE remove a product — soft-delete (archive)
+// DELETE remove a product — hard delete
 router.delete("/:id", async (req, res) => {
   try {
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
-      { $set: { status: 'archived', archivedAt: new Date(), ebayListingId: null, listedAt: null } },
-      { new: false }
-    );
+    const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ error: "Product not found" });
 
     // End the eBay listing if one was active

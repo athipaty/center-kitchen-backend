@@ -239,7 +239,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = fa
     // Multi-variation: look up every DB variant for this listing and price each eBay
     // variation independently using its own Amazon price. This prevents substring label
     // collisions (e.g. "Colorful" matching "Yellow+colorful") from corrupting prices.
-    const dbVariants = await Product.find({ ebayListingId: cleanId, status: { $ne: 'archived' } }).lean();
+    const dbVariants = await Product.find({ ebayListingId: cleanId }).lean();
 
     const variationXml = varBlocks.map(block => {
       const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);

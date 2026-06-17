@@ -368,17 +368,11 @@ async function runAutoEndZeroViews() {
         const folders = [...new Set(linked.map(p => p.cloudinaryFolder).filter(Boolean))];
         // Each variant that was linked = 1 freed slot
         slotsFreed += linked.length;
-        // Soft-delete: archive rather than hard-delete so price history and product info
-        // are retained for auditing. Archived products are excluded from the UI, price
-        // checks, and future discovery runs.
-        await Product.updateMany(
-          { ebayListingId: listingId },
-          { $set: { ebayListingId: null, status: 'archived', archivedAt: new Date() } }
-        );
+        await Product.deleteMany({ ebayListingId: listingId });
         for (const folder of folders) {
           await deleteCloudinaryFolder(folder).catch(() => {});
         }
-        console.log(`auto-end-zero-views: archived listing ${listingId} (${linked.length} variant slot(s) freed)`);
+        console.log(`auto-end-zero-views: deleted listing ${listingId} (${linked.length} variant slot(s) freed)`);
       } catch (e) {
         console.error(`auto-end-zero-views: failed to end ${listingId}:`, e.message);
       }
