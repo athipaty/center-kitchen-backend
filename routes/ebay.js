@@ -2455,6 +2455,89 @@ router.post('/listing/price', async (req, res) => {
   }
 });
 
+// ── Remove a single variation from a multi-variation listing ─────────
+router.delete('/listing/:id/variation', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    if (!cleanId) return res.status(400).json({ error: 'Listing ID must be numeric' });
+    const { variantLabel } = req.body;
+    if (!variantLabel) return res.status(400).json({ error: 'variantLabel is required' });
+
+    const label = variantLabel.toLowerCase().trim();
+    const tradingHeaders = {
+      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-IAF-TOKEN': token,
+      'Content-Type': 'text/xml',
+    };
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
+      );
+    }
+    function checkFailure(xml) {
+      if (!/<Ack>Failure<\/Ack>/.test(xml) && !/<Ack>PartialFailure<\/Ack>/.test(xml)) return null;
+      return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
+        || 'eBay returned an error';
+    }
+
+    const { data: getItemXml } = await tradingPost('GetItem',
+      `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+    );
+    const getItemErr = checkFailure(getItemXml);
+    if (getItemErr) return res.status(400).json({ error: getItemErr });
+
+    const varBlocks = [];
+    const varRe = /<Variation>([\s\S]*?)<\/Variation>/g;
+    let vm;
+    while ((vm = varRe.exec(getItemXml)) !== null) varBlocks.push(vm[0]);
+
+    if (varBlocks.length === 0) return res.json({ ok: true, removed: false, message: 'No variations found' });
+
+    const kept = varBlocks.filter(vBlock => {
+      const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+      let nv;
+      while ((nv = nvRe.exec(vBlock)) !== null) {
+        const raw = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+        const val = raw.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").toLowerCase();
+        if (val === label || label.includes(val) || val.includes(label)) return false;
+      }
+      return true;
+    });
+
+    if (kept.length === varBlocks.length) return res.json({ ok: true, removed: false, message: 'Variation not found in listing' });
+    if (kept.length === 0) return res.json({ ok: true, removed: true, message: 'Last variation — listing will be ended separately' });
+
+    const variationXml = kept.map(vBlock => {
+      const currentPriceM = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+      const currentPrice = currentPriceM ? parseFloat(currentPriceM[1]).toFixed(2) : '0.00';
+      const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+      const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+      const varVal = vBlock.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+      const skuXml = sku ? `<SKU>${sku}</SKU>` : `<SKU>${sanitizeSku(`${cleanId}-${varVal}`)}</SKU>`;
+      const qty = vBlock.match(/<Quantity>([\d]+)<\/Quantity>/)?.[1] || '1';
+      return `<Variation>${skuXml}<StartPrice currencyID="USD">${currentPrice}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
+    }).join('');
+
+    const picturesXml = extractVariationPictures(getItemXml);
+    const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+    const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
+    const err = checkFailure(xml);
+    if (err) return res.status(400).json({ error: err });
+
+    res.json({ ok: true, removed: true, keptCount: kept.length });
+  } catch (err) {
+    if (err.response?.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message || 'Failed to remove variation' });
+  }
+});
+
 // ── End (delete) a listing via Trading API (EndFixedPriceItem) ─────────
 router.delete('/listing/:id', async (req, res) => {
   try {

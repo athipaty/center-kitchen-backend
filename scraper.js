@@ -28,6 +28,18 @@ function parsePrice(text) {
 }
 
 function parseVariants(data) {
+  // Build a price lookup from data.variants (keyed by ASIN) to fill in prices
+  // when the primary customization_options path doesn't include them.
+  const variantPriceByAsin = {};
+  if (Array.isArray(data.variants)) {
+    for (const v of data.variants) {
+      const asin = v.asin || v.ASIN;
+      if (!asin) continue;
+      const p = parsePrice(v.price || v.pricing || v.original_price);
+      if (p) variantPriceByAsin[asin] = p;
+    }
+  }
+
   // Primary: customization_options.{color,size,...} — each entry has asin + value + image
   const opts = data.customization_options;
   if (opts && typeof opts === 'object') {
@@ -38,7 +50,7 @@ function parseVariants(data) {
       for (const opt of options) {
         if (!opt.asin || !opt.value || seen.has(opt.asin)) continue;
         seen.add(opt.asin);
-        result.push({ asin: opt.asin, label: opt.value, price: null, image: opt.image || null });
+        result.push({ asin: opt.asin, label: opt.value, price: variantPriceByAsin[opt.asin] || null, image: opt.image || null });
       }
     }
     if (result.length > 0) return result;
