@@ -232,6 +232,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
       const price = parsePrice(priceRaw);
       if (!price) {
         console.warn(`scraper: no price found for ${asin} — keys returned: ${Object.keys(data).join(', ')}`);
+        _productCache.delete(asin); // don't keep a bad response cached
         throw new Error("Price not found in ScraperAPI response.");
       }
 
