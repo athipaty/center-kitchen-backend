@@ -2425,7 +2425,7 @@ router.post('/listing/price', async (req, res) => {
           while ((nv = nvRe.exec(vBlock)) !== null) {
             const raw = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
             const val = raw.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").toLowerCase();
-            if (val === label || label.includes(val) || val.includes(label)) { isMatch = true; break; }
+            if (val === label) { isMatch = true; break; }
           }
         }
 
