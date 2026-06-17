@@ -63,11 +63,11 @@ function parseVariants(data) {
   }).filter(Boolean);
 }
 
-// Full ScraperAPI HTML fallback — 1 credit, parses raw Amazon HTML.
-// Used when the structured endpoint (5 credits) fails.
+// Full ScraperAPI HTML fallback — JS-rendered (5 credits), used when structured endpoint fails.
+// render=true ensures coupon/JS-gated prices are visible in the DOM.
 async function tryScraperApiHtml(url, scraperKey) {
   const { data: html } = await axios.get('https://api.scraperapi.com/', {
-    params: { api_key: scraperKey, url },
+    params: { api_key: scraperKey, url, render: true },
     timeout: 60000,
   });
   if (html.includes('validateCaptcha') || html.includes('robot')) return null;
