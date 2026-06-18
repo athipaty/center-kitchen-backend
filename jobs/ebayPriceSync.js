@@ -42,7 +42,13 @@ function basicAuth() {
 
 async function saveTokens() {
   try {
-    await EbayToken.findByIdAndUpdate('ebay', tokens, { upsert: true, new: true });
+    // Only update the fields this module manages — never overwrite refresh_token_expires_at
+    // which is set by the OAuth flow in routes/ebay.js and must survive price-sync token refreshes.
+    await EbayToken.findByIdAndUpdate('ebay', {
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_at: tokens.expires_at,
+    }, { upsert: true, new: true });
   } catch {}
 }
 

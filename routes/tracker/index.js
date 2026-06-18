@@ -10,6 +10,7 @@ const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 const { deleteCloudinaryFolder } = require("../../utils/cloudinaryUtils");
+const { endListing } = require("../../jobs/ebayPriceSync");
 
 // GET current tracker settings (saleModeActive)
 router.get("/settings", async (req, res) => {
@@ -236,8 +237,7 @@ router.delete("/:id", async (req, res) => {
 
     // End the eBay listing if one was active
     if (product.ebayListingId) {
-      const PORT = process.env.PORT || 5000;
-      axios.delete(`http://localhost:${PORT}/api/ebay/listing/${product.ebayListingId}`).catch(e => {
+      endListing(product.ebayListingId).catch(e => {
         console.warn(`delete: failed to end eBay listing ${product.ebayListingId}:`, e.message);
       });
     }
@@ -389,7 +389,7 @@ router.get("/profit-summary", async (req, res) => {
       const rows = variants.map(v => {
         const ebay   = calcEbayPrice(v.current);
         const fee    = calcFee(ebay);
-        const profit = +(ebay - v.current - fee).toFixed(2);
+        const profit = +(ebay - v.current * 1.085 - fee).toFixed(2);
         const margin = +((profit / ebay) * 100).toFixed(1);
         return { amazon: v.current, ebay, profit, margin, variant: v.variant, status: v.status };
       });

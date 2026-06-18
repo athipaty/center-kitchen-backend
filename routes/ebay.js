@@ -2270,6 +2270,7 @@ router.post('/listing/variation-photos', async (req, res) => {
     // ignores the photo update and keeps showing the wrong image for each variant.
     let dimName = variantDimension || 'Color';
     const ebayLabelMap = {}; // lowercase → exact stored label
+    let existingVarXml = ''; // preserve existing <Variation> elements alongside Pictures
     try {
       const { data: getXml } = await axios.post('https://api.ebay.com/ws/api.dll',
         `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`,
@@ -2310,6 +2311,21 @@ router.post('/listing/variation-photos', async (req, res) => {
       if (!/<Variation>/i.test(getXml)) {
         return res.status(400).json({ error: 'This listing has no variations — Fix Variation Photos only applies to multi-variation listings.' });
       }
+      // Preserve all existing <Variation> elements — ReviseFixedPriceItem replaces the entire
+      // <Variations> container, so omitting them would delete all variations from the listing.
+      const varRe3 = /<Variation>([\s\S]*?)<\/Variation>/g;
+      let vm3;
+      while ((vm3 = varRe3.exec(getXml)) !== null) {
+        const priceM = vm3[1].match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+        const qtyM   = vm3[1].match(/<Quantity>(\d+)<\/Quantity>/);
+        const specsM = vm3[1].match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/);
+        const skuM   = vm3[1].match(/<SKU>([\s\S]*?)<\/SKU>/);
+        const price3 = priceM ? priceM[1] : '0.00';
+        const qty3   = qtyM   ? qtyM[1]   : '1';
+        const specs3 = specsM ? specsM[1]  : '';
+        const sku3   = skuM   ? `<SKU>${skuM[1]}</SKU>` : '';
+        existingVarXml += `<Variation>${sku3}<StartPrice currencyID="USD">${price3}</StartPrice><Quantity>${qty3}</Quantity><VariationSpecifics>${specs3}</VariationSpecifics></Variation>`;
+      }
     } catch (e) {
       console.log('variation-photos: GetItem failed, using supplied dimension:', dimName, e.message);
     }
@@ -2332,6 +2348,7 @@ router.post('/listing/variation-photos', async (req, res) => {
       <Item>
         <ItemID>${cleanId}</ItemID>
         <Variations>
+          ${existingVarXml}
           <Pictures>
             <VariationSpecificName>${escXml(dimName)}</VariationSpecificName>
             ${pictureSets}
@@ -2715,17 +2732,22 @@ router.post('/sale-mode', async (req, res) => {
         const varBlocks = [...getXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
 
         if (varBlocks.length) {
-          // Multi-variation: match each variant's cost by label
+          // Multi-variation: reprice matched variants, preserve current price for unmatched ones
           const variationXml = varBlocks.map(vBlock => {
             const specifics = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
             const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+            const qtyM = vBlock.match(/<Quantity>(\d+)<\/Quantity>/);
             const ebayVal = specifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
             const matched = bestVariantMatch(variants, ebayVal);
-            const cost = matched?.current || 0;
-            if (!cost) return null;
-            const newPrice = calcEbayPrice(cost, active).toFixed(2);
+            const currentPriceM = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+            // Keep existing price if no DB match — never drop unmatched variations or eBay deletes them
+            const newPrice = matched?.current
+              ? calcEbayPrice(matched.current, active).toFixed(2)
+              : (currentPriceM ? currentPriceM[1] : null);
+            if (!newPrice) return null;
+            const qty3 = qtyM ? qtyM[1] : '1';
             const skuXml = `<SKU>${sku || sanitizeSku(`${cleanId}-${ebayVal}`)}</SKU>`;
-            return `<Variation>${skuXml}<StartPrice currencyID="USD">${newPrice}</StartPrice><VariationSpecifics>${specifics}</VariationSpecifics></Variation>`;
+            return `<Variation>${skuXml}<StartPrice currencyID="USD">${newPrice}</StartPrice><Quantity>${qty3}</Quantity><VariationSpecifics>${specifics}</VariationSpecifics></Variation>`;
           }).filter(Boolean).join('');
 
           if (!variationXml) { results.skipped++; continue; }
