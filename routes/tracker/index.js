@@ -70,14 +70,12 @@ router.post("/preview", async (req, res) => {
   }
 });
 
-// GET search Amazon for items currently on sale (have a strikethrough/original price)
+// GET search Amazon for Prime items under $15 with 4+ star rating
 router.get("/search-deals", async (req, res) => {
   try {
     const rawQuery = (req.query.query || "").trim();
     const category = (req.query.category || "").trim();
-    // A category alone isn't a great search query on its own — pairing it with
-    // "deals" steers Amazon's search toward discounted listings in that category.
-    const searchTerm = rawQuery || (category ? `${category} deals` : "");
+    const searchTerm = rawQuery || category || "";
     if (!searchTerm) return res.status(400).json({ error: "query or category is required" });
     if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
 
@@ -97,13 +95,17 @@ router.get("/search-deals", async (req, res) => {
     const seen = new Set();
     const deals = results
       .filter(r => {
-        if (!r.asin || !(r.original_price?.price > r.price) || seen.has(r.asin)) return false;
+        if (!r.asin || seen.has(r.asin)) return false;
+        if (!r.has_prime) return false;
+        if (!r.price || r.price > 15) return false;
+        if (!r.stars || r.stars < 4) return false;
         seen.add(r.asin);
         return true;
       })
       .map(r => {
         const price = r.price;
-        const originalPrice = r.original_price.price;
+        const originalPrice = r.original_price?.price > price ? r.original_price.price : null;
+        const discountPercent = originalPrice ? Math.round((1 - price / originalPrice) * 100) : null;
         return {
           asin: r.asin,
           title: r.name,
@@ -112,14 +114,14 @@ router.get("/search-deals", async (req, res) => {
           price,
           originalPrice,
           currency: r.price_symbol || "$",
-          discountPercent: Math.round((1 - price / originalPrice) * 100),
+          discountPercent,
           rating: r.stars || null,
           reviewCount: r.total_reviews || 0,
-          isPrime: !!r.has_prime,
+          isPrime: true,
           isLimitedDeal: !!r.is_limited_deal,
         };
       })
-      .sort((a, b) => b.discountPercent - a.discountPercent);
+      .sort((a, b) => (b.discountPercent || 0) - (a.discountPercent || 0));
 
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ query: searchTerm, category: category || null, deals });
