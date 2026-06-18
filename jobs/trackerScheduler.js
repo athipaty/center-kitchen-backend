@@ -303,7 +303,6 @@ async function runOrphanCleanup() {
 
 // Auto-end listings 4+ days old with 0 eBay views AND 0 watchers, then fill freed slots
 async function runAutoEndZeroViews() {
-  let slotsFreed = 0;
   try {
     const { getAccessToken } = require('./ebayPriceSync');
     const token = await getAccessToken();
@@ -366,8 +365,6 @@ async function runAutoEndZeroViews() {
         await endListing(listingId);
         const linked = await Product.find({ ebayListingId: listingId });
         const folders = [...new Set(linked.map(p => p.cloudinaryFolder).filter(Boolean))];
-        // Each variant that was linked = 1 freed slot
-        slotsFreed += linked.length;
         await Product.deleteMany({ ebayListingId: listingId });
         for (const folder of folders) {
           await deleteCloudinaryFolder(folder).catch(() => {});
@@ -526,12 +523,13 @@ async function runAutoRestock() {
             `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${itemId}</ItemID></GetItemRequest>`
           );
           const varBlocks = [...getXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+          const decodeXmlEntities = s => (s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
           const soldSpecifics = varSpecs.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
-          const soldValue = soldSpecifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase() || '';
+          const soldValue = decodeXmlEntities(soldSpecifics.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '').toLowerCase();
 
           const variationXml = varBlocks.map(vBlock => {
             const specs = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
-            const val = specs.match(/<Value>([\s\S]*?)<\/Value>/)?.[1]?.toLowerCase() || '';
+            const val = decodeXmlEntities(specs.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '').toLowerCase();
             const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0';
             const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
             const skuXml = `<SKU>${sku || (itemId + (val ? '-' + val.replace(/[^a-z0-9]/g, '') : '')).slice(0, 50)}</SKU>`;
