@@ -225,8 +225,9 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   // Use ScraperAPI structured endpoint when key + ASIN available
   if (scraperKey && asin) {
     try {
-      // Check cache before spending 5 credits
-      const cached = _productCache.get(asin);
+      // Cache is only used for full fetches (adding/previewing products).
+      // Price-only checks always fetch fresh data so price changes are never missed.
+      const cached = !priceOnly && _productCache.get(asin);
       const data = (cached && cached.expiresAt > Date.now())
         ? (console.log(`scraper: cache hit for ${asin} — 0 credits used`), cached.data)
         : await (async () => {
@@ -234,9 +235,11 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
               `https://api.scraperapi.com/structured/amazon/product/v1`,
               { params: { api_key: scraperKey, asin }, timeout: 60000 }
             );
-            const expiresAt = Date.now() + PRODUCT_CACHE_TTL;
-            _productCache.set(asin, { data, expiresAt });
-            persistCacheEntry(asin, data, expiresAt); // write-through to MongoDB
+            if (!priceOnly) {
+              const expiresAt = Date.now() + PRODUCT_CACHE_TTL;
+              _productCache.set(asin, { data, expiresAt });
+              persistCacheEntry(asin, data, expiresAt); // write-through to MongoDB
+            }
             return data;
           })();
 
