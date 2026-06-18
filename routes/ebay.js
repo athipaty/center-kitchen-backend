@@ -2409,9 +2409,17 @@ router.post('/listing/price', async (req, res) => {
     }
     function checkFailure(xml) {
       if (!/<Ack>Failure<\/Ack>/.test(xml) && !/<Ack>PartialFailure<\/Ack>/.test(xml)) return null;
-      return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
-        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
-        || 'eBay returned an error';
+      const msgs = [];
+      const errRe = /<Errors>([\s\S]*?)<\/Errors>/g;
+      let em;
+      while ((em = errRe.exec(xml)) !== null) {
+        const sev = em[1].match(/<SeverityCode>([^<]+)<\/SeverityCode>/)?.[1] || '';
+        if (sev === 'Warning') continue;
+        const msg = em[1].match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+          || em[1].match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1] || '';
+        if (msg) msgs.push(msg);
+      }
+      return msgs.length ? msgs.join(' | ') : null;
     }
 
     // GetItem to read current variations
@@ -2506,9 +2514,17 @@ router.delete('/listing/:id/variation', async (req, res) => {
     }
     function checkFailure(xml) {
       if (!/<Ack>Failure<\/Ack>/.test(xml) && !/<Ack>PartialFailure<\/Ack>/.test(xml)) return null;
-      return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
-        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
-        || 'eBay returned an error';
+      const msgs = [];
+      const errRe = /<Errors>([\s\S]*?)<\/Errors>/g;
+      let em;
+      while ((em = errRe.exec(xml)) !== null) {
+        const sev = em[1].match(/<SeverityCode>([^<]+)<\/SeverityCode>/)?.[1] || '';
+        if (sev === 'Warning') continue;
+        const msg = em[1].match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+          || em[1].match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1] || '';
+        if (msg) msgs.push(msg);
+      }
+      return msgs.length ? msgs.join(' | ') : null;
     }
 
     const { data: getItemXml } = await tradingPost('GetItem',
@@ -2590,10 +2606,18 @@ router.post('/listing/:id/add-variation', async (req, res) => {
       );
     }
     function checkFailure(xml) {
-      if (!/<Ack>Failure<\/Ack>/.test(xml)) return null;
-      return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
-        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
-        || 'eBay returned an error';
+      if (!/<Ack>Failure<\/Ack>/.test(xml) && !/<Ack>PartialFailure<\/Ack>/.test(xml)) return null;
+      const msgs = [];
+      const errRe = /<Errors>([\s\S]*?)<\/Errors>/g;
+      let em;
+      while ((em = errRe.exec(xml)) !== null) {
+        const sev = em[1].match(/<SeverityCode>([^<]+)<\/SeverityCode>/)?.[1] || '';
+        if (sev === 'Warning') continue;
+        const msg = em[1].match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+          || em[1].match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1] || '';
+        if (msg) msgs.push(msg);
+      }
+      return msgs.length ? msgs.join(' | ') : null;
     }
 
     // Read current listing to get existing variations + dimension name
