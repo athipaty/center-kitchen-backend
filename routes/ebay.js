@@ -3158,7 +3158,9 @@ router.post('/trading-create-listing', async (req, res) => {
       for (const fallbackDim of fallbacks) {
         console.log(`trading-create-listing: 21920061 — "${activeDimension}" not allowed for cat ${catId}, retrying with "${fallbackDim}"`);
         varSpecsXml = rebuildVarSpecsXml(fallbackDim);
-        delete aspects[activeDimension];
+        // Keep the old dimension in aspects — we're switching away from it as the variation dim,
+        // so eBay now allows it to remain as a required item specific (e.g. Style="Sun Hat").
+        // Only remove the new dimension to avoid the 21916626 "appears in both" error.
         delete aspects[fallbackDim];
         activeDimension = fallbackDim;
         ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
