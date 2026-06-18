@@ -2633,8 +2633,15 @@ router.post('/listing/:id/add-variation', async (req, res) => {
     while ((vm = varRe.exec(getItemXml)) !== null) varBlocks.push(vm[0]);
     if (varBlocks.length === 0) return res.status(400).json({ error: 'Listing has no variations — cannot add a variation to a single-item listing' });
 
-    // Detect the variation dimension name (e.g. "Color", "Size")
-    const dimName = getItemXml.match(/<VariationSpecificName>([\s\S]*?)<\/VariationSpecificName>/)?.[1] || 'Color';
+    // Detect the variation dimension name — try three sources in order of reliability:
+    // 1. VariationSpecificsSet (the canonical set of all valid dimension values)
+    // 2. First individual Variation's NameValueList Name
+    // 3. VariationSpecificName in the Pictures block (only present if photos were assigned)
+    const dimName =
+      getItemXml.match(/<VariationSpecificsSet>[\s\S]*?<NameValueList>[\s\S]*?<Name>([\s\S]*?)<\/Name>/)?.[1]
+      || varBlocks[0]?.match(/<NameValueList>[\s\S]*?<Name>([\s\S]*?)<\/Name>/)?.[1]
+      || getItemXml.match(/<VariationSpecificName>([\s\S]*?)<\/VariationSpecificName>/)?.[1]
+      || 'Style';
 
     // Check the new label doesn't already exist
     const existingLabels = varBlocks.map(b => {
