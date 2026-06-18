@@ -3275,7 +3275,11 @@ router.post('/trading-create-listing', async (req, res) => {
         allMsgs.push(`[${code}] ${detail}`);
       }
       const msg = allMsgs.join(' | ') || xml.slice(0, 600);
-      console.error('trading-create-listing failure XML:\n', xml.slice(0, 1200));
+      const allCodes = [...xml.matchAll(/<ErrorCode>([^<]+)<\/ErrorCode>/g)].map(m => m[1]);
+      const allSevs  = [...xml.matchAll(/<SeverityCode>([^<]+)<\/SeverityCode>/g)].map(m => m[1]);
+      const allLongs = [...xml.matchAll(/<LongMessage>([\s\S]*?)<\/LongMessage>/g)].map(m => m[1].slice(0, 120));
+      console.error('trading-create-listing errors:', allCodes.map((c, i) => `[${c}/${allSevs[i] || '?'}] ${allLongs[i] || ''}`).join(' | '));
+      console.error('trading-create-listing failure XML:\n', xml.slice(0, 2500));
       // [240] = eBay selling velocity / limit block — return 429 so callers can detect and stop
       if (allMsgs.some(m => m.startsWith('[240]'))) {
         return res.status(429).json({ error: 'selling_limit_reached', message: msg });
