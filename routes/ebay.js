@@ -3227,10 +3227,26 @@ router.post('/trading-create-listing', async (req, res) => {
               const best = await pickBestAspectValue(f, info.values, safeTitle);
               if (best) aspects[f] = [best];
             }
+            // Fallback: if no valid value found, use 'Other' so the listing isn't blocked
+            if (!aspects[f]) aspects[f] = ['Other'];
           }
         }
-        // Never let variantDimension sneak back into ItemSpecifics during retry
-        if (variants?.length && variantDimension) delete aspects[variantDimension];
+        // If the variantDimension is also a required item specific, we have a conflict:
+        // eBay requires it in ItemSpecifics but also forbids it there when it's the variation dim.
+        // Resolve by switching the variation to a different dimension so the item specific can stay.
+        if (variants?.length && variantDimension) {
+          if (missingFields.includes(variantDimension)) {
+            const altDim = ['Color', 'Size', 'Style'].find(d => d !== variantDimension);
+            if (altDim) {
+              console.log(`trading-create-listing: "${variantDimension}" is both a required item specific and the variation dim — switching variation to "${altDim}"`);
+              varSpecsXml = rebuildVarSpecsXml(altDim);
+              delete aspects[altDim];
+            }
+            // Keep aspects[variantDimension] — it stays as a required item specific
+          } else {
+            delete aspects[variantDimension];
+          }
+        }
         console.log('trading-create-listing: retry specifics:', JSON.stringify(Object.fromEntries(missingFields.map(f => [f, aspects[f]]))));
         ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
       }
