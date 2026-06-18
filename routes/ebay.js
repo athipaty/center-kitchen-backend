@@ -2665,10 +2665,15 @@ router.post('/listing/:id/add-variation', async (req, res) => {
 
     // New variation XML
     const newSku = sanitizeSku(`${cleanId}-${label}`);
-    const newVarXml = `<Variation><SKU>${newSku}</SKU><StartPrice currencyID="USD">${priceStr}</StartPrice><Quantity>1</Quantity><VariationSpecifics><NameValueList><Name>${dimName}</Name><Value>${label}</Value></NameValueList></VariationSpecifics></Variation>`;
+    const newVarXml = `<Variation><SKU>${newSku}</SKU><StartPrice currencyID="USD">${priceStr}</StartPrice><Quantity>1</Quantity><VariationSpecifics><NameValueList><Name>${escXml(dimName)}</Name><Value>${escXml(label)}</Value></NameValueList></VariationSpecifics></Variation>`;
+
+    // VariationSpecificsSet must list ALL valid values including the new one —
+    // without this eBay rejects the new value as not matching the listing's spec set.
+    const allValues = [...existingLabels, label];
+    const specSetXml = `<VariationSpecificsSet><NameValueList><Name>${escXml(dimName)}</Name>${allValues.map(v => `<Value>${escXml(v)}</Value>`).join('')}</NameValueList></VariationSpecificsSet>`;
 
     const picturesXml = extractVariationPictures(getItemXml);
-    const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${existingXml}${newVarXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+    const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${existingXml}${newVarXml}${specSetXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
     const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
     const err = checkFailure(xml);
     if (err) return res.status(400).json({ error: err });
