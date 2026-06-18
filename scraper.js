@@ -253,20 +253,16 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   const scraperKey = process.env.SCRAPER_API_KEY;
   const asin = extractAsin(url);
 
-  // Price-only mode: 3-tier fetch — free direct → 1-credit proxy → 5-credit structured
+  // Price-only mode: free direct first, then 5-credit structured.
+  // The 1-credit standard proxy doesn't work for Amazon — prices require JS rendering,
+  // which costs the same 5 credits as the structured endpoint anyway.
   if (priceOnly && scraperKey && asin) {
     const direct = await tryDirectPrice(url);
     if (direct) {
       console.log(`scraper: direct price OK for ${asin} ($${direct.price}) — 0 credits`);
       return { title: null, price: direct.price, currency: direct.currency, image: null, images: [], upc: null, variants: [], isPrime: null, variant: null, specs: {} };
     }
-    // 1-credit proxy — parses price + availability from HTML, avoids 5-credit structured call
-    const proxy = await tryProxyPrice(url, scraperKey);
-    if (proxy) {
-      console.log(`scraper: proxy price OK for ${asin} ($${proxy.price}) — 1 credit`);
-      return { title: null, price: proxy.price, currency: proxy.currency, image: null, images: [], upc: null, variants: [], isPrime: null, variant: null, specs: {} };
-    }
-    console.log(`scraper: proxy blocked for ${asin} — falling back to structured (5 credits)`);
+    console.log(`scraper: direct blocked for ${asin} — using structured (5 credits)`);
   }
 
   // Use ScraperAPI structured endpoint when key + ASIN available
