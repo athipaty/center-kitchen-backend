@@ -86,18 +86,20 @@ router.get("/search-deals", async (req, res) => {
       return res.json({ query: searchTerm, category: category || null, deals: cached.deals, cached: true });
     }
 
+    // rh=p_85:2470955011 is Amazon's built-in Prime-eligible filter (US).
+    // Using it at the source is more reliable than checking has_prime in the response,
+    // which ScraperAPI doesn't always populate.
     const { data } = await axios.get("https://api.scraperapi.com/structured/amazon/search/v1", {
-      params: { api_key: process.env.SCRAPER_API_KEY, query: searchTerm, country: "us" },
+      params: { api_key: process.env.SCRAPER_API_KEY, query: searchTerm, country: "us", rh: "p_85:2470955011" },
       timeout: 30000,
     });
 
     const results = data.results || data.organic_results || data.products || [];
     const seen = new Set();
-    let noPrime = 0, noPrice = 0, noStars = 0;
+    let noPrice = 0, noStars = 0;
     const deals = results
       .filter(r => {
         if (!r.asin || seen.has(r.asin)) return false;
-        if (!r.has_prime) { noPrime++; return false; }
         if (!r.price || r.price > 15) { noPrice++; return false; }
         if (!r.stars || r.stars < 4) { noStars++; return false; }
         seen.add(r.asin);
@@ -124,7 +126,7 @@ router.get("/search-deals", async (req, res) => {
       })
       .sort((a, b) => (b.discountPercent || 0) - (a.discountPercent || 0));
 
-    console.log(`search-deals "${searchTerm}": total=${results.length} passed=${deals.length} filtered_no_prime=${noPrime} filtered_price=${noPrice} filtered_stars=${noStars}`);
+    console.log(`search-deals "${searchTerm}": total=${results.length} passed=${deals.length} filtered_price=${noPrice} filtered_stars=${noStars}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ query: searchTerm, category: category || null, deals });
   } catch (err) {
