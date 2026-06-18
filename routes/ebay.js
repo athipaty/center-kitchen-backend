@@ -3175,7 +3175,9 @@ router.post('/trading-create-listing', async (req, res) => {
     }
 
     // 21916564 — category doesn't support multi-variation: strip variants and retry as single listing
+    let usedSingleItemFallback = false;
     if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21916564<\/ErrorCode>/.test(xml) && variants?.length) {
+      usedSingleItemFallback = true;
       console.log(`trading-create-listing: 21916564 for "${safeTitle}" — retrying as single listing (no variants)`);
       varSpecsXml = ''; // remove multi-variation structure
       const firstVariant = variants[0];
@@ -3295,7 +3297,7 @@ router.post('/trading-create-listing', async (req, res) => {
 
     if (!listingId) return res.status(500).json({ error: 'Listing created but could not extract ItemID', raw: xml.slice(0, 500) });
 
-    res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}` });
+    res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}`, isMultiVariation: !usedSingleItemFallback });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
