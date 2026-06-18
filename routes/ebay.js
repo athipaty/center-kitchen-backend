@@ -489,7 +489,7 @@ async function injectTitleAspects(catId, aspects, title) {
 }
 
 // Single-batch AI enrichment — fills all unfilled category aspects using product context
-async function enrichAspectsWithAI(catId, aspects, title, specs, bullets = []) {
+async function enrichAspectsWithAI(catId, aspects, title, specs, bullets = [], variantLabels = []) {
   const catAspects = await getValidAspectValues(catId);
   if (!Object.keys(catAspects).length) return;
 
@@ -509,6 +509,7 @@ async function enrichAspectsWithAI(catId, aspects, title, specs, bullets = []) {
         .join('\n')
     : '';
   const bulletText = bullets.length ? bullets.map(b => `- ${b}`).join('\n') : '';
+  const variantText = variantLabels.length ? `Variants: ${variantLabels.join(', ')}` : '';
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const prompt = `Fill in eBay item specifics for this product.
@@ -516,6 +517,7 @@ async function enrichAspectsWithAI(catId, aspects, title, specs, bullets = []) {
 Title: ${title}
 ${specText ? `\nSpecs:\n${specText}` : ''}
 ${bulletText ? `\nBullets:\n${bulletText}` : ''}
+${variantText ? `\n${variantText}` : ''}
 
 For each field below, provide a value based on the product info above.
 - If "validValues" is listed, pick EXACTLY one value from that list (exact match, case-sensitive).
@@ -2948,15 +2950,19 @@ router.post('/trading-create-listing', async (req, res) => {
     // Proactively inject aspects that can be matched from the title (avoids 21919303 on first attempt)
     await injectTitleAspects(catId, aspects, safeTitle);
 
-    // Fill remaining unfilled aspects (required + recommended) using product specs and bullets
-    await enrichAspectsWithAI(catId, aspects, safeTitle, specs, bullets);
+    // Fill remaining unfilled aspects (required + recommended) using product specs, bullets,
+    // and variant labels (e.g. "9 Months", "Blue") so Claude can infer Size/Color/etc.
+    const variantLabels = (variants || []).map(v => v.label).filter(Boolean);
+    await enrichAspectsWithAI(catId, aspects, safeTitle, specs, bullets, variantLabels);
 
     // For multi-variation listings, the variantDimension (Color/Size/Style) MUST NOT appear
     // in ItemSpecifics — eBay error 21916626 fires if the same name appears in both.
+    // Exception: single-variant listings have no variation conflict, so keep the dimension
+    // as an item specific (e.g. Size="9 Months" on a single-size baby shirt).
     // Save the value first: if eBay rejects this dimension (21920061) and we switch to another,
     // the saved value gets restored as a required item specific on the retry.
     const savedVarDimAspect = (variants?.length && variantDimension) ? (aspects[variantDimension] || null) : null;
-    if (variants?.length && variantDimension) delete aspects[variantDimension];
+    if (variants?.length > 1 && variantDimension) delete aspects[variantDimension];
 
     const buildSpecXml = (asp) => Object.entries(asp)
       .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
