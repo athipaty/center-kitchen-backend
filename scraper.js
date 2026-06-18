@@ -310,6 +310,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
         || data.price_lower_bound || data.buybox_winner?.price
         || data.buybox_winner?.our_price || data.sale_price
         || data.product_information?.price || data.product_information?.list_price;
+      if (priceOnly) console.log(`scraper: structured price OK for ${asin} — 5 credits`);
       console.log(`scraper: price fields for ${asin} — pricing=${data.pricing} original_price=${data.original_price} price=${data.price} price_lower_bound=${data.price_lower_bound} product_information.price=${data.product_information?.price}`);
       const price = parsePrice(priceRaw);
       if (!price) {
