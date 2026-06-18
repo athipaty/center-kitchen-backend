@@ -1508,7 +1508,7 @@ ${specPairs.map(([a, b]) => `<tr>
 
     const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background:#fff;max-width:900px;margin:0 auto}
+body{font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#222;background:#fff;max-width:900px;margin:0 auto}
 
 /* ── Hero: split layout on desktop ── */
 .hero{background:${t.dark};display:flex;align-items:stretch;min-height:340px}
@@ -1580,8 +1580,9 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background
   .hero-img{flex:0 0 auto}
   .hero-img img{max-height:280px;width:100%}
   .hero-body{padding:20px 16px 24px}
-  .hero-title{font-size:18px}
-  .hero-sub{font-size:13px}
+  body{font-size:17px}
+  .hero-title{font-size:20px}
+  .hero-sub{font-size:15px}
   .hero-badges{display:none}
   .trust-bar{flex-direction:column;align-items:stretch}
   .ti{border-right:none;border-bottom:1px solid rgba(255,255,255,0.15);justify-content:center;padding:10px 14px}
@@ -1591,15 +1592,17 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;background
   .pc{flex:0 0 auto;width:100%}
   .pc img{height:240px}
   .tc{padding:16px 14px}
-  .tc h3{font-size:16px}
+  .tc h3{font-size:18px}
+  .tc p{font-size:16px}
+  .tc ul li{font-size:16px}
   .gal{grid-template-columns:repeat(2,1fr);gap:6px;padding:10px}
   .gal img{height:110px}
-  .st{font-size:13px}
+  .st{font-size:15px}
   .sk,.sv{padding:8px 10px;width:auto}
   .st tr{display:grid;grid-template-columns:1fr 1fr}
-  .sh h2{font-size:18px}
+  .sh h2{font-size:20px}
   .cta{padding:26px 14px}
-  .cta h2{font-size:19px}
+  .cta h2{font-size:21px}
   .cb{grid-template-columns:1fr;justify-items:center}
   .cbb{width:100%;max-width:240px;text-align:center}
 }
