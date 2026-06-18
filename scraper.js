@@ -1,11 +1,41 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 
-// 24h in-memory cache for structured ScraperAPI product responses (keyed by ASIN).
-// Discovery runs multiple times per day and often re-evaluates the same ASINs —
-// this avoids spending 5 credits on a product we already fetched today.
+// Cache survives server restarts via MongoDB — critical because each restart would
+// otherwise re-scrape all 200+ products at 5 credits each (1,000+ credits per deploy).
+// In-memory Map is the hot layer; MongoDB is the persistence layer loaded at startup.
 const _productCache = new Map(); // asin → { data, expiresAt }
-const PRODUCT_CACHE_TTL = 24 * 60 * 60 * 1000;
+const PRODUCT_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
+
+let ScraperCache;
+try { ScraperCache = require('./models/tracker/ScraperCache'); } catch {}
+
+// Load all still-valid cache entries from MongoDB into the in-memory Map on startup
+async function warmCacheFromDB() {
+  if (!ScraperCache) return;
+  try {
+    const now = Date.now();
+    const entries = await ScraperCache.find({ expiresAt: { $gt: new Date(now) } }).lean();
+    for (const e of entries) {
+      _productCache.set(e._id, { data: e.data, expiresAt: new Date(e.expiresAt).getTime() });
+    }
+    if (entries.length) console.log(`scraper: warmed cache from DB — ${entries.length} ASINs loaded, 0 credits spent`);
+  } catch (e) {
+    console.warn('scraper: cache warm failed:', e.message);
+  }
+}
+warmCacheFromDB();
+
+async function persistCacheEntry(asin, data, expiresAt) {
+  if (!ScraperCache) return;
+  try {
+    await ScraperCache.findByIdAndUpdate(
+      asin,
+      { data, expiresAt: new Date(expiresAt) },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+  } catch {}
+}
 
 function cleanUrl(url) {
   const full = url.startsWith('http') ? url : `https://${url}`;
@@ -204,7 +234,9 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
               `https://api.scraperapi.com/structured/amazon/product/v1`,
               { params: { api_key: scraperKey, asin }, timeout: 60000 }
             );
-            _productCache.set(asin, { data, expiresAt: Date.now() + PRODUCT_CACHE_TTL });
+            const expiresAt = Date.now() + PRODUCT_CACHE_TTL;
+            _productCache.set(asin, { data, expiresAt });
+            persistCacheEntry(asin, data, expiresAt); // write-through to MongoDB
             return data;
           })();
 
