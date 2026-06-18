@@ -2950,6 +2950,9 @@ router.post('/trading-create-listing', async (req, res) => {
 
     // For multi-variation listings, the variantDimension (Color/Size/Style) MUST NOT appear
     // in ItemSpecifics — eBay error 21916626 fires if the same name appears in both.
+    // Save the value first: if eBay rejects this dimension (21920061) and we switch to another,
+    // the saved value gets restored as a required item specific on the retry.
+    const savedVarDimAspect = (variants?.length && variantDimension) ? (aspects[variantDimension] || null) : null;
     if (variants?.length && variantDimension) delete aspects[variantDimension];
 
     const buildSpecXml = (asp) => Object.entries(asp)
@@ -3158,10 +3161,10 @@ router.post('/trading-create-listing', async (req, res) => {
       for (const fallbackDim of fallbacks) {
         console.log(`trading-create-listing: 21920061 — "${activeDimension}" not allowed for cat ${catId}, retrying with "${fallbackDim}"`);
         varSpecsXml = rebuildVarSpecsXml(fallbackDim);
-        // Keep the old dimension in aspects — we're switching away from it as the variation dim,
-        // so eBay now allows it to remain as a required item specific (e.g. Style="Sun Hat").
-        // Only remove the new dimension to avoid the 21916626 "appears in both" error.
-        delete aspects[fallbackDim];
+        // Restore the old dimension's value as a required item specific now that it's no
+        // longer the variation dim (e.g. Style="Sun Hat" for a hats category listing).
+        if (savedVarDimAspect) aspects[variantDimension] = savedVarDimAspect;
+        delete aspects[fallbackDim]; // prevent new dim from appearing in item specifics
         activeDimension = fallbackDim;
         ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
         if (/<ItemID>\d+<\/ItemID>/.test(xml) || !/<ErrorCode>21920061<\/ErrorCode>/.test(xml)) break;
