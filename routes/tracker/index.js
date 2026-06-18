@@ -5,7 +5,7 @@ const Product = require("../../models/tracker/Product");
 
 // 30-minute cache for deal search results — each search costs 5 credits
 const _dealSearchCache = new Map(); // query → { deals, expiresAt }
-const DEAL_CACHE_TTL = 30 * 60 * 1000;
+const DEAL_CACHE_TTL = 2 * 60 * 60 * 1000; // 2h — Amazon deals change slowly
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");

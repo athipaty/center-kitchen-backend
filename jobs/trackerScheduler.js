@@ -70,17 +70,21 @@ async function checkProduct(p, saleMode = false) {
     p.failCount = 0;
     p.unavailableSince = null;
 
-    if (p.ebayListingId) {
+    const priceChanged  = info.price !== oldPrice;
+    const justRestocked = previousStatus !== 'active';
+    if (p.ebayListingId && (priceChanged || justRestocked)) {
       let syncErr = null;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
-          if (previousStatus !== 'active') {
+          if (priceChanged) await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
+          if (justRestocked) {
             await syncEbayQty(p.ebayListingId, p.variant, 1);
             console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1 (was ${previousStatus})`);
           }
-          const expected = calcEbayPrice(info.price, saleMode);
-          console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" amazon=$${info.price} → ebay=$${expected}`);
+          if (priceChanged) {
+            const expected = calcEbayPrice(info.price, saleMode);
+            console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" amazon=$${info.price} → ebay=$${expected}`);
+          }
           syncErr = null;
           break;
         } catch (e) {

@@ -69,6 +69,25 @@ router.post('/upload-images', async (req, res) => {
   const apiKey = process.env.CLOUDINARY_API_KEY;
   const apiSecret = process.env.CLOUDINARY_API_SECRET;
 
+  // Check if this folder already exists in Cloudinary — skip all uploads if it does
+  try {
+    const folder = `ebay-listings/${slug}`;
+    const searchRes = await axios.get(
+      `https://api.cloudinary.com/v1_1/${cloud}/resources/image?prefix=${encodeURIComponent(folder + '/')}&max_results=50&type=upload`,
+      { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
+    );
+    const existing = (searchRes.data.resources || []).map(r => r.secure_url).filter(Boolean);
+    if (existing.length >= imageUrls.length) {
+      console.log(`upload-images: folder ${folder} already has ${existing.length} images — skipping upload`);
+      return res.json({ cloudinaryUrls: existing, cached: true });
+    }
+    if (existing.length > 0) {
+      console.log(`upload-images: folder ${folder} has ${existing.length}/${imageUrls.length} — re-uploading all to refresh`);
+    }
+  } catch (e) {
+    console.log('upload-images: folder check failed, uploading fresh:', e.message);
+  }
+
   const cloudinaryUrls = [];
   for (let i = 0; i < imageUrls.length; i++) {
     const url = imageUrls[i];
@@ -411,8 +430,21 @@ router.get('/account-info', async (req, res) => {
 });
 
 // Fetch valid values + metadata for all aspects of an eBay category
+let EbayAspectsCache;
+try { EbayAspectsCache = require('../models/tracker/EbayAspectsCache'); } catch {}
+const ASPECTS_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days — category aspects rarely change
+
 async function getValidAspectValues(catId) {
   if (!catId) return {};
+  // Check MongoDB cache first — avoids one eBay OAuth + Taxonomy API call per listing
+  if (EbayAspectsCache) {
+    try {
+      const cached = await EbayAspectsCache.findById(String(catId)).lean();
+      if (cached && new Date(cached.expiresAt) > new Date()) {
+        return cached.aspects;
+      }
+    } catch {}
+  }
   try {
     const { data: appToken } = await axios.post(
       'https://api.ebay.com/identity/v1/oauth2/token',
@@ -431,6 +463,15 @@ async function getValidAspectValues(catId) {
         values: (aspect.aspectValues || []).map(v => v.localizedValue),
       };
     }
+    // Persist to MongoDB for 7 days
+    if (EbayAspectsCache) {
+      EbayAspectsCache.findByIdAndUpdate(
+        String(catId),
+        { aspects: result, expiresAt: new Date(Date.now() + ASPECTS_CACHE_TTL) },
+        { upsert: true }
+      ).catch(() => {});
+    }
+    console.log(`getValidAspectValues: fetched ${Object.keys(result).length} aspects for cat ${catId} — cached 7 days`);
     return result;
   } catch (e) {
     console.log('getValidAspectValues failed:', e.message);
@@ -3467,6 +3508,54 @@ router.get('/listing/:id/prices', async (req, res) => {
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Batch live prices for multiple listings — one call per listing (GetItem) ──────
+// ?ids=123,456,789  Returns { "123": { base, variations }, ... }
+router.get('/listings/prices-batch', async (req, res) => {
+  const rawIds = String(req.query.ids || '').split(',').map(s => s.replace(/\D/g, '')).filter(Boolean);
+  if (!rawIds.length) return res.status(400).json({ error: 'ids required' });
+  try {
+    const token = await getAccessToken();
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const headers = { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' };
+
+    const result = {};
+    await Promise.all(rawIds.map(async cleanId => {
+      try {
+        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+          `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID><IncludeItemSpecifics>true</IncludeItemSpecifics></GetItemRequest>`,
+          { headers: { ...headers, 'X-EBAY-API-CALL-NAME': 'GetItem' } }
+        );
+        if (/<Ack>Failure<\/Ack>/.test(xml)) { result[cleanId] = { error: 'not_found' }; return; }
+        const baseMatch = xml.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+        const base = baseMatch ? parseFloat(baseMatch[1]) : 0;
+        const variations = [];
+        const varRe = /<Variation>([\s\S]*?)<\/Variation>/g;
+        let m;
+        while ((m = varRe.exec(xml)) !== null) {
+          const block = m[1];
+          const priceMatch = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+          const price = priceMatch ? parseFloat(priceMatch[1]) : base;
+          const specs = {};
+          const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+          let nv;
+          while ((nv = nvRe.exec(block)) !== null) {
+            const name = nv[1].match(/<Name>([\s\S]*?)<\/Name>/)?.[1]?.toLowerCase();
+            const rawVal = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+            const value = rawVal.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").toLowerCase();
+            if (name && value) specs[name] = value;
+          }
+          variations.push({ price, specs });
+        }
+        result[cleanId] = { base, variations };
+      } catch { result[cleanId] = { error: 'failed' }; }
+    }));
+    res.json(result);
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
     res.status(500).json({ error: err.message });
   }
 });
