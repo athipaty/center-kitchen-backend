@@ -93,12 +93,13 @@ router.get("/search-deals", async (req, res) => {
 
     const results = data.results || data.organic_results || data.products || [];
     const seen = new Set();
+    let noPrime = 0, noPrice = 0, noStars = 0;
     const deals = results
       .filter(r => {
         if (!r.asin || seen.has(r.asin)) return false;
-        if (!r.has_prime) return false;
-        if (!r.price || r.price > 15) return false;
-        if (!r.stars || r.stars < 4) return false;
+        if (!r.has_prime) { noPrime++; return false; }
+        if (!r.price || r.price > 15) { noPrice++; return false; }
+        if (!r.stars || r.stars < 4) { noStars++; return false; }
         seen.add(r.asin);
         return true;
       })
@@ -123,6 +124,7 @@ router.get("/search-deals", async (req, res) => {
       })
       .sort((a, b) => (b.discountPercent || 0) - (a.discountPercent || 0));
 
+    console.log(`search-deals "${searchTerm}": total=${results.length} passed=${deals.length} filtered_no_prime=${noPrime} filtered_price=${noPrice} filtered_stars=${noStars}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ query: searchTerm, category: category || null, deals });
   } catch (err) {
