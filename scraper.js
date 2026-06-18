@@ -180,6 +180,39 @@ async function tryScraperApiHtml(url, scraperKey) {
   return { title, price, currency, image, images, upc: null, variants: [], isPrime: null, variant: null, specs: {}, bullets: [], rating: null, reviewCount: 0, isNewRelease: false };
 }
 
+// Parse price + availability from raw Amazon HTML.
+// Throws with code OUT_OF_STOCK when product is unavailable.
+// Returns { price, currency } or null if price not found.
+function parsePriceFromHtml(html) {
+  const $ = cheerio.load(html);
+  let price = null;
+  for (const sel of [
+    '.priceToPay .a-offscreen', '.apexPriceToPay .a-offscreen',
+    '#priceblock_ourprice', '#price_inside_buybox',
+    '#corePriceDisplay_desktop_feature_div .a-offscreen',
+    '.a-price .a-offscreen',
+  ]) {
+    price = parsePrice($(sel).first().attr('content') || $(sel).first().text());
+    if (price) break;
+  }
+  if (!price) {
+    const m = html.match(/"priceAmount"\s*:\s*([\d.]+)/);
+    if (m) price = parseFloat(m[1]);
+  }
+  const bodyText = $.text().toLowerCase();
+  if (!price && (bodyText.includes('currently unavailable') || bodyText.includes('out of stock'))) {
+    const err = new Error('Out of stock');
+    err.code = 'OUT_OF_STOCK';
+    throw err;
+  }
+  if (!price) return null;
+  let currency = '$';
+  for (const sym of ['฿', '£', '€', '$']) {
+    if (html.slice(0, 8000).includes(sym)) { currency = sym; break; }
+  }
+  return { price, currency };
+}
+
 // Lightweight direct price check — no ScraperAPI credits used.
 // Returns { price, currency } or null if blocked/failed.
 async function tryDirectPrice(url) {
@@ -193,33 +226,47 @@ async function tryDirectPrice(url) {
       },
     });
     if (html.includes('validateCaptcha') || html.includes('robot')) return null;
-    const $ = require('cheerio').load(html);
-    let price = null;
-    for (const sel of ['.priceToPay .a-offscreen', '.apexPriceToPay .a-offscreen', '#priceblock_ourprice', '#price_inside_buybox', '.a-price .a-offscreen']) {
-      price = parsePrice($(sel).first().attr('content') || $(sel).first().text());
-      if (price) break;
-    }
-    if (!price) return null;
-    let currency = '$';
-    for (const sym of ['฿', '£', '€', '$']) {
-      if (html.slice(0, 8000).includes(sym)) { currency = sym; break; }
-    }
-    return { price, currency };
-  } catch { return null; }
+    return parsePriceFromHtml(html);
+  } catch (e) {
+    if (e.code === 'OUT_OF_STOCK') throw e;
+    return null;
+  }
+}
+
+// 1-credit ScraperAPI standard proxy price check — used when direct fetch is blocked.
+// Much cheaper than the 5-credit structured endpoint; only needs price + availability.
+async function tryProxyPrice(url, scraperKey) {
+  try {
+    const { data: html } = await axios.get('https://api.scraperapi.com/', {
+      params: { api_key: scraperKey, url, country_code: 'us', render: false },
+      timeout: 30000,
+    });
+    if (html.includes('validateCaptcha') || html.includes('robot')) return null;
+    return parsePriceFromHtml(html);
+  } catch (e) {
+    if (e.code === 'OUT_OF_STOCK') throw e;
+    return null;
+  }
 }
 
 async function fetchProduct(url, { priceOnly = false } = {}) {
   const scraperKey = process.env.SCRAPER_API_KEY;
   const asin = extractAsin(url);
 
-  // Price-only mode: try direct curl first to save ScraperAPI credits
+  // Price-only mode: 3-tier fetch — free direct → 1-credit proxy → 5-credit structured
   if (priceOnly && scraperKey && asin) {
     const direct = await tryDirectPrice(url);
     if (direct) {
-      console.log(`scraper: direct price OK for ${asin} ($${direct.price}) — no ScraperAPI credit used`);
+      console.log(`scraper: direct price OK for ${asin} ($${direct.price}) — 0 credits`);
       return { title: null, price: direct.price, currency: direct.currency, image: null, images: [], upc: null, variants: [], isPrime: null, variant: null, specs: {} };
     }
-    console.log(`scraper: direct fetch blocked for ${asin} — falling back to ScraperAPI`);
+    // 1-credit proxy — parses price + availability from HTML, avoids 5-credit structured call
+    const proxy = await tryProxyPrice(url, scraperKey);
+    if (proxy) {
+      console.log(`scraper: proxy price OK for ${asin} ($${proxy.price}) — 1 credit`);
+      return { title: null, price: proxy.price, currency: proxy.currency, image: null, images: [], upc: null, variants: [], isPrime: null, variant: null, specs: {} };
+    }
+    console.log(`scraper: proxy blocked for ${asin} — falling back to structured (5 credits)`);
   }
 
   // Use ScraperAPI structured endpoint when key + ASIN available
