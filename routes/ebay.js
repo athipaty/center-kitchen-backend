@@ -2302,7 +2302,7 @@ router.post('/listing/variation-photos', async (req, res) => {
         }
       }
       console.log(`variation-photos: ${Object.keys(ebayLabelMap).length} eBay labels mapped`);
-      if (!Object.keys(ebayLabelMap).length) {
+      if (!/<Variation>/i.test(getXml)) {
         return res.status(400).json({ error: 'This listing has no variations — Fix Variation Photos only applies to multi-variation listings.' });
       }
     } catch (e) {
