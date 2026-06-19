@@ -104,7 +104,9 @@ function _keepaImages(p) {
   return p.imagesCSV.split(',').filter(Boolean).map(s => `https://images-na.ssl-images-amazon.com/images/I/${s.trim()}`);
 }
 
-// GET search for Prime items under $15 with 4+ stars using Keepa bestseller + batch product data
+// GET search for items under $15 with recent price drops using Keepa Deal API
+// Deal API returns up to 150 items per category; price/rating filters applied client-side
+// since API-side filters are unreliable. Ratings fetched via a second batch product call.
 router.get("/search-deals", async (req, res) => {
   try {
     const category = (req.query.category || "").trim();
@@ -123,59 +125,95 @@ router.get("/search-deals", async (req, res) => {
 
     const keepaKey = process.env.KEEPA_API_KEY;
 
-    // Step 1: get the top-100 bestseller ASINs for the category
-    const { data: bsData } = await axios.get("https://api.keepa.com/bestseller", {
-      params: { key: keepaKey, domain: 1, category: categoryId },
+    // Step 1: Keepa Deal API — returns up to 150 recent price-drop items per category.
+    // Keepa Deal response uses dr[] array where each item has: asin, title, current (price array),
+    // avg (4-period price averages), image (byte array of slug), deltaPercent (2D change array).
+    const form = new URLSearchParams({
+      key: keepaKey,
+      selection: JSON.stringify({
+        domainId: 1,
+        priceTypes: [0, 1, 7],  // Amazon, Marketplace New, New FBA drops
+        limit: 150,
+        includeCategories: [categoryId],
+      }),
+    });
+    const { data: dealData } = await axios.post("https://api.keepa.com/deal", form, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       timeout: 30000,
     });
-    const asins = (bsData.bestSellersList?.asinList || []).slice(0, 100);
-    if (!asins.length) return res.json({ category, deals: [] });
 
-    // Step 2: batch-fetch product data (stats only, no history — conserves tokens)
+    const drItems = dealData.deals?.dr || [];
+    if (!drItems.length) return res.json({ category, deals: [] });
+
+    // Best buyable price for this deal item (same index priority as scraper.js)
+    function dealPrice(cur) {
+      if (!Array.isArray(cur)) return null;
+      const c = v => (v > 0 ? v / 100 : null);
+      return c(cur[0]) || c(cur[7]) || c(cur[1]) || null;
+    }
+
+    // Keepa stores image slugs as byte arrays — convert to string
+    function slugFromBytes(b) {
+      if (!b) return null;
+      if (typeof b === "string") return b;
+      try { return Buffer.from(b).toString("utf-8"); } catch { return null; }
+    }
+
+    // Step 2: client-side filter — keep only items priced ≤ $15
+    const candidates = drItems.filter(d => {
+      const p = dealPrice(d.current);
+      return p !== null && p <= 15;
+    }).slice(0, 50);
+
+    if (!candidates.length) {
+      console.log(`search-deals "${category}": dr=${drItems.length} — no items under $15`);
+      return res.json({ category, deals: [] });
+    }
+
+    // Step 3: batch-fetch product data to get ratings (not included in Deal response)
+    const asinList = [...new Set(candidates.map(d => d.asin))];
     const { data: pData } = await axios.get("https://api.keepa.com/product", {
-      params: { key: keepaKey, asin: asins.join(','), domain: 1, stats: 1, history: 0 },
+      params: { key: keepaKey, asin: asinList.join(","), domain: 1, stats: 0, history: 0 },
       timeout: 60000,
     });
     if (pData.tokensLeft != null) console.log(`search-deals: tokensLeft=${pData.tokensLeft}`);
 
-    // Step 3: filter — under $15, sold by Amazon (Prime), 4+ stars
-    const seen = new Set();
-    const deals = (pData.products || [])
-      .filter(p => {
-        if (!p.asin || seen.has(p.asin)) return false;
-        const price = _keepaCurrentPrice(p.stats);
-        if (!price || price > 15) return false;
-        // availabilityAmazon: 1 = in stock at Amazon (Prime eligible)
-        if (p.availabilityAmazon !== 1 && _kPrice(p.stats?.current?.[0]) == null) return false;
-        // rating is 0-50 in Keepa (45 = 4.5★)
-        if (!p.rating || p.rating < 40) return false;
-        seen.add(p.asin);
-        return true;
-      })
-      .map(p => {
-        const price = _keepaCurrentPrice(p.stats);
-        const listPrice = _keepaListPrice(p.stats);
-        const originalPrice = listPrice && listPrice > price ? listPrice : null;
+    const ratingMap = {}, reviewMap = {};
+    for (const p of (pData.products || [])) {
+      ratingMap[p.asin] = p.rating > 0 ? p.rating / 10 : null;
+      reviewMap[p.asin] = p.countReviews || 0;
+    }
+
+    // Step 4: apply 4+ star filter and build the response shape the frontend expects
+    const CDN = "https://images-na.ssl-images-amazon.com/images/I/";
+    const deals = candidates
+      .filter(d => (ratingMap[d.asin] || 0) >= 4.0)
+      .map(d => {
+        const cur = d.current || [];
+        const price = dealPrice(cur);
+        // 90-day average Amazon price as the "original/was" reference price
+        const avg90Amazon = Array.isArray(d.avg?.[1]) && d.avg[1][0] > 0 ? d.avg[1][0] / 100 : null;
+        const originalPrice = avg90Amazon && avg90Amazon > price ? avg90Amazon : null;
         const discountPercent = originalPrice ? Math.round((1 - price / originalPrice) * 100) : null;
-        const images = _keepaImages(p);
+        const slug = slugFromBytes(d.image);
         return {
-          asin:           p.asin,
-          title:          p.title || '',
-          image:          images[0] || null,
-          url:            `https://www.amazon.com/dp/${p.asin}`,
+          asin:            d.asin,
+          title:           d.title || "",
+          image:           slug ? `${CDN}${slug}` : null,
+          url:             `https://www.amazon.com/dp/${d.asin}`,
           price,
           originalPrice,
-          currency:       '$',
+          currency:        "$",
           discountPercent: discountPercent > 0 ? discountPercent : null,
-          rating:         p.rating / 10,
-          reviewCount:    p.countReviews || 0,
-          isPrime:        true,
-          isLimitedDeal:  false,
+          rating:          ratingMap[d.asin] || null,
+          reviewCount:     reviewMap[d.asin] || 0,
+          isPrime:         cur[0] > 0,  // sold by Amazon = definitely Prime
+          isLimitedDeal:   !!(d.lightningStart && d.lightningEnd),
         };
       })
       .sort((a, b) => (b.discountPercent || 0) - (a.discountPercent || 0));
 
-    console.log(`search-deals "${category}": bestsellers=${asins.length} passed=${deals.length}`);
+    console.log(`search-deals "${category}": dr=${drItems.length} under$15=${candidates.length} passed=${deals.length}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ category, deals });
   } catch (err) {
