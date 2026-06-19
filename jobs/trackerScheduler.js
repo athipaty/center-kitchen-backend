@@ -71,6 +71,10 @@ async function checkProduct(p, saleMode = false) {
     p.failCount = 0;
     p.unavailableSince = null;
 
+    // Cache the calculated eBay price so the frontend can display it without
+    // calling GetItem — eliminates the 4,000+ daily eBay API calls from batch price fetching
+    if (p.ebayListingId) p.ebayPrice = calcEbayPrice(info.price, saleMode);
+
     const priceChanged  = info.price !== oldPrice;
     const justRestocked = previousStatus !== 'active';
     if (p.ebayListingId && (priceChanged || justRestocked)) {

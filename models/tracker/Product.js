@@ -26,6 +26,7 @@ const productSchema = new mongoose.Schema(
     specs: { type: mongoose.Schema.Types.Mixed, default: {} },
     bullets: { type: [String], default: [] },
     ebayListingId: { type: String, default: null },
+    ebayPrice: { type: Number, default: null }, // last price successfully synced to eBay — used by frontend instead of GetItem
     listedAt: { type: Date, default: null },
     cloudinaryFolder: { type: String, default: null },
     status: { type: String, enum: ['active', 'out_of_stock', 'unavailable', 'error', 'archived'], default: 'active' },
