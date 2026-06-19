@@ -3533,7 +3533,14 @@ router.get('/listings/prices-batch', async (req, res) => {
           `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID><IncludeItemSpecifics>true</IncludeItemSpecifics></GetItemRequest>`,
           { headers: { ...headers, 'X-EBAY-API-CALL-NAME': 'GetItem' } }
         );
-        if (/<Ack>Failure<\/Ack>/.test(xml)) { result[cleanId] = { error: 'not_found' }; return; }
+        if (/<Ack>Failure<\/Ack>/.test(xml)) {
+          const errCode = xml.match(/<ErrorCode>(\d+)<\/ErrorCode>/)?.[1];
+          const longMsg = (xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || '').toLowerCase();
+          // ErrorCode 17 = item not found/ended; only mark as gone for that specific error
+          const isGone = errCode === '17' || longMsg.includes('no such') || longMsg.includes('invalid item') || longMsg.includes('not found for itemid');
+          result[cleanId] = { error: isGone ? 'not_found' : 'api_error' };
+          return;
+        }
         const baseMatch = xml.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
         const base = baseMatch ? parseFloat(baseMatch[1]) : 0;
         const variations = [];
