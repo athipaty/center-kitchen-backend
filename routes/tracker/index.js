@@ -24,16 +24,16 @@ router.get("/settings", async (req, res) => {
   }
 });
 
-// GET raw ScraperAPI response for an ASIN — for debugging variant field names
+// GET raw Keepa response for an ASIN — for debugging product field names
 router.get("/debug-raw", async (req, res) => {
   const { asin } = req.query;
   if (!asin) return res.status(400).json({ error: "asin is required" });
-  if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
+  if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
   try {
-    const { data } = await axios.get(
-      `https://api.scraperapi.com/structured/amazon/product/v1`,
-      { params: { api_key: process.env.SCRAPER_API_KEY, asin }, timeout: 60000 }
-    );
+    const { data } = await axios.get("https://api.keepa.com/product", {
+      params: { key: process.env.KEEPA_API_KEY, asin, domain: 1, stats: 1, history: 1, buybox: 1 },
+      timeout: 30000,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.response?.data || err.message });
@@ -71,65 +71,113 @@ router.post("/preview", async (req, res) => {
   }
 });
 
-// GET search Amazon for Prime items under $15 with 4+ star rating
+// Amazon browse-node IDs that Keepa uses for category filtering (matches Amazon's native IDs)
+const KEEPA_CATEGORY_IDS = {
+  'Electronics':              172282,
+  'Home & Kitchen':           1055398,
+  'Kitchen & Dining':         284507,
+  'Tools & Home Improvement': 228013,
+  'Sports & Outdoors':        3375251,
+  'Toys & Games':             165793011,
+  'Beauty & Personal Care':   11055981,
+  'Clothing, Shoes & Jewelry':7141123011,
+  'Health & Household':       3760901,
+  'Pet Supplies':             2619533011,
+  'Office Products':          1064954,
+  'Patio, Lawn & Garden':     2972638011,
+  'Baby':                     165796011,
+  'Grocery & Gourmet Food':   16310101,
+  'Automotive':               15690151,
+  'Books':                    283155,
+  'Video Games':              468642,
+};
+
+// Keepa price helpers (inline — avoids import coupling with scraper.js)
+function _kPrice(cents) { return (cents != null && cents !== -1 && cents > 0) ? cents / 100 : null; }
+function _keepaCurrentPrice(s) {
+  if (!s?.current) return null;
+  return _kPrice(s.current[3]) || _kPrice(s.current[0]) || _kPrice(s.current[7]) || null;
+}
+function _keepaListPrice(s) { return _kPrice(s?.current?.[11]) || null; }
+function _keepaImages(p) {
+  if (!p.imagesCSV) return [];
+  return p.imagesCSV.split(',').filter(Boolean).map(s => `https://images-na.ssl-images-amazon.com/images/I/${s.trim()}`);
+}
+
+// GET search for Prime items under $15 with 4+ stars using Keepa bestseller + batch product data
 router.get("/search-deals", async (req, res) => {
   try {
-    const rawQuery = (req.query.query || "").trim();
     const category = (req.query.category || "").trim();
-    const searchTerm = rawQuery || category || "";
-    if (!searchTerm) return res.status(400).json({ error: "query or category is required" });
-    if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
+    if (!category) return res.status(400).json({ error: "category is required" });
+    if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
 
-    const cacheKey = searchTerm.toLowerCase();
+    const categoryId = KEEPA_CATEGORY_IDS[category];
+    if (!categoryId) return res.status(400).json({ error: `Unknown category "${category}". Must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
+
+    const cacheKey = category.toLowerCase();
     const cached = _dealSearchCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
-      console.log(`search-deals: cache hit for "${searchTerm}" — 0 credits used`);
-      return res.json({ query: searchTerm, category: category || null, deals: cached.deals, cached: true });
+      console.log(`search-deals: cache hit for "${category}" — 0 tokens`);
+      return res.json({ category, deals: cached.deals, cached: true });
     }
 
-    // rh=p_85:2470955011 is Amazon's built-in Prime-eligible filter (US).
-    // Using it at the source is more reliable than checking has_prime in the response,
-    // which ScraperAPI doesn't always populate.
-    const { data } = await axios.get("https://api.scraperapi.com/structured/amazon/search/v1", {
-      params: { api_key: process.env.SCRAPER_API_KEY, query: searchTerm, country: "us", rh: "p_85:2470955011" },
+    const keepaKey = process.env.KEEPA_API_KEY;
+
+    // Step 1: get the top-100 bestseller ASINs for the category
+    const { data: bsData } = await axios.get("https://api.keepa.com/bestseller", {
+      params: { key: keepaKey, domain: 1, category: categoryId },
       timeout: 30000,
     });
+    const asins = (bsData.bestSellersList?.asinList || []).slice(0, 100);
+    if (!asins.length) return res.json({ category, deals: [] });
 
-    const results = data.results || data.organic_results || data.products || [];
+    // Step 2: batch-fetch product data (stats only, no history — conserves tokens)
+    const { data: pData } = await axios.get("https://api.keepa.com/product", {
+      params: { key: keepaKey, asin: asins.join(','), domain: 1, stats: 1, history: 0 },
+      timeout: 60000,
+    });
+    if (pData.tokensLeft != null) console.log(`search-deals: tokensLeft=${pData.tokensLeft}`);
+
+    // Step 3: filter — under $15, sold by Amazon (Prime), 4+ stars
     const seen = new Set();
-    let noPrice = 0, noStars = 0;
-    const deals = results
-      .filter(r => {
-        if (!r.asin || seen.has(r.asin)) return false;
-        if (!r.price || r.price > 15) { noPrice++; return false; }
-        if (!r.stars || r.stars < 4) { noStars++; return false; }
-        seen.add(r.asin);
+    const deals = (pData.products || [])
+      .filter(p => {
+        if (!p.asin || seen.has(p.asin)) return false;
+        const price = _keepaCurrentPrice(p.stats);
+        if (!price || price > 15) return false;
+        // availabilityAmazon: 1 = in stock at Amazon (Prime eligible)
+        if (p.availabilityAmazon !== 1 && _kPrice(p.stats?.current?.[0]) == null) return false;
+        // rating is 0-50 in Keepa (45 = 4.5★)
+        if (!p.rating || p.rating < 40) return false;
+        seen.add(p.asin);
         return true;
       })
-      .map(r => {
-        const price = r.price;
-        const originalPrice = r.original_price?.price > price ? r.original_price.price : null;
+      .map(p => {
+        const price = _keepaCurrentPrice(p.stats);
+        const listPrice = _keepaListPrice(p.stats);
+        const originalPrice = listPrice && listPrice > price ? listPrice : null;
         const discountPercent = originalPrice ? Math.round((1 - price / originalPrice) * 100) : null;
+        const images = _keepaImages(p);
         return {
-          asin: r.asin,
-          title: r.name,
-          image: r.image || null,
-          url: `https://www.amazon.com/dp/${r.asin}`,
+          asin:           p.asin,
+          title:          p.title || '',
+          image:          images[0] || null,
+          url:            `https://www.amazon.com/dp/${p.asin}`,
           price,
           originalPrice,
-          currency: r.price_symbol || "$",
-          discountPercent,
-          rating: r.stars || null,
-          reviewCount: r.total_reviews || 0,
-          isPrime: true,
-          isLimitedDeal: !!r.is_limited_deal,
+          currency:       '$',
+          discountPercent: discountPercent > 0 ? discountPercent : null,
+          rating:         p.rating / 10,
+          reviewCount:    p.countReviews || 0,
+          isPrime:        true,
+          isLimitedDeal:  false,
         };
       })
       .sort((a, b) => (b.discountPercent || 0) - (a.discountPercent || 0));
 
-    console.log(`search-deals "${searchTerm}": total=${results.length} passed=${deals.length} filtered_price=${noPrice} filtered_stars=${noStars}`);
+    console.log(`search-deals "${category}": bestsellers=${asins.length} passed=${deals.length}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
-    res.json({ query: searchTerm, category: category || null, deals });
+    res.json({ category, deals });
   } catch (err) {
     res.status(502).json({ error: err.response?.data?.message || err.message });
   }
