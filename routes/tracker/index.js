@@ -5,7 +5,7 @@ const Product = require("../../models/tracker/Product");
 
 // 30-minute cache for deal search results — each search costs 5 credits
 const _dealSearchCache = new Map(); // query → { deals, expiresAt }
-const DEAL_CACHE_TTL = 2 * 60 * 60 * 1000; // 2h — Amazon deals change slowly
+const DEAL_CACHE_TTL = 12 * 60 * 60 * 1000; // 12h — conserves Keepa tokens (Deal API costs 5/call)
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
@@ -129,12 +129,13 @@ router.get("/search-deals", async (req, res) => {
     // Keepa Deal response uses dr[] array where each item has: asin, title, current (price array),
     // avg (4-period price averages), image (byte array of slug), deltaPercent (2D change array).
     // Use GET — POST with URLSearchParams has encoding issues in some Node.js environments.
+    // priceTypes must be a single integer: 0=Amazon, 1=New, 7=FBA (not an array)
     const { data: dealData } = await axios.get("https://api.keepa.com/deal", {
       params: {
         key: keepaKey,
         selection: JSON.stringify({
           domainId: 1,
-          priceTypes: [0, 1, 7],  // Amazon, Marketplace New, New FBA drops
+          priceTypes: 0,
           limit: 150,
           includeCategories: [categoryId],
         }),
