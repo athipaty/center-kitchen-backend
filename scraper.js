@@ -52,24 +52,27 @@ function kPrice(cents) {
   return (cents != null && cents !== -1 && cents > 0) ? cents / 100 : null;
 }
 
-// Buy Box = what a buyer would actually pay. Amazon direct as fallback, then New FBA.
+// Keepa stats.current index mapping (verified against live API responses):
+// [0]=Amazon price, [1]=Marketplace New, [2]=Marketplace Used, [3]=Sales Rank (NOT price!),
+// [4]=List/reference price, [7]=New FBA (Prime-eligible 3rd party), [18]=Warehouse Deals
 function getCurrentPrice(stats) {
   if (!stats?.current) return null;
-  return kPrice(stats.current[3])   // Buy Box
-      || kPrice(stats.current[0])   // Amazon
-      || kPrice(stats.current[7])   // New FBA
+  return kPrice(stats.current[0])   // Amazon direct (best — definitely Prime)
+      || kPrice(stats.current[7])   // New FBA (also Prime)
+      || kPrice(stats.current[1])   // Marketplace New
       || null;
 }
 
-// List price (strikethrough) is at index 11
+// List price (Amazon's reference/strikethrough price) is at index 4
 function getListPrice(stats) {
-  return kPrice(stats?.current?.[11]) || null;
+  return kPrice(stats?.current?.[4]) || null;
 }
 
-// Prime = Amazon is the seller (availabilityAmazon=1, or Amazon has a live price)
+// Prime = sold by Amazon directly or via FBA
 function isSoldByAmazon(product) {
   if (product.availabilityAmazon === 1) return true;
-  return kPrice(product.stats?.current?.[0]) != null;
+  return kPrice(product.stats?.current?.[0]) != null
+      || kPrice(product.stats?.current?.[7]) != null;
 }
 
 function getImages(product) {
@@ -114,30 +117,31 @@ async function callKeepa(asin, extra = {}) {
 }
 
 // ── Variant discovery ─────────────────────────────────────────────────────────
+// Keepa variation entries: { asin, attributes: [{dimension, value}], image (slug) }
+// Note: product.type is a product category string (e.g. "SUNGLASSES"), not PARENT/VARIATION.
+// Use product.variations presence and product.parentAsin to detect the relationship.
+function mapVariations(variations, baseDomain) {
+  return variations.map(v => ({
+    asin:  v.asin,
+    label: labelFromAttrs(v.attributes) || v.asin,
+    price: null,  // fetched individually when each variant is tracked
+    image: v.image ? `${KEEPA_CDN}${v.image}` : null,
+    url:   `${baseDomain}/dp/${v.asin}`,
+  }));
+}
+
 async function fetchVariants(product, baseDomain) {
-  // PARENT type already has the full variation list
-  if (product.type === 'PARENT' && Array.isArray(product.variations) && product.variations.length) {
-    return product.variations.map(v => ({
-      asin:  v.asin,
-      label: labelFromAttrs(v.attributes) || v.asin,
-      price: null,  // prices fetched individually when each variant is tracked
-      image: null,
-      url:   `${baseDomain}/dp/${v.asin}`,
-    }));
+  // Variations list already populated on this product (common for both parent and child)
+  if (Array.isArray(product.variations) && product.variations.length) {
+    return mapVariations(product.variations, baseDomain);
   }
 
-  // VARIATION type — need to fetch parent to discover siblings
-  if (product.parentAsin && product.type !== 'STANDARD') {
+  // No variations on this product — try fetching parent if we have its ASIN
+  if (product.parentAsin) {
     try {
       const parent = await callKeepa(product.parentAsin);
       if (Array.isArray(parent.variations) && parent.variations.length) {
-        return parent.variations.map(v => ({
-          asin:  v.asin,
-          label: labelFromAttrs(v.attributes) || v.asin,
-          price: null,
-          image: null,
-          url:   `${baseDomain}/dp/${v.asin}`,
-        }));
+        return mapVariations(parent.variations, baseDomain);
       }
     } catch (e) {
       console.warn(`keepa: parent fetch failed for ${product.parentAsin}:`, e.message);
@@ -201,10 +205,15 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   const reviewCount = product.countReviews || 0;
   const isNewRelease = false;
 
-  // Variant label for this specific ASIN from its variation attributes
+  // Variant label: find this ASIN in the variations list (most reliable source)
   let variant = null;
-  if (product.variationAttributes && typeof product.variationAttributes === 'object') {
-    const parts = Object.values(product.variationAttributes).filter(Boolean);
+  if (Array.isArray(product.variations)) {
+    const self = product.variations.find(v => v.asin === product.asin);
+    if (self) variant = labelFromAttrs(self.attributes);
+  }
+  // Fallback: product's own color/size fields
+  if (!variant) {
+    const parts = [product.color, product.size].filter(Boolean);
     if (parts.length) variant = parts.join(' / ');
   }
 
