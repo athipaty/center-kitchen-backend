@@ -152,7 +152,11 @@ async function fetchVariants(product, baseDomain) {
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
-async function fetchProduct(url, { priceOnly = false } = {}) {
+// priceOnly    — return just price, 1 token, no second call (scheduler: established products)
+// skipVariants — full metadata but skip parent-ASIN lookup, 1 token (scheduler: missing title/image)
+// Variant discovery is only needed in the user-facing preview flow, not routine checks.
+// history is always 0 — we never use Keepa's CSV arrays; history lives in MongoDB.
+async function fetchProduct(url, { priceOnly = false, skipVariants = false } = {}) {
   const asin = extractAsin(url);
   if (!asin) throw new Error("Could not extract ASIN from URL");
 
@@ -167,7 +171,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
     console.log(`keepa: cache hit for ${asin} — 0 tokens`);
     product = cached.data;
   } else {
-    product = await callKeepa(asin, { history: priceOnly ? 0 : 1 });
+    product = await callKeepa(asin, { history: 0 }); // history: 0 always — saves ~2 tokens vs history: 1
     if (!priceOnly) {
       const expiresAt = Date.now() + CACHE_TTL;
       _cache.set(asin, { data: product, expiresAt });
@@ -217,7 +221,8 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
     if (parts.length) variant = parts.join(' / ');
   }
 
-  const variants = await fetchVariants(product, baseDomain);
+  // skipVariants=true during scheduler checks avoids a second callKeepa for the parent ASIN
+  const variants = skipVariants ? [] : await fetchVariants(product, baseDomain);
 
   return { title, price, currency: "$", listPrice, image, images, upc, variants, isPrime, variant, specs, bullets, rating, reviewCount, isNewRelease };
 }

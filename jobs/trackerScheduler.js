@@ -42,10 +42,12 @@ function slowRetryDate() {
 
 async function checkProduct(p, saleMode = false) {
   try {
-    // Use price-only direct fetch for routine checks — saves ScraperAPI credits.
-    // Full scrape (priceOnly=false) only when metadata is missing or on first check.
+    // Routine check: always 1 Keepa token regardless of path.
+    // priceOnly=true  — established products (have title+image): just fetch current price.
+    // skipVariants=true — products missing metadata: fetch full info but skip parent-ASIN
+    //   variant lookup (that second callKeepa is only needed in the preview/add flow).
     const needsFullScrape = !p.title || !p.image;
-    const info = await fetchProduct(p.url, { priceOnly: !needsFullScrape });
+    const info = await fetchProduct(p.url, { priceOnly: !needsFullScrape, skipVariants: true });
     const oldPrice = p.current;
     const dropped = info.price < oldPrice;
     const previousStatus = p.status; // save before overwriting
