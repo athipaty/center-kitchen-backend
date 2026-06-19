@@ -106,6 +106,9 @@ async function checkProduct(p, saleMode = false) {
       } else {
         if (io) io.emit('tracker:ebay:sync:ok', { productId: String(p._id) });
       }
+      // Keepa processes products ~30× faster than the old scraper, causing burst eBay API calls.
+      // Throttle to ≤1 sync per 2s to stay within eBay's per-minute rate limit.
+      await new Promise(r => setTimeout(r, 2000));
     }
     p.nextCheck = nextCheckDate(p);
     await p.save();
@@ -579,12 +582,10 @@ function start(socketIo) {
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
   // Auto-end listings 4+ days old with 0 views
   cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
-  // Auto-restock sold listings back to qty 1 — runs every 15 minutes
-  cron.schedule("*/15 * * * *", runAutoRestock);
-  // Orphan cleanup every 6 hours — ends any active eBay listings not in the tracker
-  cron.schedule("0 */6 * * *", runOrphanCleanup);
-  // Also run once shortly after startup to catch anything from the last session
-  setTimeout(runOrphanCleanup, 30 * 1000);
+  // Auto-restock sold listings back to qty 1 — runs every 30 minutes (was 15, halves GetOrders calls)
+  cron.schedule("*/30 * * * *", runAutoRestock);
+  // Orphan cleanup once daily at 1am — was every 6h + startup (saves ~44 GetMyeBaySelling calls/day)
+  cron.schedule("0 1 * * *", runOrphanCleanup);
   // Relist unsold listings that have views or watchers — runs daily at 3:30am
   cron.schedule("30 3 * * *", runRelistUnsoldWithEngagement);
 }
