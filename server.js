@@ -14,7 +14,11 @@ const io = new Server(httpServer, {
 });
 app.set('io', io);
 
-// Rate limiters — protect ScraperAPI-backed endpoints from accidental runaway frontend loops
+// Trust Render's proxy so express-rate-limit can read the real client IP
+// from X-Forwarded-For without throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+app.set('trust proxy', 1);
+
+// Rate limiters
 const addProductLimiter = rateLimit({ windowMs: 60_000, max: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many add requests — slow down' } });
 const checkLimiter      = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many check requests — slow down' } });
 

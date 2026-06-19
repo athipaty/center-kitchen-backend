@@ -42,12 +42,11 @@ function slowRetryDate() {
 
 async function checkProduct(p, saleMode = false) {
   try {
-    // Routine check: always 1 Keepa token regardless of path.
-    // priceOnly=true  — established products (have title+image): just fetch current price.
-    // skipVariants=true — products missing metadata: fetch full info but skip parent-ASIN
-    //   variant lookup (that second callKeepa is only needed in the preview/add flow).
-    const needsFullScrape = !p.title || !p.image;
-    const info = await fetchProduct(p.url, { priceOnly: !needsFullScrape, skipVariants: true });
+    // Scheduler only needs price + stock status — always priceOnly=true.
+    // This guarantees exactly 1 Keepa token per product regardless of what metadata
+    // is in the DB. Full metadata (title, image, specs) is fetched once at add-time
+    // via POST /api/tracker and never needs to be re-fetched during routine checks.
+    const info = await fetchProduct(p.url, { priceOnly: true });
     const oldPrice = p.current;
     const dropped = info.price < oldPrice;
     const previousStatus = p.status; // save before overwriting
