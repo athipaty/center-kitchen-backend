@@ -20,10 +20,10 @@ function adaptiveInterval(product) {
   const daysSinceChange = lastEntry?.createdAt
     ? (Date.now() - new Date(lastEntry.createdAt).getTime()) / 86400000
     : 0;
-  if (daysSinceChange >= 14) return (Math.random() * 24 + 72) * 3600 * 1000; // 72–96h
-  if (daysSinceChange >= 7)  return (Math.random() * 12 + 48) * 3600 * 1000; // 48–60h
-  if (daysSinceChange >= 3)  return (Math.random() * 4  + 12) * 3600 * 1000; // 12–16h
-  return                            (Math.random() * 4  + 6)  * 3600 * 1000; // 6–10h
+  if (daysSinceChange >= 14) return (Math.random() * 12 + 60) * 3600 * 1000; // 60–72h
+  if (daysSinceChange >= 7)  return (Math.random() * 12 + 36) * 3600 * 1000; // 36–48h
+  if (daysSinceChange >= 3)  return (Math.random() * 4  + 8)  * 3600 * 1000; // 8–12h
+  return                            (Math.random() * 2  + 3)  * 3600 * 1000; // 3–5h
 }
 
 function nextCheckDate(product) {
