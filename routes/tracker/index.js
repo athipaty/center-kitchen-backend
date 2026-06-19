@@ -218,6 +218,8 @@ router.get("/search-deals", async (req, res) => {
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ category, deals });
   } catch (err) {
+    if (err.response?.status === 429 || err.response?.status === 429)
+      return res.status(503).json({ error: "Keepa rate limit — deal search is cached 12h, try again shortly." });
     res.status(502).json({ error: err.response?.data?.message || err.message });
   }
 });
