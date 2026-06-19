@@ -128,17 +128,17 @@ router.get("/search-deals", async (req, res) => {
     // Step 1: Keepa Deal API — returns up to 150 recent price-drop items per category.
     // Keepa Deal response uses dr[] array where each item has: asin, title, current (price array),
     // avg (4-period price averages), image (byte array of slug), deltaPercent (2D change array).
-    const form = new URLSearchParams({
-      key: keepaKey,
-      selection: JSON.stringify({
-        domainId: 1,
-        priceTypes: [0, 1, 7],  // Amazon, Marketplace New, New FBA drops
-        limit: 150,
-        includeCategories: [categoryId],
-      }),
-    });
-    const { data: dealData } = await axios.post("https://api.keepa.com/deal", form, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    // Use GET — POST with URLSearchParams has encoding issues in some Node.js environments.
+    const { data: dealData } = await axios.get("https://api.keepa.com/deal", {
+      params: {
+        key: keepaKey,
+        selection: JSON.stringify({
+          domainId: 1,
+          priceTypes: [0, 1, 7],  // Amazon, Marketplace New, New FBA drops
+          limit: 150,
+          includeCategories: [categoryId],
+        }),
+      },
       timeout: 30000,
     });
 
