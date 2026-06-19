@@ -3480,8 +3480,10 @@ router.get('/listing/:id/prices', async (req, res) => {
     );
 
     if (/<Ack>Failure<\/Ack>/.test(xml)) {
-      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
-      return res.status(400).json({ error: msg });
+      const errCode = xml.match(/<ErrorCode>(\d+)<\/ErrorCode>/)?.[1];
+      const longMsg = (xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || '').toLowerCase();
+      const isGone = errCode === '17' || longMsg.includes('no such') || longMsg.includes('invalid item') || longMsg.includes('not found for itemid');
+      return res.status(isGone ? 404 : 400).json({ error: isGone ? 'not_found' : 'api_error' });
     }
 
     // Parse base price
