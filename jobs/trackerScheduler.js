@@ -54,7 +54,7 @@ function slowRetryDate() {
   return new Date(Date.now() + (Math.random() * 4 + 4) * 3600 * 1000);
 }
 
-async function checkProduct(p, saleMode = false) {
+async function checkProduct(p, saleMode = false, syncedListings = null) {
   try {
     // Scheduler only needs price + stock status — always priceOnly=true.
     // This guarantees exactly 1 Keepa token per product regardless of what metadata
@@ -96,7 +96,11 @@ async function checkProduct(p, saleMode = false) {
     if (newEbayPrice != null) p.ebayPrice = newEbayPrice;
 
     const ebayPriceChanged = newEbayPrice != null && (oldEbayPrice == null || Math.abs(newEbayPrice - oldEbayPrice) > 0.005);
-    if (p.ebayListingId && (ebayPriceChanged || justRestocked) && !isEbayRateLimited()) {
+    const alreadySynced = syncedListings && p.ebayListingId && syncedListings.has(String(p.ebayListingId));
+    if (alreadySynced) {
+      console.log(`eBay sync skipped (already synced this batch): listing ${p.ebayListingId}`);
+    }
+    if (p.ebayListingId && (ebayPriceChanged || justRestocked) && !isEbayRateLimited() && !alreadySynced) {
       let syncErr = null;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
@@ -108,6 +112,7 @@ async function checkProduct(p, saleMode = false) {
           if (ebayPriceChanged) {
             console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" amazon=$${info.price} → ebay=$${newEbayPrice}`);
           }
+          if (syncedListings && p.ebayListingId) syncedListings.add(String(p.ebayListingId));
           syncErr = null;
           break;
         } catch (e) {
@@ -218,8 +223,9 @@ async function runDueChecks() {
   if (io) io.emit("tracker:check:start", { count: due.length, time: new Date().toISOString() });
 
   const results = [];
+  const syncedListings = new Set();
   for (const p of due) {
-    results.push(await checkProduct(p, saleMode));
+    results.push(await checkProduct(p, saleMode, syncedListings));
   }
 
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
@@ -627,8 +633,9 @@ async function triggerNow() {
   if (io) io.emit("tracker:check:start", { count: products.length, time: new Date().toISOString() });
 
   const results = [];
+  const syncedListings = new Set();
   for (const p of products) {
-    results.push(await checkProduct(p, saleMode));
+    results.push(await checkProduct(p, saleMode, syncedListings));
   }
 
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
