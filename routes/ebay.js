@@ -3171,7 +3171,7 @@ router.post('/trading-create-listing', async (req, res) => {
   try {
     const token = await getAccessToken();
     const {
-      title, price, currency = 'USD', quantity = 1,
+      title, price: _price, currency = 'USD', quantity = 1,
       condition = 'NEW', categoryId,
       imageUrls = [], upc, specs = {}, bullets = [], description,
       variants, // [{ label, price, quantity }] for multi-variation
@@ -3183,8 +3183,9 @@ router.post('/trading-create-listing', async (req, res) => {
       sellerLocation = 'Phayao',
     } = req.body;
 
-    if (!title || !price) return res.status(400).json({ error: 'title and price are required' });
-    if (Number(price) >= 100) return res.status(400).json({ error: `Listing price $${Number(price).toFixed(2)} is $100 or more — eBay requires account approval for premium listings. Keep price under $100.` });
+    if (!title || !_price) return res.status(400).json({ error: 'title and price are required' });
+    if (Number(_price) >= 100) return res.status(400).json({ error: `Listing price $${Number(_price).toFixed(2)} is $100 or more — eBay requires account approval for premium listings. Keep price under $100.` });
+    let price = String(_price);
 
     const safeTitle = sanitizeTitle(title);
     const conditionId = condition === 'NEW' ? '1000' : '3000';
@@ -3217,10 +3218,10 @@ router.post('/trading-create-listing', async (req, res) => {
     // the saved value gets restored as a required item specific on the retry.
     // Single-variant products must NOT use multi-SKU format — eBay requires 2+ variations.
     // List them as plain single items; include the variant label as a Style item specific.
-    const isMultiVariation = variants?.length > 1;
-    if (variants?.length === 1 && variants[0]?.label) {
+    const isMultiVariation = (variants?.length || 0) > 1;
+    console.log(`trading-create-listing: variants=${variants?.length || 0} isMultiVariation=${isMultiVariation}`);
+    if ((variants?.length || 0) === 1 && variants[0]?.label) {
       aspects['Style'] = [variants[0].label];
-      // also keep the numeric price from the single variant
       if (variants[0].price) price = String(Number(variants[0].price).toFixed(2));
     }
 
