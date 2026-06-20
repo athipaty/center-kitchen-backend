@@ -308,10 +308,17 @@ router.post("/:id/refresh-images", async (req, res) => {
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
       });
-      const hiRes = [...html.matchAll(/"hiRes":"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/g)].map(m => m[1]);
-      const large = [...html.matchAll(/"large":"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/g)].map(m => m[1]);
-      const deduped = [...new Set([...hiRes, ...large])];
-      amazonImages = deduped.slice(0, 8);
+      const CDN = 'https://m.media-amazon.com/images/I/';
+      const CDN2 = 'https://images-na.ssl-images-amazon.com/images/I/';
+      const urlRe = pat => [...html.matchAll(pat)].map(m => m[1]);
+      const hiRes   = urlRe(/"hiRes":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
+      const large   = urlRe(/"large":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
+      const mainImg = urlRe(/id="landingImage"[^>]+src="([^"]+)"/g);
+      const dynImg  = urlRe(/"dynamic_image_url":"([^"]+)"/g);
+      const srcSet  = urlRe(/srcset="([^ ,]+)[^"]*" id="imgBlkFront"/g);
+      const allImgs = [...new Set([...hiRes, ...large, ...mainImg, ...dynImg, ...srcSet])]
+        .filter(u => u.includes('media-amazon.com') || u.includes('images-na.ssl-images-amazon'));
+      amazonImages = allImgs.slice(0, 8);
     } catch (e) {
       return res.status(502).json({ error: `Amazon scrape failed: ${e.message}` });
     }
