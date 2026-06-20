@@ -3215,8 +3215,17 @@ router.post('/trading-create-listing', async (req, res) => {
     // as an item specific (e.g. Size="9 Months" on a single-size baby shirt).
     // Save the value first: if eBay rejects this dimension (21920061) and we switch to another,
     // the saved value gets restored as a required item specific on the retry.
-    const savedVarDimAspect = (variants?.length && variantDimension) ? (aspects[variantDimension] || null) : null;
-    if (variants?.length >= 1 && variantDimension) delete aspects[variantDimension];
+    // Single-variant products must NOT use multi-SKU format — eBay requires 2+ variations.
+    // List them as plain single items; include the variant label as a Style item specific.
+    const isMultiVariation = variants?.length > 1;
+    if (variants?.length === 1 && variants[0]?.label) {
+      aspects['Style'] = [variants[0].label];
+      // also keep the numeric price from the single variant
+      if (variants[0].price) price = String(Number(variants[0].price).toFixed(2));
+    }
+
+    const savedVarDimAspect = (isMultiVariation && variantDimension) ? (aspects[variantDimension] || null) : null;
+    if (isMultiVariation && variantDimension) delete aspects[variantDimension];
 
     const buildSpecXml = (asp) => Object.entries(asp)
       .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
@@ -3299,7 +3308,7 @@ router.post('/trading-create-listing', async (req, res) => {
 
     // Multi-variation XML block (built once, reused in buildBody)
     let varSpecsXml = '';
-    if (variants?.length) {
+    if (isMultiVariation) {
       const variationsXml = variants.map(v => {
         const varPrice = v.price || price;
         return `<Variation>
@@ -3340,7 +3349,7 @@ router.post('/trading-create-listing', async (req, res) => {
     // Build AddFixedPriceItem body — accepts current item specifics so we can retry
     const buildBody = (iSpecXml) => {
       const iSpecBlock = iSpecXml ? `<ItemSpecifics>${iSpecXml}</ItemSpecifics>` : '';
-      if (variants?.length) {
+      if (isMultiVariation) {
         return `<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
           ${creds}
           <Item>
@@ -3419,7 +3428,7 @@ router.post('/trading-create-listing', async (req, res) => {
 
     // 21920061 — this dimension is not allowed as a variation specific for this category.
     // Fall back through Color → Size until eBay accepts one.
-    if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21920061<\/ErrorCode>/.test(xml) && variants?.length) {
+    if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21920061<\/ErrorCode>/.test(xml) && isMultiVariation) {
       const fallbacks = ['Color', 'Size', 'Style'].filter(d => d !== activeDimension);
       for (const fallbackDim of fallbacks) {
         console.log(`trading-create-listing: 21920061 — "${activeDimension}" not allowed for cat ${catId}, retrying with "${fallbackDim}"`);
@@ -3436,7 +3445,7 @@ router.post('/trading-create-listing', async (req, res) => {
 
     // 21916564 — category doesn't support multi-variation: strip variants and retry as single listing
     let usedSingleItemFallback = false;
-    if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21916564<\/ErrorCode>/.test(xml) && variants?.length) {
+    if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21916564<\/ErrorCode>/.test(xml) && isMultiVariation) {
       usedSingleItemFallback = true;
       console.log(`trading-create-listing: 21916564 for "${safeTitle}" — retrying as single listing (no variants)`);
       varSpecsXml = ''; // remove multi-variation structure
@@ -3504,7 +3513,7 @@ router.post('/trading-create-listing', async (req, res) => {
         // If the variantDimension is also a required item specific, we have a conflict:
         // eBay requires it in ItemSpecifics but also forbids it there when it's the variation dim.
         // Resolve by switching the variation to a different dimension so the item specific can stay.
-        if (variants?.length && variantDimension) {
+        if (isMultiVariation && variantDimension) {
           if (missingFields.includes(variantDimension)) {
             const altDim = ['Color', 'Size', 'Style'].find(d => d !== variantDimension);
             if (altDim) {
