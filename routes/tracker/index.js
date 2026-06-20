@@ -258,6 +258,11 @@ router.post("/", async (req, res) => {
     scheduler.scheduleNew(product);
     await product.save();
     res.json(product);
+
+    // Background: if Keepa had no images, scrape Amazon + upload to Cloudinary automatically
+    if (!product.image) {
+      fetchAndUploadImages(product).catch(e => console.error(`auto-image: failed for ${product._id}:`, e.message));
+    }
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
@@ -279,6 +284,86 @@ router.patch("/:id/ebay", async (req, res) => {
 });
 
 
+// Shared helper: scrape Amazon for images and upload to Cloudinary.
+// Called automatically on product add (background) and from refresh-images route.
+async function fetchAndUploadImages(product) {
+  const crypto = require('crypto');
+  let amazonImages = [];
+  try {
+    const { data: html } = await axios.get(product.url, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    const urlRe = pat => [...html.matchAll(pat)].map(m => m[1]);
+    const hiRes   = urlRe(/"hiRes":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
+    const large   = urlRe(/"large":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
+    const mainImg = urlRe(/id="landingImage"[^>]+src="([^"]+)"/g);
+    const dynImg  = urlRe(/"dynamic_image_url":"([^"]+)"/g);
+    const srcSet  = urlRe(/srcset="([^ ,]+)[^"]*" id="imgBlkFront"/g);
+    const allImgs = [...new Set([...hiRes, ...large, ...mainImg, ...dynImg, ...srcSet])]
+      .filter(u => u.includes('media-amazon.com') || u.includes('images-na.ssl-images-amazon'));
+    amazonImages = allImgs.slice(0, 8);
+  } catch {}
+
+  // Final fallback: legacy ASIN-based image URL
+  if (!amazonImages.length) {
+    const asinMatch = product.url.match(/\/dp\/([A-Z0-9]{10})/i);
+    if (asinMatch) amazonImages = [`https://images-na.ssl-images-amazon.com/images/P/${asinMatch[1]}.01.LZZZZZZZ.jpg`];
+  }
+
+  if (!amazonImages.length) return null;
+
+  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  if (!cloud || !apiKey || !apiSecret) return null;
+
+  const asin = product.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
+  const slug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
+  const folder = `tracker-images/${slug}`;
+  const cloudinaryUrls = [];
+
+  for (let i = 0; i < amazonImages.length; i++) {
+    try {
+      const fullResUrl = amazonImages[i].replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
+      let imgBuffer;
+      try {
+        ({ data: imgBuffer } = await axios.get(fullResUrl, { responseType: 'arraybuffer', timeout: 15000 }));
+      } catch {
+        ({ data: imgBuffer } = await axios.get(amazonImages[i], { responseType: 'arraybuffer', timeout: 15000 }));
+      }
+      const publicId  = `${slug}-${String(i + 1).padStart(2, '0')}`;
+      const timestamp = Math.floor(Date.now() / 1000);
+      const eager     = 'c_limit,q_auto:best,w_3000';
+      const toSign    = `eager=${eager}&folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+      const signature = crypto.createHash('sha1').update(toSign).digest('hex');
+      const uploadParams = new URLSearchParams({
+        file: `data:image/jpeg;base64,${Buffer.from(imgBuffer).toString('base64')}`,
+        api_key: apiKey, timestamp: String(timestamp), signature, folder, public_id: publicId, eager,
+      });
+      const { data: uploaded } = await axios.post(
+        `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
+        uploadParams.toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
+      );
+      cloudinaryUrls.push(uploaded.eager?.[0]?.secure_url || uploaded.secure_url);
+    } catch (e) {
+      console.error(`fetchAndUploadImages: cloudinary upload failed:`, e.message);
+    }
+  }
+
+  if (cloudinaryUrls.length) {
+    await Product.findByIdAndUpdate(product._id, { image: cloudinaryUrls[0], images: cloudinaryUrls, cloudinaryFolder: folder });
+    console.log(`fetchAndUploadImages: saved ${cloudinaryUrls.length} Cloudinary images for ${product._id}`);
+  }
+
+  return cloudinaryUrls.length ? cloudinaryUrls : null;
+}
+
 // POST re-fetch images for a product — tries Keepa first, falls back to Amazon HTML scrape + Cloudinary upload
 router.post("/:id/refresh-images", async (req, res) => {
   try {
@@ -286,99 +371,20 @@ router.post("/:id/refresh-images", async (req, res) => {
     if (!product) return res.status(404).json({ error: "Product not found" });
 
     // Step 1: try Keepa (fast, no Cloudinary needed)
-    const { fetchProduct } = require("../../scraper");
     const info = await fetchProduct(product.url, { priceOnly: false, skipVariants: false, forceRefresh: true });
-    let images = info.images || [];
-    let image  = info.image || images[0] || null;
+    const images = info.images || [];
+    const image  = info.image || images[0] || null;
 
     if (image) {
       await Product.findByIdAndUpdate(product._id, { image, images });
       return res.json({ ok: true, source: 'keepa', count: images.length, image, images });
     }
 
-    // Step 2: Keepa had no images — scrape Amazon page directly
-    const crypto = require('crypto');
-    let amazonImages = [];
-    try {
-      const { data: html } = await axios.get(product.url, {
-        timeout: 15000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-      });
-      const CDN = 'https://m.media-amazon.com/images/I/';
-      const CDN2 = 'https://images-na.ssl-images-amazon.com/images/I/';
-      const urlRe = pat => [...html.matchAll(pat)].map(m => m[1]);
-      const hiRes   = urlRe(/"hiRes":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
-      const large   = urlRe(/"large":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
-      const mainImg = urlRe(/id="landingImage"[^>]+src="([^"]+)"/g);
-      const dynImg  = urlRe(/"dynamic_image_url":"([^"]+)"/g);
-      const srcSet  = urlRe(/srcset="([^ ,]+)[^"]*" id="imgBlkFront"/g);
-      const allImgs = [...new Set([...hiRes, ...large, ...mainImg, ...dynImg, ...srcSet])]
-        .filter(u => u.includes('media-amazon.com') || u.includes('images-na.ssl-images-amazon'));
-      amazonImages = allImgs.slice(0, 8);
-    } catch (e) {
-      return res.status(502).json({ error: `Amazon scrape failed: ${e.message}` });
-    }
+    // Step 2: Amazon scrape + Cloudinary
+    const cloudinaryUrls = await fetchAndUploadImages(product);
+    if (!cloudinaryUrls) return res.json({ ok: true, source: 'none', count: 0, image: null, images: [] });
 
-    // Final fallback: legacy ASIN-based image URL — works for virtually every Amazon product
-    if (!amazonImages.length) {
-      const asinMatch = product.url.match(/\/dp\/([A-Z0-9]{10})/i);
-      if (asinMatch) {
-        amazonImages = [`https://images-na.ssl-images-amazon.com/images/P/${asinMatch[1]}.01.LZZZZZZZ.jpg`];
-      }
-    }
-
-    if (!amazonImages.length) return res.json({ ok: true, source: 'none', count: 0, image: null, images: [] });
-
-    // Step 3: upload to Cloudinary
-    const cloud     = process.env.CLOUDINARY_CLOUD_NAME;
-    const apiKey    = process.env.CLOUDINARY_API_KEY;
-    const apiSecret = process.env.CLOUDINARY_API_SECRET;
-    if (!cloud || !apiKey || !apiSecret) return res.status(500).json({ error: 'Cloudinary not configured' });
-
-    const asin = product.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
-    const slug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
-    const folder = `tracker-images/${slug}`;
-    const cloudinaryUrls = [];
-
-    for (let i = 0; i < amazonImages.length; i++) {
-      try {
-        const fullResUrl = amazonImages[i].replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
-        let imgBuffer;
-        try {
-          ({ data: imgBuffer } = await axios.get(fullResUrl, { responseType: 'arraybuffer', timeout: 15000 }));
-        } catch {
-          ({ data: imgBuffer } = await axios.get(amazonImages[i], { responseType: 'arraybuffer', timeout: 15000 }));
-        }
-        const publicId  = `${slug}-${String(i + 1).padStart(2, '0')}`;
-        const timestamp = Math.floor(Date.now() / 1000);
-        const eager     = 'c_limit,q_auto:best,w_3000';
-        const toSign    = `eager=${eager}&folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
-        const signature = crypto.createHash('sha1').update(toSign).digest('hex');
-        const uploadParams = new URLSearchParams({
-          file: `data:image/jpeg;base64,${Buffer.from(imgBuffer).toString('base64')}`,
-          api_key: apiKey, timestamp: String(timestamp), signature, folder, public_id: publicId, eager,
-        });
-        const { data: uploaded } = await axios.post(
-          `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
-          uploadParams.toString(),
-          { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
-        );
-        cloudinaryUrls.push(uploaded.eager?.[0]?.secure_url || uploaded.secure_url);
-      } catch (e) {
-        console.error(`refresh-images: cloudinary upload failed for ${amazonImages[i]}:`, e.message);
-      }
-    }
-
-    if (cloudinaryUrls.length) {
-      await Product.findByIdAndUpdate(product._id, { image: cloudinaryUrls[0], images: cloudinaryUrls, cloudinaryFolder: folder });
-      console.log(`refresh-images: saved ${cloudinaryUrls.length} Cloudinary images for ${product._id}`);
-    }
-
-    res.json({ ok: true, source: 'amazon+cloudinary', count: cloudinaryUrls.length, image: cloudinaryUrls[0] || null, images: cloudinaryUrls });
+    res.json({ ok: true, source: 'amazon+cloudinary', count: cloudinaryUrls.length, image: cloudinaryUrls[0], images: cloudinaryUrls });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
