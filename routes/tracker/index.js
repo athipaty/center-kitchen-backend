@@ -188,7 +188,7 @@ router.get("/search-deals", async (req, res) => {
     // Step 4: apply 4+ star filter and build the response shape the frontend expects
     const CDN = "https://images-na.ssl-images-amazon.com/images/I/";
     const deals = candidates
-      .filter(d => (ratingMap[d.asin] || 0) >= 4.0)
+      .filter(d => ratingMap[d.asin] == null || ratingMap[d.asin] >= 4.0)
       .map(d => {
         const cur = d.current || [];
         const price = dealPrice(cur);
