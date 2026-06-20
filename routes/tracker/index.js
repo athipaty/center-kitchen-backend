@@ -306,13 +306,23 @@ async function fetchAndUploadImages(product) {
     const srcSet  = urlRe(/srcset="([^ ,]+)[^"]*" id="imgBlkFront"/g);
     const allImgs = [...new Set([...hiRes, ...large, ...mainImg, ...dynImg, ...srcSet])]
       .filter(u => u.includes('media-amazon.com') || u.includes('images-na.ssl-images-amazon'));
-    amazonImages = allImgs.slice(0, 8);
+    amazonImages = allImgs.slice(0, 20);
   } catch {}
 
-  // Final fallback: legacy ASIN-based image URL
+  // Final fallback: probe legacy ASIN-based image URLs (.01, .02 … .12)
   if (!amazonImages.length) {
     const asinMatch = product.url.match(/\/dp\/([A-Z0-9]{10})/i);
-    if (asinMatch) amazonImages = [`https://images-na.ssl-images-amazon.com/images/P/${asinMatch[1]}.01.LZZZZZZZ.jpg`];
+    if (asinMatch) {
+      const asin = asinMatch[1];
+      const probes = await Promise.all(
+        Array.from({ length: 12 }, (_, i) => {
+          const idx = String(i + 1).padStart(2, '0');
+          const url = `https://images-na.ssl-images-amazon.com/images/P/${asin}.${idx}.LZZZZZZZ.jpg`;
+          return axios.head(url, { timeout: 5000 }).then(r => r.status === 200 ? url : null).catch(() => null);
+        })
+      );
+      amazonImages = probes.filter(Boolean);
+    }
   }
 
   if (!amazonImages.length) return null;
