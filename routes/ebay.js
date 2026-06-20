@@ -3216,7 +3216,7 @@ router.post('/trading-create-listing', async (req, res) => {
     // Save the value first: if eBay rejects this dimension (21920061) and we switch to another,
     // the saved value gets restored as a required item specific on the retry.
     const savedVarDimAspect = (variants?.length && variantDimension) ? (aspects[variantDimension] || null) : null;
-    if (variants?.length > 1 && variantDimension) delete aspects[variantDimension];
+    if (variants?.length >= 1 && variantDimension) delete aspects[variantDimension];
 
     const buildSpecXml = (asp) => Object.entries(asp)
       .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
