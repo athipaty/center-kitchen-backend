@@ -2742,6 +2742,88 @@ router.post('/listing/:id/add-variation', async (req, res) => {
   }
 });
 
+// ── Rename a variation label on a listing ─────────────────────────────
+router.post('/listing/:id/rename-variation', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    if (!cleanId) return res.status(400).json({ error: 'Listing ID must be numeric' });
+    const { oldLabel, newLabel } = req.body;
+    if (!oldLabel || !newLabel) return res.status(400).json({ error: 'oldLabel and newLabel are required' });
+
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    function tradingPost(callName, body) {
+      return axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?>${body}`,
+        { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml', 'X-EBAY-API-CALL-NAME': callName } }
+      );
+    }
+    function checkFailure(xml) {
+      if (!/<Ack>Failure<\/Ack>/.test(xml) && !/<Ack>PartialFailure<\/Ack>/.test(xml)) return null;
+      const msgs = [];
+      const errRe = /<Errors>([\s\S]*?)<\/Errors>/g; let em;
+      while ((em = errRe.exec(xml)) !== null) {
+        const sev = em[1].match(/<SeverityCode>([^<]+)<\/SeverityCode>/)?.[1] || '';
+        if (sev === 'Warning') continue;
+        const msg = em[1].match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || em[1].match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1] || '';
+        if (msg) msgs.push(msg);
+      }
+      return msgs.length ? msgs.join(' | ') : null;
+    }
+
+    const { data: getItemXml } = await tradingPost('GetItem',
+      `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+    );
+    const getErr = checkFailure(getItemXml);
+    if (getErr) return res.status(400).json({ error: getErr });
+
+    const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+    if (!varBlocks.length) return res.status(400).json({ error: 'No variations found on this listing' });
+
+    const decode = s => (s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+    const escXml = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+
+    const oldLower = oldLabel.toLowerCase().trim();
+    let found = false;
+    const variationXml = varBlocks.map(block => {
+      const valueRaw = block.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '';
+      const decoded = decode(valueRaw).toLowerCase().trim();
+      const isTarget = decoded === oldLower;
+      if (isTarget) found = true;
+      const label = isTarget ? newLabel : decode(valueRaw);
+      const price = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0.00';
+      const qty   = block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '1';
+      const sku   = block.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+      const skuXml = `<SKU>${sku || (cleanId + '-' + label.replace(/[^a-zA-Z0-9]/g, '')).slice(0, 50)}</SKU>`;
+      const dimName = block.match(/<Name>([\s\S]*?)<\/Name>/)?.[1]?.trim() || 'Style';
+      return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics><NameValueList><Name>${escXml(dimName)}</Name><Value>${escXml(label)}</Value></NameValueList></VariationSpecifics></Variation>`;
+    }).join('');
+
+    if (!found) return res.status(404).json({ error: `Variation "${oldLabel}" not found on listing ${cleanId}` });
+
+    // Rebuild VariationSpecificsSet with updated label
+    const specSetBlock = getItemXml.match(/<VariationSpecificsSet>([\s\S]*?)<\/VariationSpecificsSet>/)?.[1] || '';
+    const dimName = specSetBlock.match(/<Name>([\s\S]*?)<\/Name>/)?.[1]?.trim() || 'Style';
+    const allValues = varBlocks.map(b => {
+      const raw = decode(b.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '');
+      return raw.toLowerCase().trim() === oldLower ? newLabel : raw;
+    });
+    const specSetXml = `<VariationSpecificsSet><NameValueList><Name>${escXml(dimName)}</Name>${allValues.map(v => `<Value>${escXml(v)}</Value>`).join('')}</NameValueList></VariationSpecificsSet>`;
+    const picturesXml = getItemXml.match(/<Variations>[\s\S]*?(<Pictures>[\s\S]*?<\/Pictures>)[\s\S]*?<\/Variations>/)?.[1] || '';
+
+    const { data: reviseXml } = await tradingPost('ReviseFixedPriceItem',
+      `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${specSetXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
+    );
+    const err = checkFailure(reviseXml);
+    if (err) return res.status(400).json({ error: err });
+
+    console.log(`rename-variation: listing ${cleanId} "${oldLabel}" → "${newLabel}"`);
+    res.json({ ok: true, listingId: cleanId, oldLabel, newLabel });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to rename variation' });
+  }
+});
+
 // ── End (delete) a listing via Trading API (EndFixedPriceItem) ─────────
 router.delete('/listing/:id', async (req, res) => {
   try {
