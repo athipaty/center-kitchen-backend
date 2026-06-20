@@ -2809,7 +2809,12 @@ router.post('/listing/:id/rename-variation', async (req, res) => {
       return raw.toLowerCase().trim() === oldLower ? newLabel : raw;
     });
     const specSetXml = `<VariationSpecificsSet><NameValueList><Name>${escXml(dimName)}</Name>${allValues.map(v => `<Value>${escXml(v)}</Value>`).join('')}</NameValueList></VariationSpecificsSet>`;
-    const picturesXml = getItemXml.match(/<Variations>[\s\S]*?(<Pictures>[\s\S]*?<\/Pictures>)[\s\S]*?<\/Variations>/)?.[1] || '';
+    // Also update the old label inside the Pictures block (VariationSpecificValue tags)
+    const rawPictures = getItemXml.match(/<Variations>[\s\S]*?(<Pictures>[\s\S]*?<\/Pictures>)[\s\S]*?<\/Variations>/)?.[1] || '';
+    const picturesXml = rawPictures.replace(
+      new RegExp(`<VariationSpecificValue>${escXml(oldLabel)}<\/VariationSpecificValue>`, 'gi'),
+      `<VariationSpecificValue>${escXml(newLabel)}</VariationSpecificValue>`
+    );
 
     const { data: reviseXml } = await tradingPost('ReviseFixedPriceItem',
       `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${specSetXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
