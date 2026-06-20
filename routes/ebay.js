@@ -2742,6 +2742,56 @@ router.post('/listing/:id/add-variation', async (req, res) => {
   }
 });
 
+// ── Get + optionally trim pictures on a listing ───────────────────────
+// GET  → returns current picture URLs
+// POST with { keepCount: N } → trims to first N pictures via ReviseFixedPriceItem
+router.get('/listing/:id/pictures', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+    );
+    const pics = [...xml.matchAll(/<PictureURL>([\s\S]*?)<\/PictureURL>/g)].map(m => m[1].trim());
+    res.json({ listingId: cleanId, count: pics.length, pictures: pics });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/listing/:id/trim-pictures', async (req, res) => {
+  try {
+    const { keepCount } = req.body;
+    if (!keepCount || keepCount < 1) return res.status(400).json({ error: 'keepCount required' });
+    const token = await getAccessToken();
+    const cleanId = String(req.params.id).trim().replace(/\D/g, '');
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    // Get current pictures
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+    );
+    const pics = [...xml.matchAll(/<PictureURL>([\s\S]*?)<\/PictureURL>/g)].map(m => m[1].trim());
+    if (pics.length <= keepCount) return res.json({ ok: true, message: `Already has ${pics.length} pictures, nothing to trim`, pictures: pics });
+    const kept = pics.slice(0, keepCount);
+    const picXml = kept.map(u => `<PictureURL>${u}</PictureURL>`).join('');
+    const { data: revXml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><PictureDetails>${picXml}</PictureDetails></Item></ReviseFixedPriceItemRequest>`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+    );
+    if (/<Ack>Failure<\/Ack>/.test(revXml)) {
+      const err = revXml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+      return res.status(400).json({ error: err });
+    }
+    console.log(`trim-pictures: listing ${cleanId} trimmed ${pics.length} → ${keepCount} pictures`);
+    res.json({ ok: true, removed: pics.length - keepCount, kept: keepCount, pictures: kept });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Rename a variation label on a listing ─────────────────────────────
 router.post('/listing/:id/rename-variation', async (req, res) => {
   try {
