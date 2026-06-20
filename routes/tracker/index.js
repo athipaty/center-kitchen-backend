@@ -323,6 +323,14 @@ router.post("/:id/refresh-images", async (req, res) => {
       return res.status(502).json({ error: `Amazon scrape failed: ${e.message}` });
     }
 
+    // Final fallback: legacy ASIN-based image URL — works for virtually every Amazon product
+    if (!amazonImages.length) {
+      const asinMatch = product.url.match(/\/dp\/([A-Z0-9]{10})/i);
+      if (asinMatch) {
+        amazonImages = [`https://images-na.ssl-images-amazon.com/images/P/${asinMatch[1]}.01.LZZZZZZZ.jpg`];
+      }
+    }
+
     if (!amazonImages.length) return res.json({ ok: true, source: 'none', count: 0, image: null, images: [] });
 
     // Step 3: upload to Cloudinary
