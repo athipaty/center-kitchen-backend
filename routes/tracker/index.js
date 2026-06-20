@@ -286,7 +286,7 @@ router.post("/:id/refresh-images", async (req, res) => {
     if (!product) return res.status(404).json({ error: "Product not found" });
 
     const { fetchProduct } = require("../../scraper");
-    const info = await fetchProduct(product.url, { priceOnly: false, skipVariants: true, forceRefresh: true });
+    const info = await fetchProduct(product.url, { priceOnly: false, skipVariants: false, forceRefresh: true });
 
     const images = info.images || [];
     const image  = info.image || images[0] || null;
