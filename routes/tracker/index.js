@@ -293,18 +293,24 @@ async function fetchAndUploadImages(product) {
     const { data: html } = await axios.get(product.url, {
       timeout: 15000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        // Mobile UA bypasses Amazon's server-side blocking that desktop UA triggers
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
     });
     const urlRe = pat => [...html.matchAll(pat)].map(m => m[1]);
+    // Primary: hiRes JSON data (desktop-style embedded JSON, sometimes present in mobile too)
     const hiRes   = urlRe(/"hiRes":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
     const large   = urlRe(/"large":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
     const mainImg = urlRe(/id="landingImage"[^>]+src="([^"]+)"/g);
     const dynImg  = urlRe(/"dynamic_image_url":"([^"]+)"/g);
     const srcSet  = urlRe(/srcset="([^ ,]+)[^"]*" id="imgBlkFront"/g);
-    const allImgs = [...new Set([...hiRes, ...large, ...mainImg, ...dynImg, ...srcSet])]
+    // Mobile fallback: extract full-res gallery images from _AC_SL1500_ or _AC_ URLs, skip thumbnails
+    const acImgs  = [...new Set(
+      [...html.matchAll(/https:\/\/m\.media-amazon\.com\/images\/I\/[A-Za-z0-9+%]+\._AC_(?:SL\d+|)_?\.jpg/g)].map(m => m[0])
+    )].filter(u => !/_SS\d|_CR\d|_SR\d|_SX\d|_SY\d|_QL\d|_UX\d|_UL\d/.test(u));
+    const allImgs = [...new Set([...hiRes, ...large, ...mainImg, ...dynImg, ...srcSet, ...acImgs])]
       .filter(u => u.includes('media-amazon.com') || u.includes('images-na.ssl-images-amazon'));
     // No cap — take all images the product actually has
     amazonImages = allImgs;
