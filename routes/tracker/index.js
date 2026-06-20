@@ -310,20 +310,12 @@ async function fetchAndUploadImages(product) {
     amazonImages = allImgs;
   } catch {}
 
-  // Final fallback: probe legacy ASIN-based image URLs until Amazon stops returning them
+  // Final fallback: Amazon's legacy URL always serves the main image at .01
+  // (.02+  repeat the same image, so only .01 is useful here)
   if (!amazonImages.length) {
     const asinMatch = product.url.match(/\/dp\/([A-Z0-9]{10})/i);
     if (asinMatch) {
-      const asin = asinMatch[1];
-      // Probe up to 12 slots in parallel, keep only the ones that exist
-      const probes = await Promise.all(
-        Array.from({ length: 12 }, (_, i) => {
-          const idx = String(i + 1).padStart(2, '0');
-          const url = `https://images-na.ssl-images-amazon.com/images/P/${asin}.${idx}.LZZZZZZZ.jpg`;
-          return axios.head(url, { timeout: 5000 }).then(r => r.status === 200 ? url : null).catch(() => null);
-        })
-      );
-      amazonImages = probes.filter(Boolean);
+      amazonImages = [`https://images-na.ssl-images-amazon.com/images/P/${asinMatch[1]}.01.LZZZZZZZ.jpg`];
     }
   }
 
