@@ -279,25 +279,91 @@ router.patch("/:id/ebay", async (req, res) => {
 });
 
 
-// POST re-fetch images for a product via Keepa (authoritative source)
+// POST re-fetch images for a product — tries Keepa first, falls back to Amazon HTML scrape + Cloudinary upload
 router.post("/:id/refresh-images", async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ error: "Product not found" });
 
+    // Step 1: try Keepa (fast, no Cloudinary needed)
     const { fetchProduct } = require("../../scraper");
     const info = await fetchProduct(product.url, { priceOnly: false, skipVariants: false, forceRefresh: true });
-
-    const images = info.images || [];
-    const image  = info.image || images[0] || null;
+    let images = info.images || [];
+    let image  = info.image || images[0] || null;
 
     if (image) {
       await Product.findByIdAndUpdate(product._id, { image, images });
-      product.image  = image;
-      product.images = images;
+      return res.json({ ok: true, source: 'keepa', count: images.length, image, images });
     }
 
-    res.json({ ok: true, count: images.length, image, images });
+    // Step 2: Keepa had no images — scrape Amazon page directly
+    const crypto = require('crypto');
+    let amazonImages = [];
+    try {
+      const { data: html } = await axios.get(product.url, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      });
+      const hiRes = [...html.matchAll(/"hiRes":"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/g)].map(m => m[1]);
+      const large = [...html.matchAll(/"large":"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/g)].map(m => m[1]);
+      const deduped = [...new Set([...hiRes, ...large])];
+      amazonImages = deduped.slice(0, 8);
+    } catch (e) {
+      return res.status(502).json({ error: `Amazon scrape failed: ${e.message}` });
+    }
+
+    if (!amazonImages.length) return res.json({ ok: true, source: 'none', count: 0, image: null, images: [] });
+
+    // Step 3: upload to Cloudinary
+    const cloud     = process.env.CLOUDINARY_CLOUD_NAME;
+    const apiKey    = process.env.CLOUDINARY_API_KEY;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+    if (!cloud || !apiKey || !apiSecret) return res.status(500).json({ error: 'Cloudinary not configured' });
+
+    const asin = product.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
+    const slug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
+    const folder = `tracker-images/${slug}`;
+    const cloudinaryUrls = [];
+
+    for (let i = 0; i < amazonImages.length; i++) {
+      try {
+        const fullResUrl = amazonImages[i].replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
+        let imgBuffer;
+        try {
+          ({ data: imgBuffer } = await axios.get(fullResUrl, { responseType: 'arraybuffer', timeout: 15000 }));
+        } catch {
+          ({ data: imgBuffer } = await axios.get(amazonImages[i], { responseType: 'arraybuffer', timeout: 15000 }));
+        }
+        const publicId  = `${slug}-${String(i + 1).padStart(2, '0')}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+        const eager     = 'c_limit,q_auto:good,w_1600';
+        const toSign    = `eager=${eager}&folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+        const signature = crypto.createHash('sha1').update(toSign).digest('hex');
+        const uploadParams = new URLSearchParams({
+          file: `data:image/jpeg;base64,${Buffer.from(imgBuffer).toString('base64')}`,
+          api_key: apiKey, timestamp: String(timestamp), signature, folder, public_id: publicId, eager,
+        });
+        const { data: uploaded } = await axios.post(
+          `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
+          uploadParams.toString(),
+          { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
+        );
+        cloudinaryUrls.push(uploaded.eager?.[0]?.secure_url || uploaded.secure_url);
+      } catch (e) {
+        console.error(`refresh-images: cloudinary upload failed for ${amazonImages[i]}:`, e.message);
+      }
+    }
+
+    if (cloudinaryUrls.length) {
+      await Product.findByIdAndUpdate(product._id, { image: cloudinaryUrls[0], images: cloudinaryUrls, cloudinaryFolder: folder });
+      console.log(`refresh-images: saved ${cloudinaryUrls.length} Cloudinary images for ${product._id}`);
+    }
+
+    res.json({ ok: true, source: 'amazon+cloudinary', count: cloudinaryUrls.length, image: cloudinaryUrls[0] || null, images: cloudinaryUrls });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
