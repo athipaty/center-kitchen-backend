@@ -275,6 +275,28 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = fa
       return `<Variation>${skuXml}<StartPrice currencyID="USD">${thisPrice}</StartPrice><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
     }).join('');
 
+    // Ghost-variant detection: any DB product linked to this listing whose variant
+    // label doesn't match any live eBay variation is a phantom — it shows "eBay ✓"
+    // in the UI but price syncs silently do nothing for it.
+    // Log a warning immediately; auto-clear ebayListingId once the variant goes unavailable.
+    const liveLabels = varBlocks
+      .map(b => decodeEntities(b.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '').toLowerCase().trim())
+      .filter(Boolean);
+    for (const dbv of dbVariants) {
+      const dbl = (dbv.variant || '').toLowerCase().trim();
+      if (!dbl) continue;
+      const hasLiveMatch = liveLabels.some(el =>
+        el === dbl || el.includes(dbl) || (dbl.includes(el) && el.length > 2)
+      );
+      if (!hasLiveMatch) {
+        console.warn(`ebayPriceSync: ghost variant "${dbv.variant}" (${dbv._id}) has no matching variation in live listing ${cleanId}`);
+        if (dbv.status === 'unavailable') {
+          await Product.updateOne({ _id: dbv._id }, { $unset: { ebayListingId: 1 } });
+          console.log(`ebayPriceSync: auto-cleared ebayListingId for unavailable ghost variant "${dbv.variant}" (${dbv._id})`);
+        }
+      }
+    }
+
     const missingXml = await buildMissingVariationXml(cleanId, varBlocks).catch(() => '');
     const picturesXml = extractVariationPictures(getItemXml);
 
