@@ -335,12 +335,34 @@ async function fetchAndUploadImages(product) {
     } catch {}
   } catch {}
 
-  // Final fallback: Amazon's legacy URL always serves the main image at .01
-  // (.02+  repeat the same image, so only .01 is useful here)
+  // Final fallback: probe legacy ASIN image URLs and keep only distinct images.
+  // Amazon returns HTTP 200 for all indices but repeats the .01 image when a slot is empty.
+  // We detect duplicates by comparing Content-Length — different size = real distinct image.
   if (!amazonImages.length) {
     const asinMatch = product.url.match(/\/dp\/([A-Z0-9]{10})/i);
     if (asinMatch) {
-      amazonImages = [`https://images-na.ssl-images-amazon.com/images/P/${asinMatch[1]}.01.LZZZZZZZ.jpg`];
+      const asin = asinMatch[1];
+      const base = `https://images-na.ssl-images-amazon.com/images/P/${asin}`;
+      const getSize = async (url) => {
+        try {
+          const r = await axios.head(url, { timeout: 5000 });
+          return parseInt(r.headers['content-length'] || '0', 10);
+        } catch { return 0; }
+      };
+      const size01 = await getSize(`${base}.01.LZZZZZZZ.jpg`);
+      if (size01 > 0) {
+        amazonImages = [`${base}.01.LZZZZZZZ.jpg`];
+        // Probe .02–.12 in parallel; include only those with a different size from .01
+        const checks = await Promise.all(
+          Array.from({ length: 11 }, (_, i) => {
+            const idx = String(i + 2).padStart(2, '0');
+            const url = `${base}.${idx}.LZZZZZZZ.jpg`;
+            return getSize(url).then(sz => sz > 0 && sz !== size01 ? url : null);
+          })
+        );
+        amazonImages.push(...checks.filter(Boolean));
+        console.log(`fetchAndUploadImages: legacy probe found ${amazonImages.length} distinct images for ${asin}`);
+      }
     }
   }
 
