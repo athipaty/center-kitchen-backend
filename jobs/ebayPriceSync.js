@@ -225,27 +225,27 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = fa
   const priceStr = calcEbayPrice(Number(amazonPrice), saleMode).toFixed(2);
   const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
-  // Step 1: GetItem to check if this is a multi-variation listing
-  const { data: getItemXml } = await tradingPost(token, 'GetItem',
-    `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
-  );
-  const getErr = checkFailure(getItemXml);
-  if (getErr) throw new Error(getErr);
+  // Check DB first: single-variation listings (≤1 DB record) skip GetItem entirely,
+  // saving 1 eBay Trading API call per sync. Multi-variation still needs GetItem
+  // to read current per-variant prices and the Pictures block.
+  const dbVariants = await Product.find({ ebayListingId: cleanId }).lean();
 
-  const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
-
-  if (varBlocks.length === 0) {
-    // Single listing — ReviseInventoryStatus is fine
+  if (dbVariants.length <= 1) {
+    // Single listing — ReviseInventoryStatus, no GetItem needed
     const { data: reviseXml } = await tradingPost(token, 'ReviseInventoryStatus',
       `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`
     );
     const err = checkFailure(reviseXml);
     if (err) throw new Error(err);
   } else {
-    // Multi-variation: look up every DB variant for this listing and price each eBay
-    // variation independently using its own Amazon price. This prevents substring label
-    // collisions (e.g. "Colorful" matching "Yellow+colorful") from corrupting prices.
-    const dbVariants = await Product.find({ ebayListingId: cleanId }).lean();
+    // Multi-variation: GetItem needed for current per-variant prices and Pictures block.
+    const { data: getItemXml } = await tradingPost(token, 'GetItem',
+      `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+    );
+    const getErr = checkFailure(getItemXml);
+    if (getErr) throw new Error(getErr);
+
+    const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
 
     const variationXml = varBlocks.map(block => {
       const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);

@@ -71,24 +71,28 @@ async function checkProduct(p, saleMode = false) {
     p.failCount = 0;
     p.unavailableSince = null;
 
-    // Cache the calculated eBay price so the frontend can display it without
-    // calling GetItem — eliminates the 4,000+ daily eBay API calls from batch price fetching
-    if (p.ebayListingId) p.ebayPrice = calcEbayPrice(info.price, saleMode);
-
     const priceChanged  = info.price !== oldPrice;
     const justRestocked = previousStatus !== 'active';
-    if (p.ebayListingId && (priceChanged || justRestocked)) {
+
+    // Cache the calculated eBay price. Capture old value first so we can skip the
+    // eBay API call when the rounded price (floor+0.99) hasn't actually changed —
+    // many small Amazon fluctuations don't move the eBay price at all.
+    const oldEbayPrice = p.ebayPrice;
+    const newEbayPrice = p.ebayListingId ? calcEbayPrice(info.price, saleMode) : null;
+    if (newEbayPrice != null) p.ebayPrice = newEbayPrice;
+
+    const ebayPriceChanged = newEbayPrice != null && (oldEbayPrice == null || Math.abs(newEbayPrice - oldEbayPrice) > 0.005);
+    if (p.ebayListingId && (ebayPriceChanged || justRestocked)) {
       let syncErr = null;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          if (priceChanged) await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
+          if (ebayPriceChanged) await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
           if (justRestocked) {
             await syncEbayQty(p.ebayListingId, p.variant, 1);
             console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1 (was ${previousStatus})`);
           }
-          if (priceChanged) {
-            const expected = calcEbayPrice(info.price, saleMode);
-            console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" amazon=$${info.price} → ebay=$${expected}`);
+          if (ebayPriceChanged) {
+            console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" amazon=$${info.price} → ebay=$${newEbayPrice}`);
           }
           syncErr = null;
           break;
