@@ -76,8 +76,17 @@ function isSoldByAmazon(product) {
 }
 
 function getImages(product) {
-  if (!product.imagesCSV) return [];
-  return product.imagesCSV.split(',').filter(Boolean).map(s => `${KEEPA_CDN}${s.trim()}`);
+  if (product.imagesCSV) {
+    return product.imagesCSV.split(',').filter(Boolean).map(s => `${KEEPA_CDN}${s.trim()}`);
+  }
+  // Fallback: single image slug on the product itself (common for variation children)
+  if (product.image) return [`${KEEPA_CDN}${product.image}`];
+  // Fallback: find self in variations list
+  if (Array.isArray(product.variations)) {
+    const self = product.variations.find(v => v.asin === product.asin);
+    if (self?.image) return [`${KEEPA_CDN}${self.image}`];
+  }
+  return [];
 }
 
 function getSpecs(product) {
