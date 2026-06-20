@@ -161,6 +161,39 @@ async function checkProduct(p, saleMode = false, syncedListings = null) {
       p.unavailableSince = new Date();
     }
 
+    // If this variant is on an eBay listing but ebayPrice was never set (e.g. went OOS before
+    // the first successful sync), seed it from the live eBay variation price so the UI shows
+    // "eBay ✓" instead of "Not listed".
+    if (p.ebayListingId && p.ebayPrice == null) {
+      try {
+        const { getAccessToken } = require('./ebayPriceSync');
+        const axios = require('axios');
+        const token = await getAccessToken();
+        const cleanId = String(p.ebayListingId).trim().replace(/\D/g, '');
+        const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+          `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`,
+          { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+        );
+        const varLabel = (p.variant || '').toLowerCase().trim();
+        const varBlocks = [...xml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
+        if (varBlocks.length === 0) {
+          const singlePrice = xml.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1];
+          if (singlePrice) { p.ebayPrice = parseFloat(singlePrice); console.log(`ebayPrice seeded from live eBay: ${p.ebayListingId} "${p.variant}" → $${p.ebayPrice}`); }
+        } else {
+          for (const block of varBlocks) {
+            const val = (block.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '').toLowerCase().trim();
+            if (val === varLabel || val.includes(varLabel) || (varLabel && varLabel.includes(val) && val.length > 2)) {
+              const price = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1];
+              if (price) { p.ebayPrice = parseFloat(price); console.log(`ebayPrice seeded from live eBay: ${p.ebayListingId} "${p.variant}" → $${p.ebayPrice}`); break; }
+            }
+          }
+        }
+      } catch (seedErr) {
+        console.warn(`ebayPrice seed failed for ${p._id}: ${seedErr.message}`);
+      }
+    }
+
     // Deliberately NOT pushing qty=0 to eBay here: ReviseFixedPriceItem silently deletes any
     // <Variation> whose quantity is 0 (eBay returns "Variations with quantity '0' will be
     // removed"), permanently dropping the variant from the listing rather than marking it OOS.
