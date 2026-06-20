@@ -165,7 +165,7 @@ async function fetchVariants(product, baseDomain) {
 // skipVariants — full metadata but skip parent-ASIN lookup, 1 token (scheduler: missing title/image)
 // Variant discovery is only needed in the user-facing preview flow, not routine checks.
 // history is always 0 — we never use Keepa's CSV arrays; history lives in MongoDB.
-async function fetchProduct(url, { priceOnly = false, skipVariants = false } = {}) {
+async function fetchProduct(url, { priceOnly = false, skipVariants = false, forceRefresh = false } = {}) {
   const asin = extractAsin(url);
   if (!asin) throw new Error("Could not extract ASIN from URL");
 
@@ -173,7 +173,7 @@ async function fetchProduct(url, { priceOnly = false, skipVariants = false } = {
   const baseDomain  = domainMatch ? domainMatch[1] : "https://www.amazon.com";
 
   // Cache only used for full fetches; price-only always fetches fresh data
-  const cached = !priceOnly && _cache.get(asin);
+  const cached = !priceOnly && !forceRefresh && _cache.get(asin);
   let product;
 
   if (cached && cached.expiresAt > Date.now()) {
