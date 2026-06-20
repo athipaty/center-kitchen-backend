@@ -355,7 +355,7 @@ router.post("/:id/refresh-images", async (req, res) => {
         }
         const publicId  = `${slug}-${String(i + 1).padStart(2, '0')}`;
         const timestamp = Math.floor(Date.now() / 1000);
-        const eager     = 'c_limit,q_auto:good,w_1600';
+        const eager     = 'c_limit,q_auto:best,w_3000';
         const toSign    = `eager=${eager}&folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
         const signature = crypto.createHash('sha1').update(toSign).digest('hex');
         const uploadParams = new URLSearchParams({

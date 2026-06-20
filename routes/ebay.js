@@ -112,7 +112,7 @@ router.post('/upload-images', async (req, res) => {
       const folder = `ebay-listings/${slug}`;
       const publicId = `${slug}-${String(i + 1).padStart(2, '0')}`;
       const timestamp = Math.floor(Date.now() / 1000);
-      const eager = 'c_limit,q_auto:good,w_1600';
+      const eager = 'c_limit,q_auto:best,w_3000';
 
       // eager must come before folder/public_id/timestamp alphabetically
       const toSign = `eager=${eager}&folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
