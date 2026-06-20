@@ -2281,7 +2281,7 @@ router.post('/listing/:id/revise-photos', async (req, res) => {
     if (!imageUrls.length) return res.status(400).json({ error: 'imageUrls required' });
 
     const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
-    const picsXml = imageUrls.slice(0, 12).map(u => `<PictureURL>${u}</PictureURL>`).join('');
+    const picsXml = [...new Set(imageUrls)].slice(0, 12).map(u => `<PictureURL>${u}</PictureURL>`).join('');
     const body = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
       ${creds}
       <Item><ItemID>${cleanId}</ItemID><PictureDetails>${picsXml}</PictureDetails></Item>
@@ -3222,8 +3222,8 @@ router.post('/trading-create-listing', async (req, res) => {
       .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
       .join('');
 
-    // Build pictures XML (max 12)
-    const pics = imageUrls.slice(0, 12);
+    // Build pictures XML (max 12, deduplicated)
+    const pics = [...new Set(imageUrls)].slice(0, 12);
     const picturesXml = pics.length
       ? `<PictureDetails>${pics.map(u => `<PictureURL>${escXml(u)}</PictureURL>`).join('')}</PictureDetails>`
       : '';
