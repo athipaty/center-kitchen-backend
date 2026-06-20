@@ -2008,7 +2008,11 @@ router.post('/selling-limits/calibrate', async (req, res) => {
 });
 
 // ── Monthly selling limits usage ──────────────────────────────────
+let _sellingLimitsCache = null; // { data, expiresAt }
 router.get('/selling-limits', async (req, res) => {
+  if (_sellingLimitsCache && Date.now() < _sellingLimitsCache.expiresAt) {
+    return res.json(_sellingLimitsCache.data);
+  }
   try {
     const token = await getAccessToken();
 
@@ -2055,7 +2059,7 @@ router.get('/selling-limits', async (req, res) => {
 
     console.log(`selling-limits: ${usedItems} items, $${usedRevUsd.toFixed(2)} revenue (${revenueSource})`);
 
-    res.json({
+    const payload = {
       items:   { used: usedItems, limit: itemLimit, remaining: Math.max(0, itemLimit - usedItems) },
       revenue: {
         usedUsd: Math.round(usedRevUsd * 100) / 100,
@@ -2064,7 +2068,9 @@ router.get('/selling-limits', async (req, res) => {
         rate: sgdToUsd,
         source: revenueSource,
       },
-    });
+    };
+    _sellingLimitsCache = { data: payload, expiresAt: Date.now() + 10 * 60 * 1000 }; // 10 min
+    res.json(payload);
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
@@ -2073,7 +2079,11 @@ router.get('/selling-limits', async (req, res) => {
 });
 
 // ── All active listings via Trading API (includes manually created) ─
+let _allActiveListingsCache = null; // { data, expiresAt }
 router.get('/all-active-listings', async (req, res) => {
+  if (_allActiveListingsCache && Date.now() < _allActiveListingsCache.expiresAt) {
+    return res.json(_allActiveListingsCache.data);
+  }
   try {
     const token = await getAccessToken();
 
@@ -2118,6 +2128,7 @@ router.get('/all-active-listings', async (req, res) => {
       });
     }
 
+    _allActiveListingsCache = { data: items, expiresAt: Date.now() + 5 * 60 * 1000 }; // 5 min
     res.json(items);
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
