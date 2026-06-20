@@ -335,6 +335,21 @@ async function fetchAndUploadImages(product) {
   const asin = product.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
   const slug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
   const folder = `tracker-images/${slug}`;
+
+  // Skip upload if images already exist in this Cloudinary folder
+  try {
+    const existing = await axios.get(
+      `https://api.cloudinary.com/v1_1/${cloud}/resources/image?prefix=${encodeURIComponent(folder + '/')}&max_results=10&type=upload`,
+      { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
+    );
+    const existingUrls = (existing.data.resources || []).map(r => r.secure_url).filter(Boolean);
+    if (existingUrls.length > 0) {
+      console.log(`fetchAndUploadImages: folder ${folder} already has ${existingUrls.length} images — skipping upload`);
+      await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
+      return existingUrls;
+    }
+  } catch {}
+
   const cloudinaryUrls = [];
 
   for (let i = 0; i < amazonImages.length; i++) {
