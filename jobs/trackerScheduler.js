@@ -367,6 +367,7 @@ async function runOrphanCleanup() {
       } catch (e) {
         console.error(`orphan-cleanup: failed to end ${id}:`, e.message);
       }
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     if (io) io.emit('tracker:orphan:cleanup', { found: orphanIds.length, ended, skipped: skipped.length });
@@ -448,6 +449,7 @@ async function runAutoEndZeroViews() {
       } catch (e) {
         console.error(`auto-end-zero-views: failed to end ${listingId}:`, e.message);
       }
+      await new Promise(r => setTimeout(r, 3000));
     }
   } catch (e) {
     console.error('auto-end-zero-views: error:', e.message);
@@ -632,6 +634,7 @@ async function runAutoRestock() {
       } catch (e) {
         console.error(`auto-restock: failed to restock ${itemId}:`, e.message);
       }
+      await new Promise(r => setTimeout(r, 3000));
     }
   } catch (e) {
     console.error('auto-restock: error:', e.message);
