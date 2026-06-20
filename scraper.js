@@ -91,14 +91,40 @@ function getImages(product) {
 
 function getSpecs(product) {
   const s = {};
-  if (product.asin)         s.asin         = product.asin;
-  if (product.brand)        s.brand        = product.brand;
-  if (product.color)        s.color        = product.color;
-  if (product.size)         s.size         = product.size;
+  const set = (k, v) => { if (v != null && v !== '' && v !== 0) s[k] = v; };
+
+  set('asin', product.asin);
+  set('brand', product.brand);
+  set('color', product.color);
+  set('size', product.size);
+  set('style', product.style);
+  set('pattern', product.pattern);
+  set('material', product.material);
+  set('model_number', product.model);
+  set('manufacturer_part_number', product.partNumber);
   if (product.manufacturer && product.manufacturer !== product.brand)
-    s.manufacturer = product.manufacturer;
-  if (product.packageWeight > 0)
-    s.item_weight = `${(product.packageWeight / 100).toFixed(2)} kg`;
+    set('manufacturer', product.manufacturer);
+  if (product.binding) set('product_type', product.binding);
+  if (product.numberOfItems > 0) set('number_of_items', String(product.numberOfItems));
+  if (product.batteryType) set('battery_type', product.batteryType);
+
+  // Weights
+  if (product.itemWeight > 0) set('item_weight', `${(product.itemWeight / 100).toFixed(2)} kg`);
+  else if (product.packageWeight > 0) set('item_weight', `${(product.packageWeight / 100).toFixed(2)} kg`);
+
+  // Item dimensions (cm from Keepa, converted to inches)
+  const cmToIn = v => v > 0 ? `${(v / 100 * 0.3937).toFixed(2)}"` : null;
+  const il = cmToIn(product.itemLength), iw = cmToIn(product.itemWidth), ih = cmToIn(product.itemHeight);
+  if (il && iw && ih) set('item_dimensions', `${il}L x ${iw}W x ${ih}H`);
+
+  // Package dimensions
+  const pl = cmToIn(product.packageLength), pw = cmToIn(product.packageWidth), ph = cmToIn(product.packageHeight);
+  if (pl && pw && ph) set('package_dimensions', `${pl}L x ${pw}W x ${ph}H`);
+
+  // Ratings
+  if (product.rating > 0) set('customer_rating', `${(product.rating / 10).toFixed(1)} / 5`);
+  if (product.countReviews > 0) set('review_count', String(product.countReviews));
+
   return s;
 }
 

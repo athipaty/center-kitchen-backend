@@ -308,6 +308,31 @@ async function fetchAndUploadImages(product) {
       .filter(u => u.includes('media-amazon.com') || u.includes('images-na.ssl-images-amazon'));
     // No cap — take all images the product actually has
     amazonImages = allImgs;
+
+    // While we have the HTML, also scrape the product detail tables for extra specs
+    try {
+      const extraSpecs = {};
+      // Extract rows from productDetails tech spec tables and product overview
+      const rowRe = /<tr[^>]*>[\s\S]*?<th[^>]*>([\s\S]*?)<\/th>[\s\S]*?<td[^>]*>([\s\S]*?)<\/td>[\s\S]*?<\/tr>/g;
+      let rm;
+      while ((rm = rowRe.exec(html)) !== null) {
+        const k = rm[1].replace(/<[^>]+>/g, '').trim();
+        const v = rm[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+        if (k && v && k.length < 60 && v.length < 200) extraSpecs[k] = v;
+      }
+      // Also extract the "glance_icon_arr" / quick-overview bullets
+      const liRe = /class="a-list-item"[^>]*>([\s\S]*?)<\/li>/g;
+      const existingSpecs = product.specs || {};
+      if (Object.keys(extraSpecs).length > 0) {
+        const merged = { ...existingSpecs };
+        for (const [k, v] of Object.entries(extraSpecs)) {
+          const key = k.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+          if (key && !merged[key]) merged[key] = v;
+        }
+        await Product.findByIdAndUpdate(product._id, { specs: merged });
+        console.log(`fetchAndUploadImages: enriched specs for ${product._id} (+${Object.keys(extraSpecs).length} fields from Amazon)`);
+      }
+    } catch {}
   } catch {}
 
   // Final fallback: Amazon's legacy URL always serves the main image at .01
