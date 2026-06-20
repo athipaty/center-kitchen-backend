@@ -383,17 +383,20 @@ async function fetchAndUploadImages(product) {
   const slug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
   const folder = `tracker-images/${slug}`;
 
-  // Skip upload if images already exist in this Cloudinary folder
+  // Skip upload only if Cloudinary already has >= as many images as we found on Amazon
   try {
     const existing = await axios.get(
-      `https://api.cloudinary.com/v1_1/${cloud}/resources/image?prefix=${encodeURIComponent(folder + '/')}&max_results=10&type=upload`,
+      `https://api.cloudinary.com/v1_1/${cloud}/resources/image?prefix=${encodeURIComponent(folder + '/')}&max_results=50&type=upload`,
       { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
     );
     const existingUrls = (existing.data.resources || []).map(r => r.secure_url).filter(Boolean);
-    if (existingUrls.length > 0) {
-      console.log(`fetchAndUploadImages: folder ${folder} already has ${existingUrls.length} images — skipping upload`);
+    if (existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
+      console.log(`fetchAndUploadImages: folder ${folder} already has ${existingUrls.length}/${amazonImages.length} images — skipping upload`);
       await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
       return existingUrls;
+    }
+    if (existingUrls.length > 0) {
+      console.log(`fetchAndUploadImages: folder ${folder} has ${existingUrls.length} but Amazon has ${amazonImages.length} — re-uploading all`);
     }
   } catch {}
 
