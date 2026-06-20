@@ -7,6 +7,20 @@ const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 
 let io = null;
 
+// When eBay hits a daily call-limit, pause all Trading API calls until midnight PDT
+// (07:00 UTC) rather than hammering retry loops that can't succeed.
+let _ebayRateLimitedUntil = 0;
+function isEbayRateLimited() { return Date.now() < _ebayRateLimitedUntil; }
+function markEbayRateLimited(msg) {
+  if (_ebayRateLimitedUntil > Date.now()) return; // already set
+  // Reset at next midnight PDT (UTC-7). Calculate ms until 07:00 UTC today/tomorrow.
+  const now = new Date();
+  const resetUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 7, 0, 0));
+  if (resetUtc <= now) resetUtc.setUTCDate(resetUtc.getUTCDate() + 1);
+  _ebayRateLimitedUntil = resetUtc.getTime();
+  console.warn(`eBay rate-limited — pausing all Trading API calls until ${resetUtc.toISOString()} (midnight PDT). Error: ${msg}`);
+}
+
 // Adaptive interval based on price stability:
 // - Recently changed (last 3 days)  → 3–6h   (watch actively)
 // - Unchanged 3–7 days              → 8–14h  (moderate)
@@ -82,7 +96,7 @@ async function checkProduct(p, saleMode = false) {
     if (newEbayPrice != null) p.ebayPrice = newEbayPrice;
 
     const ebayPriceChanged = newEbayPrice != null && (oldEbayPrice == null || Math.abs(newEbayPrice - oldEbayPrice) > 0.005);
-    if (p.ebayListingId && (ebayPriceChanged || justRestocked)) {
+    if (p.ebayListingId && (ebayPriceChanged || justRestocked) && !isEbayRateLimited()) {
       let syncErr = null;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
@@ -98,6 +112,11 @@ async function checkProduct(p, saleMode = false) {
           break;
         } catch (e) {
           syncErr = e;
+          // Don't retry daily call-limit errors — they won't clear for hours
+          if (e.message?.includes('exceeded usage limit')) {
+            markEbayRateLimited(e.message);
+            break;
+          }
           if (attempt < 2) {
             console.warn(`eBay sync attempt ${attempt} failed for ${p.ebayListingId}: ${e.message} — retrying in 8s`);
             await new Promise(r => setTimeout(r, 8000));
@@ -112,7 +131,7 @@ async function checkProduct(p, saleMode = false) {
       }
       // Keepa processes products ~30× faster than the old scraper, causing burst eBay API calls.
       // Throttle to ≤1 sync per 2s to stay within eBay's per-minute rate limit.
-      await new Promise(r => setTimeout(r, 2000));
+      if (!isEbayRateLimited()) await new Promise(r => setTimeout(r, 2000));
     }
     p.nextCheck = nextCheckDate(p);
     await p.save();
@@ -174,6 +193,7 @@ async function checkDeadListings() {
     )
     .map(([id]) => id);
 
+  if (isEbayRateLimited()) return;
   for (const listingId of deadIds) {
     try {
       await endListing(listingId);
@@ -491,6 +511,7 @@ async function runRelistUnsoldWithEngagement() {
 
 // Auto-restock: after a sale, set qty back to 1 so listing stays live
 async function runAutoRestock() {
+  if (isEbayRateLimited()) return;
   try {
     const { getAccessToken } = require('./ebayPriceSync');
     const token = await getAccessToken();
