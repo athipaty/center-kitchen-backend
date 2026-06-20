@@ -279,41 +279,25 @@ router.patch("/:id/ebay", async (req, res) => {
 });
 
 
-// POST re-fetch all hi-res images for a product directly from Amazon page
-// Uses a lightweight regex extraction (no ScraperAPI needed) and updates the DB
+// POST re-fetch images for a product via Keepa (authoritative source)
 router.post("/:id/refresh-images", async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ error: "Product not found" });
 
-    const axios = require("axios");
-    const { data: html } = await axios.get(product.url, {
-      timeout: 15000,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-    });
+    const { fetchProduct } = require("../../scraper");
+    const info = await fetchProduct(product.url, { priceOnly: false, skipVariants: true });
 
-    // Extract all hiRes image URLs from Amazon page JS data
-    const hiResMatches = [...html.matchAll(/"hiRes"\s*:\s*"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/g)];
-    const hiResUrls = [...new Set(hiResMatches.map(m => m[1]))];
+    const images = info.images || [];
+    const image  = info.image || images[0] || null;
 
-    // Fallback: large images from img tags
-    let images = hiResUrls;
-    if (!images.length) {
-      const largMatches = [...html.matchAll(/https:\/\/m\.media-amazon\.com\/images\/I\/[A-Za-z0-9]+\._[A-Z_0-9]+_\.jpg/g)];
-      images = [...new Set(largMatches.map(m => m[0]))];
-    }
-
-    if (images.length) {
-      await Product.findByIdAndUpdate(product._id, { images, image: images[0] });
+    if (image) {
+      await Product.findByIdAndUpdate(product._id, { image, images });
+      product.image  = image;
       product.images = images;
-      product.image = images[0];
     }
 
-    res.json({ ok: true, count: images.length, images });
+    res.json({ ok: true, count: images.length, image, images });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
