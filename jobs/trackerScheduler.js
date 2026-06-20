@@ -135,8 +135,8 @@ async function checkProduct(p, saleMode = false, syncedListings = null) {
         if (io) io.emit('tracker:ebay:sync:ok', { productId: String(p._id) });
       }
       // Keepa processes products ~30× faster than the old scraper, causing burst eBay API calls.
-      // Throttle to ≤1 sync per 2s to stay within eBay's per-minute rate limit.
-      if (!isEbayRateLimited()) await new Promise(r => setTimeout(r, 2000));
+      // Throttle to ≤1 sync per 5s to stay within eBay's per-minute rate limit.
+      if (!isEbayRateLimited()) await new Promise(r => setTimeout(r, 5000));
     }
     p.nextCheck = nextCheckDate(p);
     await p.save();
