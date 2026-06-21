@@ -551,7 +551,7 @@ async function runRelistUnsoldWithEngagement() {
 }
 
 // Auto-restock: after a sale, set qty back to 1 so listing stays live
-async function runAutoRestock() {
+async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
   if (isEbayRateLimited()) return;
   try {
     const { getAccessToken } = require('./ebayPriceSync');
@@ -572,8 +572,7 @@ async function runAutoRestock() {
       );
     }
 
-    // Get orders from the last 35 minutes (5-min overlap on 30-min cron to avoid blind spots)
-    const from = new Date(Date.now() - 35 * 60 * 1000).toISOString();
+    const from = new Date(Date.now() - lookbackMs).toISOString();
     const to   = new Date().toISOString();
 
     const { data: ordersXml } = await tradingPost('GetOrders',

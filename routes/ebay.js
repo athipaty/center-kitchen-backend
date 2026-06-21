@@ -4354,5 +4354,17 @@ router.post('/batch-optimize', async (req, res) => {
   if (_io) _io.emit('ebay:optimize:done', { total, done });
 });
 
+// Manual restock trigger — catches any sales missed by the cron window
+router.post('/restock-now', async (req, res) => {
+  try {
+    const scheduler = require('../jobs/trackerScheduler');
+    const lookbackMs = Math.min((parseInt(req.body.hours) || 3) * 60 * 60 * 1000, 24 * 60 * 60 * 1000);
+    await scheduler.autoRestock(lookbackMs);
+    res.json({ ok: true, lookbackHours: lookbackMs / 3600000 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.setIo = setIo;
