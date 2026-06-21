@@ -259,10 +259,10 @@ router.post("/", async (req, res) => {
     await product.save();
     res.json(product);
 
-    // Background: if Keepa had no images, scrape Amazon + upload to Cloudinary automatically
-    if (!product.image) {
-      fetchAndUploadImages(product).catch(e => console.error(`auto-image: failed for ${product._id}:`, e.message));
-    }
+    // Always upload to Cloudinary in background — ensures cloudinaryFolder + Cloudinary URLs
+    // are set for every product, matching the old ScraperAPI behavior where all images were
+    // uploaded to Cloudinary before eBay listing. Keepa images passed as seed fallback.
+    fetchAndUploadImages(product, info.images || []).catch(e => console.error(`auto-image: failed for ${product._id}:`, e.message));
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
@@ -286,7 +286,7 @@ router.patch("/:id/ebay", async (req, res) => {
 
 // Shared helper: scrape Amazon for images and upload to Cloudinary.
 // Called automatically on product add (background) and from refresh-images route.
-async function fetchAndUploadImages(product) {
+async function fetchAndUploadImages(product, seedImages = []) {
   const crypto = require('crypto');
   let amazonImages = [];
   try {
@@ -370,6 +370,12 @@ async function fetchAndUploadImages(product) {
         console.log(`fetchAndUploadImages: legacy probe found ${amazonImages.length} distinct images for ${asin}`);
       }
     }
+  }
+
+  // Last resort: use Keepa images passed in as seed (already accessible CDN URLs)
+  if (!amazonImages.length && seedImages.length) {
+    amazonImages = [...seedImages];
+    console.log(`fetchAndUploadImages: using ${seedImages.length} Keepa seed images for ${product._id}`);
   }
 
   if (!amazonImages.length) return null;
