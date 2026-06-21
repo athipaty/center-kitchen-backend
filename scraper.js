@@ -157,11 +157,12 @@ async function callKeepa(asin, extra = {}) {
 // Use product.variations presence and product.parentAsin to detect the relationship.
 function mapVariations(variations, baseDomain) {
   return variations.map(v => ({
-    asin:  v.asin,
-    label: labelFromAttrs(v.attributes) || v.asin,
-    price: null,  // fetched individually when each variant is tracked
-    image: v.image ? `${KEEPA_CDN}${v.image}` : null,
-    url:   `${baseDomain}/dp/${v.asin}`,
+    asin:       v.asin,
+    label:      labelFromAttrs(v.attributes) || v.asin,
+    attributes: Array.isArray(v.attributes) ? v.attributes : [],
+    price:      null,
+    image:      v.image ? `${KEEPA_CDN}${v.image}` : null,
+    url:        `${baseDomain}/dp/${v.asin}`,
   }));
 }
 
