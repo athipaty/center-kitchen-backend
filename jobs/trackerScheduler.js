@@ -572,8 +572,8 @@ async function runAutoRestock() {
       );
     }
 
-    // Get orders from the last 20 minutes (slightly overlapping 15min interval)
-    const from = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    // Get orders from the last 35 minutes (5-min overlap on 30-min cron to avoid blind spots)
+    const from = new Date(Date.now() - 35 * 60 * 1000).toISOString();
     const to   = new Date().toISOString();
 
     const { data: ordersXml } = await tradingPost('GetOrders',
