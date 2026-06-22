@@ -661,8 +661,9 @@ async function triggerNow() {
 
   const results = [];
   const syncedListings = new Set();
-  for (const p of products) {
-    results.push(await checkProduct(p, syncedListings));
+  for (let i = 0; i < products.length; i++) {
+    results.push(await checkProduct(products[i], syncedListings));
+    if (i < products.length - 1) await new Promise(r => setTimeout(r, 10000));
   }
 
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
