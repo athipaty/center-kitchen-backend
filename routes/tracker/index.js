@@ -297,66 +297,131 @@ router.patch("/:id/ebay", async (req, res) => {
 
 // Shared helper: scrape Amazon for images and upload to Cloudinary.
 // Called automatically on product add (background) and from refresh-images route.
+// Browser header presets — rotate between attempts so Amazon sees different clients
+const BROWSER_HEADERS = [
+  // Attempt 1: Desktop Chrome (best for embedded colorImages JSON)
+  {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'max-age=0',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+    'sec-ch-ua': '"Chromium";v="124","Google Chrome";v="124","Not-A.Brand";v="99"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+  },
+  // Attempt 2: Mobile Safari (different rendering path, sometimes less blocked)
+  {
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Upgrade-Insecure-Requests': '1',
+  },
+];
+
+function extractAmazonImages(html) {
+  const CDN = /(?:m\.media-amazon\.com|images-na\.ssl-images-amazon\.com)\/images\/I\//;
+  const clean = u => u.replace(/\\u002F/g, '/').replace(/\\/g, '');
+  const urls = new Set();
+
+  // 1. colorImages JSON embedded in script — richest source, has hiRes for all gallery slots
+  const colorBlock = html.match(/'colorImages'\s*:\s*\{[^}]*'initial'\s*:\s*(\[[\s\S]*?\])\s*\}/);
+  if (colorBlock) {
+    try {
+      const arr = JSON.parse(colorBlock[1].replace(/'/g, '"'));
+      for (const img of arr) {
+        ['hiRes','large'].forEach(k => { if (img[k]) urls.add(clean(img[k])); });
+        if (img.main) Object.keys(img.main).forEach(u => urls.add(clean(u)));
+      }
+    } catch {}
+  }
+
+  // 2. data-a-dynamic-image attr — JSON map of url→[w,h], present on main img element
+  for (const m of html.matchAll(/data-a-dynamic-image="([^"]+)"/g)) {
+    try {
+      const obj = JSON.parse(m[1].replace(/&quot;/g, '"'));
+      Object.keys(obj).forEach(u => urls.add(u));
+    } catch {}
+  }
+
+  // 3. Embedded hiRes / large / dynamic_image_url JSON strings
+  for (const m of html.matchAll(/"(?:hiRes|large|dynamic_image_url)"\s*:\s*"(https:\/\/[^"]+)"/g)) {
+    urls.add(clean(m[1]));
+  }
+
+  // 4. ImageBlock script data (desktop page)
+  for (const m of html.matchAll(/"(?:mainUrl|hiResUrl|thumbnailUrl)"\s*:\s*"(https:\/\/[^"]+)"/g)) {
+    const u = clean(m[1]);
+    if (!/_SS\d|_SR\d|_SX\d|thumb/i.test(u)) urls.add(u);
+  }
+
+  // 5. _AC_SL1500_ pattern from any context (mobile page fallback)
+  for (const m of html.matchAll(/https:\/\/m\.media-amazon\.com\/images\/I\/[A-Za-z0-9+%]+\._AC_(?:SL\d+_?)?\.jpg/g)) {
+    if (!/_SS\d|_CR\d|_SR\d|_SX\d|_SY\d|_QL\d|_UX\d|_UL\d/.test(m[0])) urls.add(m[0]);
+  }
+
+  // 6. landingImage / imgBlkFront src as last resort
+  for (const m of html.matchAll(/(?:id="landingImage"|id="imgBlkFront")[^>]+src="([^"]+)"/g)) urls.add(m[1]);
+
+  return [...urls].filter(u => CDN.test(u));
+}
+
 async function fetchAndUploadImages(product, seedImages = []) {
   const crypto = require('crypto');
   let amazonImages = [];
-  try {
-    const { data: html } = await axios.get(product.url, {
-      timeout: 15000,
-      headers: {
-        // Mobile UA bypasses Amazon's server-side blocking that desktop UA triggers
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-    });
-    const urlRe = pat => [...html.matchAll(pat)].map(m => m[1]);
-    // Primary: hiRes JSON data (desktop-style embedded JSON, sometimes present in mobile too)
-    const hiRes   = urlRe(/"hiRes":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
-    const large   = urlRe(/"large":"(https:\/\/(?:m\.media|images-na\.ssl)-amazon\.com\/images\/I\/[^"]+)"/g);
-    const mainImg = urlRe(/id="landingImage"[^>]+src="([^"]+)"/g);
-    const dynImg  = urlRe(/"dynamic_image_url":"([^"]+)"/g);
-    const srcSet  = urlRe(/srcset="([^ ,]+)[^"]*" id="imgBlkFront"/g);
-    // Mobile fallback: extract full-res gallery images from _AC_SL1500_ or _AC_ URLs, skip thumbnails
-    const acImgs  = [...new Set(
-      [...html.matchAll(/https:\/\/m\.media-amazon\.com\/images\/I\/[A-Za-z0-9+%]+\._AC_(?:SL\d+|)_?\.jpg/g)].map(m => m[0])
-    )].filter(u => !/_SS\d|_CR\d|_SR\d|_SX\d|_SY\d|_QL\d|_UX\d|_UL\d/.test(u));
-    const allImgs = [...new Set([...hiRes, ...large, ...mainImg, ...dynImg, ...srcSet, ...acImgs])]
-      .filter(u => u.includes('media-amazon.com') || u.includes('images-na.ssl-images-amazon'));
-    // No cap — take all images the product actually has
-    amazonImages = allImgs;
-
-    // While we have the HTML, also scrape the product detail tables for extra specs
+  for (const headers of BROWSER_HEADERS) {
     try {
-      const extraSpecs = {};
-      // Extract rows from productDetails tech spec tables and product overview
-      const rowRe = /<tr[^>]*>[\s\S]*?<th[^>]*>([\s\S]*?)<\/th>[\s\S]*?<td[^>]*>([\s\S]*?)<\/td>[\s\S]*?<\/tr>/g;
-      let rm;
-      while ((rm = rowRe.exec(html)) !== null) {
-        const k = rm[1].replace(/<[^>]+>/g, '').trim();
-        const v = rm[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-        if (k && v && k.length < 60 && v.length < 200) extraSpecs[k] = v;
-      }
-      // Also extract the "glance_icon_arr" / quick-overview bullets
-      const liRe = /class="a-list-item"[^>]*>([\s\S]*?)<\/li>/g;
-      const existingSpecs = product.specs || {};
-      if (Object.keys(extraSpecs).length > 0) {
-        const merged = { ...existingSpecs };
-        for (const [k, v] of Object.entries(extraSpecs)) {
-          const key = k.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-          if (key && !merged[key]) merged[key] = v;
-        }
-        await Product.findByIdAndUpdate(product._id, { specs: merged });
-        console.log(`fetchAndUploadImages: enriched specs for ${product._id} (+${Object.keys(extraSpecs).length} fields from Amazon)`);
+      const { data: html } = await axios.get(product.url, { timeout: 18000, headers, decompress: true });
+
+      // Block detection: if Amazon served a robot-check or login page, skip
+      if (/robot|captcha|sign-in|ap\/signin|validateCaptcha/i.test(html.slice(0, 3000))) {
+        console.log(`fetchAndUploadImages: Amazon blocked request for ${product._id} (attempt with UA: ${headers['User-Agent'].slice(0,30)})`);
+        continue;
       }
 
-      // Correct isPrime if Keepa missed it — check Amazon page for Prime badge
-      if (!product.isPrime && /a-icon-prime|i-prime|prime-logo|primeBadge/i.test(html)) {
-        await Product.findByIdAndUpdate(product._id, { isPrime: true });
-        console.log(`fetchAndUploadImages: corrected isPrime=true for ${product._id} from Amazon HTML`);
+      const imgs = extractAmazonImages(html);
+      if (imgs.length > 0) {
+        amazonImages = imgs;
+        console.log(`fetchAndUploadImages: extracted ${imgs.length} images from Amazon HTML for ${product._id}`);
+
+        // While we have the HTML, also scrape the product detail tables for extra specs
+        try {
+          const extraSpecs = {};
+          const rowRe = /<tr[^>]*>[\s\S]*?<th[^>]*>([\s\S]*?)<\/th>[\s\S]*?<td[^>]*>([\s\S]*?)<\/td>[\s\S]*?<\/tr>/g;
+          let rm;
+          while ((rm = rowRe.exec(html)) !== null) {
+            const k = rm[1].replace(/<[^>]+>/g, '').trim();
+            const v = rm[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            if (k && v && k.length < 60 && v.length < 200) extraSpecs[k] = v;
+          }
+          const existingSpecs = product.specs || {};
+          if (Object.keys(extraSpecs).length > 0) {
+            const merged = { ...existingSpecs };
+            for (const [k, v] of Object.entries(extraSpecs)) {
+              const key = k.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+              if (key && !merged[key]) merged[key] = v;
+            }
+            await Product.findByIdAndUpdate(product._id, { specs: merged });
+            console.log(`fetchAndUploadImages: enriched specs for ${product._id} (+${Object.keys(extraSpecs).length} fields from Amazon)`);
+          }
+          if (!product.isPrime && /a-icon-prime|i-prime|prime-logo|primeBadge/i.test(html)) {
+            await Product.findByIdAndUpdate(product._id, { isPrime: true });
+            console.log(`fetchAndUploadImages: corrected isPrime=true for ${product._id} from Amazon HTML`);
+          }
+        } catch {}
+        break; // got images — no need to retry
       }
-    } catch {}
-  } catch {}
+    } catch (e) {
+      console.log(`fetchAndUploadImages: request failed for ${product._id}: ${e.message}`);
+    }
+  }
+
 
   // Final fallback: probe legacy ASIN image URLs and keep only distinct images.
   // Amazon returns HTTP 200 for all indices but repeats the .01 image when a slot is empty.
