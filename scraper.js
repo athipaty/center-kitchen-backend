@@ -195,7 +195,7 @@ function mapVariations(variations, baseDomain) {
   }));
 }
 
-async function fetchVariants(product, baseDomain) {
+async function fetchVariants(product, baseDomain, cachedParent = null) {
   // Variations list already populated on this product (common for both parent and child)
   if (Array.isArray(product.variations) && product.variations.length) {
     return mapVariations(product.variations, baseDomain);
@@ -204,7 +204,7 @@ async function fetchVariants(product, baseDomain) {
   // No variations on this product — try fetching parent if we have its ASIN
   if (product.parentAsin) {
     try {
-      const parent = await callKeepa(product.parentAsin);
+      const parent = cachedParent || await callKeepa(product.parentAsin);
       if (Array.isArray(parent.variations) && parent.variations.length) {
         return mapVariations(parent.variations, baseDomain);
       }
@@ -264,8 +264,6 @@ async function fetchProduct(url, { priceOnly = false, skipVariants = false, forc
   const title      = product.title || "Unknown product";
   const lp         = getListPrice(product.stats);
   const listPrice  = lp && lp > price ? lp : null;
-  const images     = getImages(product);
-  const image      = images[0] || null;
   const upc        = product.upcList?.[0] || product.eanList?.[0] || null;
   const isPrime    = isSoldByAmazon(product);
   const specs      = getSpecs(product);
@@ -286,8 +284,31 @@ async function fetchProduct(url, { priceOnly = false, skipVariants = false, forc
     if (parts.length) variant = parts.join(' / ');
   }
 
-  // skipVariants=true during scheduler checks avoids a second callKeepa for the parent ASIN
-  const variants = skipVariants ? [] : await fetchVariants(product, baseDomain);
+  // Variation children from Keepa only carry 1 image (the color swatch).
+  // The full product gallery lives on the parent ASIN — fetch it so every
+  // variant gets the complete photo set for the eBay listing.
+  let images = getImages(product);
+  let parentProduct = null;
+  if (images.length <= 1 && product.parentAsin && !skipVariants) {
+    try {
+      parentProduct = await callKeepa(product.parentAsin);
+      const parentImages = getImages(parentProduct);
+      if (parentImages.length > images.length) {
+        // Keep the variant's own image first (colour-specific swatch), then gallery
+        images = images[0]
+          ? [images[0], ...parentImages.filter(u => u !== images[0])].slice(0, 12)
+          : parentImages.slice(0, 12);
+        console.log(`keepa: supplemented ${asin} images from parent ${product.parentAsin} — ${images.length} total`);
+      }
+    } catch (e) {
+      console.warn(`keepa: parent image fetch for ${product.parentAsin} failed:`, e.message);
+    }
+  }
+  const image = images[0] || null;
+
+  // skipVariants=true during scheduler checks avoids a second callKeepa for the parent ASIN.
+  // Pass cachedParent so fetchVariants reuses it if we already fetched it above.
+  const variants = skipVariants ? [] : await fetchVariants(product, baseDomain, parentProduct);
 
   return { title, price, currency: "$", listPrice, image, images, upc, variants, isPrime, variant, specs, bullets, rating, reviewCount, isNewRelease };
 }
