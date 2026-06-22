@@ -68,9 +68,10 @@ function getListPrice(stats) {
   return kPrice(stats?.current?.[4]) || null;
 }
 
-// Prime = sold by Amazon directly or via FBA
+// Prime = sold by Amazon directly, FBA, or current buy box winner is Prime-eligible
 function isSoldByAmazon(product) {
   if (product.availabilityAmazon === 1) return true;
+  if (product.buyBoxIsPrime) return true;
   return kPrice(product.stats?.current?.[0]) != null
       || kPrice(product.stats?.current?.[7]) != null;
 }
