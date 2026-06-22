@@ -474,8 +474,11 @@ router.post("/:id/refresh-images", async (req, res) => {
     const image  = info.image || images[0] || null;
 
     if (image) {
-      await Product.findByIdAndUpdate(product._id, { image, images });
-      return res.json({ ok: true, source: 'keepa', count: images.length, image, images });
+      const update = { image, images };
+      if (info.specs && Object.keys(info.specs).length) update.specs = info.specs;
+      if (info.bullets?.length) update.bullets = info.bullets;
+      await Product.findByIdAndUpdate(product._id, update);
+      return res.json({ ok: true, source: 'keepa', count: images.length, image, images, specs: update.specs || {}, bullets: update.bullets || [] });
     }
 
     // Step 2: Amazon scrape + Cloudinary
