@@ -1437,9 +1437,7 @@ router.post('/generate-description', async (req, res) => {
       ? `\nAmazon Product Features (USE these as the basis for photo rows and feature cards):\n${cleanBullets.map((b,i)=>`${i+1}. ${b}`).join('\n')}`
       : '';
     const trustSection = [
-      specs.best_sellers_rank ? `Best Sellers Rank: ${specs.best_sellers_rank} — use this in trustItems as social proof` : '',
-      specs.estimated_monthly_sold ? `Estimated monthly sold: ${specs.estimated_monthly_sold} — use this in trustItems as social proof` : '',
-      specs.description ? `Product description from Amazon: ${String(specs.description).slice(0, 400)}` : '',
+      specs.description ? `Product description: ${String(specs.description).slice(0, 400)}` : '',
     ].filter(Boolean).join('\n');
     const extraSection = [
       upc ? `UPC/Barcode: ${upc}` : '',
