@@ -12,16 +12,8 @@ const scheduler = require("../../jobs/trackerScheduler");
 const { deleteCloudinaryFolder } = require("../../utils/cloudinaryUtils");
 const { endListing } = require("../../jobs/ebayPriceSync");
 
-// GET current tracker settings (saleModeActive)
 router.get("/settings", async (req, res) => {
-  try {
-    const settings = await TrackerSettings.findById('tracker').lean();
-    res.json({
-      saleModeActive: settings?.saleModeActive ?? false,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  res.json({});
 });
 
 // GET raw Keepa response for an ASIN — for debugging product field names
@@ -556,8 +548,7 @@ router.post("/check/:id", async (req, res) => {
       }
     }
 
-    const saleMode = req.body?.saleMode === true;
-    await scheduler.checkOne(product, saleMode);
+    await scheduler.checkOne(product);
     const updated = await Product.findById(req.params.id);
     res.json(updated);
   } catch (err) {
@@ -637,10 +628,9 @@ router.get("/profit-summary", async (req, res) => {
       'title ebayListingId current status variant'
     ).lean();
 
-    // 2% margin formula — mirrors src/utils/pricing.js (includes 8.5% Amazon tax)
     function calcEbayPrice(ap) {
       const c = ap * 1.085;
-      return Math.floor((c + 0.30) / (1 - 0.1325 - 0.05 - 0.02)) + 0.99;
+      return Math.floor((c + 0.30) / (1 - 0.1325 - 0.05 - 0.07)) + 0.99;
     }
     function calcFee(ep) { return +(ep * 0.1325 + 0.30).toFixed(2); }
 

@@ -5,26 +5,13 @@ const Product = require('../models/tracker/Product');
 // ── Pricing constants — must stay in sync with frontend src/utils/pricing.js ──
 const EBAY_FEE_RATE  = 0.1325;
 const EBAY_FEE_FIXED = 0.30;
-const MIN_PROFIT     = 4.50;
 const PROMO_RATE     = 0.05;
-const SALE_MARGIN    = 0.02;
+const MARGIN         = 0.07;
 const AMAZON_TAX     = 0.085;
 
-function calcEbayPrice(amazonPrice, saleMode = false) {
+function calcEbayPrice(amazonPrice) {
   const cost = amazonPrice * (1 + AMAZON_TAX);
-  if (saleMode) {
-    const price = (cost + EBAY_FEE_FIXED) / (1 - EBAY_FEE_RATE - PROMO_RATE - SALE_MARGIN);
-    return Math.floor(price) + 0.99;
-  }
-  let multiplier;
-  if (cost < 10)      multiplier = 2.2;
-  else if (cost < 20) multiplier = 1.7;
-  else if (cost < 35) multiplier = 1.55;
-  else if (cost < 60) multiplier = 1.45;
-  else                multiplier = 1.35;
-  const tieredPrice = cost * multiplier;
-  const minPrice    = (cost + MIN_PROFIT + EBAY_FEE_FIXED) / (1 - EBAY_FEE_RATE);
-  return Math.floor(Math.max(tieredPrice, minPrice)) + 0.99;
+  return Math.floor((cost + EBAY_FEE_FIXED) / (1 - EBAY_FEE_RATE - PROMO_RATE - MARGIN)) + 0.99;
 }
 
 let tokens = { access_token: null, refresh_token: null, expires_at: 0 };
@@ -167,7 +154,7 @@ async function buildMissingVariationXml(cleanId, varBlocks) {
     const label = p.variant;
     // Use the variant's own current Amazon price to calculate the correct eBay price.
     // Fall back to the sibling's live price if current is missing (shouldn't happen in practice).
-    const price = p.current ? calcEbayPrice(p.current, false).toFixed(2) : siblingFallbackPrice;
+    const price = p.current ? calcEbayPrice(p.current).toFixed(2) : siblingFallbackPrice;
     const sku = `${cleanId}-${label.replace(/[^a-zA-Z0-9]/g, '')}`.slice(0, 50);
     console.warn(`ebayPriceSync: re-adding variation "${label}" missing from live listing ${cleanId} (SKU ${sku}, price $${price})`);
     return `<Variation><SKU>${sku}</SKU><StartPrice currencyID="USD">${price}</StartPrice><Quantity>1</Quantity><VariationSpecifics><NameValueList><Name>${escXml(dimName)}</Name><Value>${escXml(label)}</Value></NameValueList></VariationSpecifics></Variation>`;
@@ -218,11 +205,10 @@ async function syncEbayQty(listingId, variantLabel, qty) {
   if (err) throw new Error(err);
 }
 
-// saleMode — when true, uses sale pricing formula
-async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = false) {
+async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
   const token = await getAccessToken();
   const cleanId = String(listingId).trim().replace(/\D/g, '');
-  const priceStr = calcEbayPrice(Number(amazonPrice), saleMode).toFixed(2);
+  const priceStr = calcEbayPrice(Number(amazonPrice)).toFixed(2);
   const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
   // Always GetItem first — determines single vs. multi-variation from the live eBay
@@ -261,7 +247,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel, saleMode = fa
       if (dbVariants.length) {
         dbMatch = bestVariantMatch(dbVariants, ebayLabel);
         if (dbMatch?.current) {
-          thisPrice = calcEbayPrice(dbMatch.current, saleMode).toFixed(2);
+          thisPrice = calcEbayPrice(dbMatch.current).toFixed(2);
         }
       } else {
         // No DB records found — fall back to single-price update for the triggering variant

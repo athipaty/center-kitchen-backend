@@ -54,7 +54,7 @@ function slowRetryDate() {
   return new Date(Date.now() + (Math.random() * 4 + 4) * 3600 * 1000);
 }
 
-async function checkProduct(p, saleMode = false, syncedListings = null) {
+async function checkProduct(p, syncedListings = null) {
   try {
     // Scheduler only needs price + stock status — always priceOnly=true.
     // This guarantees exactly 1 Keepa token per product regardless of what metadata
@@ -92,7 +92,7 @@ async function checkProduct(p, saleMode = false, syncedListings = null) {
     // eBay API call when the rounded price (floor+0.99) hasn't actually changed —
     // many small Amazon fluctuations don't move the eBay price at all.
     const oldEbayPrice = p.ebayPrice;
-    const newEbayPrice = p.ebayListingId ? calcEbayPrice(info.price, saleMode) : null;
+    const newEbayPrice = p.ebayListingId ? calcEbayPrice(info.price) : null;
     if (newEbayPrice != null) p.ebayPrice = newEbayPrice;
 
     const ebayPriceChanged = newEbayPrice != null && (oldEbayPrice == null || Math.abs(newEbayPrice - oldEbayPrice) > 0.005);
@@ -104,7 +104,7 @@ async function checkProduct(p, saleMode = false, syncedListings = null) {
       let syncErr = null;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          if (ebayPriceChanged) await syncEbayPrice(p.ebayListingId, info.price, p.variant, saleMode);
+          if (ebayPriceChanged) await syncEbayPrice(p.ebayListingId, info.price, p.variant);
           if (justRestocked) {
             await syncEbayQty(p.ebayListingId, p.variant, 1);
             console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1 (was ${previousStatus})`);
@@ -249,16 +249,12 @@ async function runDueChecks() {
   const due = await Product.find({ nextCheck: { $lte: new Date() } });
   if (!due.length) return;
 
-  const TrackerSettings = require('../models/tracker/TrackerSettings');
-  const settings = await TrackerSettings.findById('tracker').lean().catch(() => null);
-  const saleMode = settings?.saleModeActive ?? false;
-
   if (io) io.emit("tracker:check:start", { count: due.length, time: new Date().toISOString() });
 
   const results = [];
   const syncedListings = new Set();
   for (const p of due) {
-    results.push(await checkProduct(p, saleMode, syncedListings));
+    results.push(await checkProduct(p, syncedListings));
   }
 
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
@@ -661,16 +657,12 @@ async function triggerNow() {
   const products = await Product.find();
   if (!products.length) return;
 
-  const TrackerSettings = require('../models/tracker/TrackerSettings');
-  const settings = await TrackerSettings.findById('tracker').lean().catch(() => null);
-  const saleMode = settings?.saleModeActive ?? false;
-
   if (io) io.emit("tracker:check:start", { count: products.length, time: new Date().toISOString() });
 
   const results = [];
   const syncedListings = new Set();
   for (const p of products) {
-    results.push(await checkProduct(p, saleMode, syncedListings));
+    results.push(await checkProduct(p, syncedListings));
   }
 
   if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });

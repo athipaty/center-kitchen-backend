@@ -5,23 +5,17 @@ const axios = require('axios');
 const BASE = `http://localhost:${process.env.PORT || 5000}`;
 const EBAY_FEE  = 0.1325;
 const FIXED_FEE = 0.30;
-const MIN_PROFIT = 4.50;
+const PROMO     = 0.05;
+const MARGIN    = 0.07;
 const AMAZON_TAX = 0.085;
 
-function calcEbayPrice(cost, saleMode) {
+function calcEbayPrice(cost) {
   const c = cost * (1 + AMAZON_TAX);
-  if (saleMode) return Math.floor((c + FIXED_FEE) / (1 - EBAY_FEE - 0.05 - 0.02)) + 0.99;
-  const m = c < 10 ? 2.2 : c < 20 ? 1.7 : c < 35 ? 1.55 : c < 60 ? 1.45 : 1.35;
-  const floor = (c + MIN_PROFIT + FIXED_FEE) / (1 - EBAY_FEE);
-  return Math.floor(Math.max(c * m, floor)) + 0.99;
+  return Math.floor((c + FIXED_FEE) / (1 - EBAY_FEE - PROMO - MARGIN)) + 0.99;
 }
 
 mongoose.connect(process.env.MONGO_URI).then(async () => {
   const Product = require('./models/tracker/Product');
-  const TrackerSettings = require('./models/tracker/TrackerSettings');
-
-  const settings = await TrackerSettings.findById('tracker').lean().catch(() => null);
-  const saleMode = settings?.saleModeActive ?? false;
 
   // Find all active products with no eBay listing
   const unlisted = await Product.find({
@@ -31,7 +25,7 @@ mongoose.connect(process.env.MONGO_URI).then(async () => {
 
   console.log(`\nFound ${unlisted.length} tracked products with no eBay listing\n`);
   unlisted.forEach(p => {
-    const profit = calcEbayPrice(p.current, saleMode) - p.current - (calcEbayPrice(p.current, saleMode) * EBAY_FEE + FIXED_FEE);
+    const profit = calcEbayPrice(p.current) - p.current - (calcEbayPrice(p.current) * EBAY_FEE + FIXED_FEE);
     const ok = p.current < 50 && p.isPrime ? '✓' : '✗';
     console.log(`  ${ok} $${p.current?.toFixed(2)} | prime:${p.isPrime} | ${p.title?.slice(0, 60)}`);
   });
@@ -80,7 +74,7 @@ mongoose.connect(process.env.MONGO_URI).then(async () => {
       const isMulti = variants.length > 1;
       const payload = {
         title: ebayTitle,
-        price: calcEbayPrice(primary.current, saleMode).toFixed(2),
+        price: calcEbayPrice(primary.current).toFixed(2),
         imageUrls: primary.images?.slice(0, 12) || [],
         upc: primary.upc,
         specs: primary.specs || {},
@@ -93,7 +87,7 @@ mongoose.connect(process.env.MONGO_URI).then(async () => {
         payload.variantDimension = 'Style';
         payload.variants = variants.map(v => ({
           label: v.variant || v.title.slice(0, 30),
-          price: calcEbayPrice(v.current, saleMode).toFixed(2),
+          price: calcEbayPrice(v.current).toFixed(2),
           quantity: 1,
           images: v.images?.slice(0, 4) || [],
           image: v.image || null,
