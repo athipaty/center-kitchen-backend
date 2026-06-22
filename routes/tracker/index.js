@@ -473,19 +473,28 @@ router.post("/:id/refresh-images", async (req, res) => {
     const images = info.images || [];
     const image  = info.image || images[0] || null;
 
+    // Always save specs/bullets from Keepa regardless of image count
     if (image) {
       const update = { image, images };
       if (info.specs && Object.keys(info.specs).length) update.specs = info.specs;
       if (info.bullets?.length) update.bullets = info.bullets;
       await Product.findByIdAndUpdate(product._id, update);
-      return res.json({ ok: true, source: 'keepa', count: images.length, image, images, specs: update.specs || {}, bullets: update.bullets || [] });
     }
 
-    // Step 2: Amazon scrape + Cloudinary
-    const cloudinaryUrls = await fetchAndUploadImages(product);
-    if (!cloudinaryUrls) return res.json({ ok: true, source: 'none', count: 0, image: null, images: [] });
+    // Step 2: Amazon HTML scrape + Cloudinary — always run so we get the full
+    // per-variant gallery (6-12 images). Keepa only gives 1 swatch per child ASIN;
+    // the Amazon page has all the colour-specific product photos.
+    const cloudinaryUrls = await fetchAndUploadImages(product, images);
+    if (cloudinaryUrls?.length) {
+      return res.json({ ok: true, source: 'amazon+cloudinary', count: cloudinaryUrls.length, image: cloudinaryUrls[0], images: cloudinaryUrls, specs: info.specs || {}, bullets: info.bullets || [] });
+    }
 
-    res.json({ ok: true, source: 'amazon+cloudinary', count: cloudinaryUrls.length, image: cloudinaryUrls[0], images: cloudinaryUrls });
+    // Keepa-only fallback if Amazon scrape found nothing new
+    if (image) {
+      return res.json({ ok: true, source: 'keepa', count: images.length, image, images, specs: info.specs || {}, bullets: info.bullets || [] });
+    }
+
+    res.json({ ok: true, source: 'none', count: 0, image: null, images: [] });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
