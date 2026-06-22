@@ -179,10 +179,11 @@ router.get("/search-deals", async (req, res) => {
     });
     if (pData.tokensLeft != null) console.log(`search-deals: tokensLeft=${pData.tokensLeft}`);
 
-    const ratingMap = {}, reviewMap = {};
+    const ratingMap = {}, reviewMap = {}, soldMap = {};
     for (const p of (pData.products || [])) {
       ratingMap[p.asin] = p.rating > 0 ? p.rating / 10 : null;
       reviewMap[p.asin] = p.countReviews || 0;
+      soldMap[p.asin]   = p.monthlySold > 0 ? p.monthlySold : null;
     }
 
     // Step 4: apply 4+ star filter and build the response shape the frontend expects
@@ -208,6 +209,7 @@ router.get("/search-deals", async (req, res) => {
           discountPercent: discountPercent > 0 ? discountPercent : null,
           rating:          ratingMap[d.asin] || null,
           reviewCount:     reviewMap[d.asin] || 0,
+          monthlySold:     soldMap[d.asin] || null,
           isPrime:         cur[0] > 0,  // sold by Amazon = definitely Prime
           isLimitedDeal:   !!(d.lightningStart && d.lightningEnd),
         };
