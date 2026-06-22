@@ -52,12 +52,17 @@ router.get('/img/:key', (req, res) => {
   res.send(entry.buffer);
 });
 
-// Upgrade Amazon CDN image URL to full resolution by removing size qualifiers.
-// e.g. "717NzLPWXhL._AC_SL1500_.jpg" → "717NzLPWXhL.jpg" (original full-res)
-// Falls back to the original URL if the upgraded version fails to download.
+// Upgrade Amazon CDN image URL to best available JPEG.
+// • m.media-amazon.com  → strip size qualifiers to get original full-res
+// • images-na.ssl-images-amazon.com (Keepa CDN) → append ._SL1500_.jpg to
+//   force a 1500px JPEG render (bare Keepa URLs sometimes return GIF placeholders)
 function upgradeAmazonImageUrl(url) {
-  if (!url || !url.includes('m.media-amazon.com/images/I/')) return url;
-  return url.replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
+  if (!url) return url;
+  if (url.includes('m.media-amazon.com/images/I/'))
+    return url.replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
+  if (url.includes('images-na.ssl-images-amazon.com/images/I/'))
+    return url.replace(/\.(jpg|jpeg|png|gif)$/i, '._SL1500_.jpg');
+  return url;
 }
 
 // ── Upload Amazon images to Cloudinary permanently ─────────────────
@@ -77,11 +82,14 @@ router.post('/upload-images', async (req, res) => {
       { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
     );
     const existing = (searchRes.data.resources || []).map(r => r.secure_url).filter(Boolean);
-    if (existing.length >= imageUrls.length) {
+    const hasGif = existing.some(u => u.endsWith('.gif'));
+    if (existing.length >= imageUrls.length && !hasGif) {
       console.log(`upload-images: folder ${folder} already has ${existing.length} images — skipping upload`);
       return res.json({ cloudinaryUrls: existing, cached: true });
     }
-    if (existing.length > 0) {
+    if (hasGif) {
+      console.log(`upload-images: folder ${folder} has GIF placeholders — forcing re-upload`);
+    } else if (existing.length > 0) {
       console.log(`upload-images: folder ${folder} has ${existing.length}/${imageUrls.length} — re-uploading all to refresh`);
     }
   } catch (e) {
