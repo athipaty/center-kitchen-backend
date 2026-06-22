@@ -340,6 +340,12 @@ async function fetchAndUploadImages(product, seedImages = []) {
         await Product.findByIdAndUpdate(product._id, { specs: merged });
         console.log(`fetchAndUploadImages: enriched specs for ${product._id} (+${Object.keys(extraSpecs).length} fields from Amazon)`);
       }
+
+      // Correct isPrime if Keepa missed it — check Amazon page for Prime badge
+      if (!product.isPrime && /a-icon-prime|i-prime|prime-logo|primeBadge/i.test(html)) {
+        await Product.findByIdAndUpdate(product._id, { isPrime: true });
+        console.log(`fetchAndUploadImages: corrected isPrime=true for ${product._id} from Amazon HTML`);
+      }
     } catch {}
   } catch {}
 
