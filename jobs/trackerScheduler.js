@@ -645,7 +645,7 @@ function start(socketIo) {
   // Auto-end listings 4+ days old with 0 views
   cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
   // Auto-restock sold listings back to qty 1 — runs every 30 minutes (was 15, halves GetOrders calls)
-  cron.schedule("*/30 * * * *", runAutoRestock);
+  cron.schedule("*/30 * * * *", () => runAutoRestock());
   // Orphan cleanup once daily at 1am — was every 6h + startup (saves ~44 GetMyeBaySelling calls/day)
   cron.schedule("0 1 * * *", runOrphanCleanup);
   // Relist unsold listings that have views or watchers — runs daily at 3:30am
