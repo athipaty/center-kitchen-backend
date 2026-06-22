@@ -76,16 +76,23 @@ function isSoldByAmazon(product) {
       || kPrice(product.stats?.current?.[7]) != null;
 }
 
+// Append Amazon's size modifier to force a proper JPEG render.
+// Bare Amazon CDN URLs sometimes return GIF placeholders; ._SL1500_.jpg
+// instructs the image server to generate a 1500px JPEG regardless.
+function forceJpeg(slug) {
+  return slug.trim().replace(/\.(jpg|jpeg|png|gif)$/i, '._SL1500_.jpg');
+}
+
 function getImages(product) {
   if (product.imagesCSV) {
-    return product.imagesCSV.split(',').filter(Boolean).map(s => `${KEEPA_CDN}${s.trim()}`);
+    return product.imagesCSV.split(',').filter(Boolean).map(s => `${KEEPA_CDN}${forceJpeg(s)}`);
   }
   // Fallback: single image slug on the product itself (common for variation children)
-  if (product.image) return [`${KEEPA_CDN}${product.image}`];
+  if (product.image) return [`${KEEPA_CDN}${forceJpeg(product.image)}`];
   // Fallback: find self in variations list
   if (Array.isArray(product.variations)) {
     const self = product.variations.find(v => v.asin === product.asin);
-    if (self?.image) return [`${KEEPA_CDN}${self.image}`];
+    if (self?.image) return [`${KEEPA_CDN}${forceJpeg(self.image)}`];
   }
   return [];
 }
