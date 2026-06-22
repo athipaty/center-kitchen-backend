@@ -126,6 +126,34 @@ function getSpecs(product) {
   if (product.rating > 0) set('customer_rating', `${(product.rating / 10).toFixed(1)} / 5`);
   if (product.countReviews > 0) set('review_count', String(product.countReviews));
 
+  // Package quantity (distinct from numberOfItems — e.g. "2 packs of 10")
+  if (product.packageQuantity > 1) set('package_quantity', String(product.packageQuantity));
+
+  // Item type — Keepa's product classification string (e.g. "WASH_CLOTHS" → "Wash Cloths")
+  if (product.type) {
+    const formatted = product.type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    set('item_type', formatted);
+  }
+
+  // Best sellers rank + category breadcrumb
+  if (product.salesRankReference > 0 && Array.isArray(product.categoryTree) && product.categoryTree.length) {
+    const topCat = product.categoryTree[0]?.name || 'Amazon';
+    set('best_sellers_rank', `#${product.salesRankReference.toLocaleString()} in ${topCat}`);
+  }
+
+  // Most specific product subcategory
+  if (Array.isArray(product.categoryTree) && product.categoryTree.length > 1) {
+    const deepest = product.categoryTree[product.categoryTree.length - 1];
+    if (deepest?.name) set('product_subcategory', deepest.name);
+  }
+
+  // Monthly sold estimate (Keepa's approximation)
+  if (product.monthlySold > 0) set('estimated_monthly_sold', `${product.monthlySold}+`);
+
+  // Description text (not always present, but useful when Keepa provides it)
+  if (product.description && String(product.description).length > 10)
+    set('description', String(product.description).replace(/<[^>]+>/g, '').trim());
+
   return s;
 }
 

@@ -1413,8 +1413,11 @@ router.post('/generate-description', async (req, res) => {
     const emoji = s => String(s||'').replace(/[\u{10000}-\u{10FFFF}]/gu, c => `&#${c.codePointAt(0)};`);
 
     // ── Data richness assessment ──────────────────────────────────────
+    // Pull out trust-signal fields separately — BSR and monthly sold belong in the hero/badges,
+    // not buried as a plain spec row. Description text is too long for a table cell.
+    const EXCLUDE_FROM_TABLE = new Set(['asin','customer_reviews','unspsc_code','description','estimated_monthly_sold','best_sellers_rank']);
     const cleanSpecs = Object.entries(specs)
-      .filter(([k, v]) => v && !['asin','best_sellers_rank','customer_reviews','unspsc_code'].includes(k) && String(v).trim().length > 0)
+      .filter(([k, v]) => v && !EXCLUDE_FROM_TABLE.has(k) && String(v).trim().length > 0)
       .map(([k, v]) => ({ key: k, label: k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()), value: String(v).trim() }));
 
     const cleanBullets = bullets
@@ -1433,9 +1436,15 @@ router.post('/generate-description', async (req, res) => {
     const bulletSection = hasBullets
       ? `\nAmazon Product Features (USE these as the basis for photo rows and feature cards):\n${cleanBullets.map((b,i)=>`${i+1}. ${b}`).join('\n')}`
       : '';
+    const trustSection = [
+      specs.best_sellers_rank ? `Best Sellers Rank: ${specs.best_sellers_rank} — use this in trustItems as social proof` : '',
+      specs.estimated_monthly_sold ? `Estimated monthly sold: ${specs.estimated_monthly_sold} — use this in trustItems as social proof` : '',
+      specs.description ? `Product description from Amazon: ${String(specs.description).slice(0, 400)}` : '',
+    ].filter(Boolean).join('\n');
     const extraSection = [
       upc ? `UPC/Barcode: ${upc}` : '',
       variant ? `Variant: ${variant}` : '',
+      trustSection,
     ].filter(Boolean).join('\n');
 
     const prompt = `You are writing eBay listing HTML description content for a product. Use EVERY piece of data provided — show buyers as much useful information as possible.
