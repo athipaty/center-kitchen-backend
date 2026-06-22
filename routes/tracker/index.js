@@ -270,6 +270,23 @@ router.post("/", async (req, res) => {
   }
 });
 
+// PATCH update groupId (and/or isPrime) — used when re-tracking joins an existing group
+router.patch("/:id", async (req, res) => {
+  try {
+    const allowed = ['groupId', 'isPrime'];
+    const update = {};
+    for (const k of allowed) {
+      if (req.body[k] !== undefined) update[k] = req.body[k];
+    }
+    if (!Object.keys(update).length) return res.status(400).json({ error: 'No updatable fields' });
+    const product = await Product.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    res.json(product);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PATCH update eBay listing ID for a product
 router.patch("/:id/ebay", async (req, res) => {
   try {
