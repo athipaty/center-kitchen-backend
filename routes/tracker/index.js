@@ -473,12 +473,15 @@ router.post("/:id/refresh-images", async (req, res) => {
     const images = info.images || [];
     const image  = info.image || images[0] || null;
 
-    // Always save specs/bullets from Keepa regardless of image count
+    // Save specs/bullets from Keepa — but only overwrite images if product has
+    // no Cloudinary images yet (avoid clobbering good Cloudinary URLs with Keepa CDN swatches)
+    const hasCloudinaryImages = product.images?.some(u => u.includes('cloudinary'));
     if (image) {
-      const update = { image, images };
+      const update = {};
+      if (!hasCloudinaryImages) { update.image = image; update.images = images; }
       if (info.specs && Object.keys(info.specs).length) update.specs = info.specs;
       if (info.bullets?.length) update.bullets = info.bullets;
-      await Product.findByIdAndUpdate(product._id, update);
+      if (Object.keys(update).length) await Product.findByIdAndUpdate(product._id, update);
     }
 
     // Step 2: Amazon HTML scrape + Cloudinary — always run so we get the full
@@ -490,8 +493,11 @@ router.post("/:id/refresh-images", async (req, res) => {
     }
 
     // Keepa-only fallback if Amazon scrape found nothing new
-    if (image) {
-      return res.json({ ok: true, source: 'keepa', count: images.length, image, images, specs: info.specs || {}, bullets: info.bullets || [] });
+    const currentProduct = await Product.findById(product._id).lean();
+    const finalImage = currentProduct?.image || image;
+    const finalImages = currentProduct?.images?.length ? currentProduct.images : images;
+    if (finalImage) {
+      return res.json({ ok: true, source: 'keepa', count: finalImages.length, image: finalImage, images: finalImages, specs: info.specs || {}, bullets: info.bullets || [] });
     }
 
     res.json({ ok: true, source: 'none', count: 0, image: null, images: [] });
