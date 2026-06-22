@@ -1415,7 +1415,7 @@ router.post('/generate-description', async (req, res) => {
     // ── Data richness assessment ──────────────────────────────────────
     // Pull out trust-signal fields separately — BSR and monthly sold belong in the hero/badges,
     // not buried as a plain spec row. Description text is too long for a table cell.
-    const EXCLUDE_FROM_TABLE = new Set(['asin','customer_reviews','unspsc_code','description','estimated_monthly_sold','best_sellers_rank']);
+    const EXCLUDE_FROM_TABLE = new Set(['asin','customer_reviews','unspsc_code','description','estimated_monthly_sold','best_sellers_rank','customer_rating','review_count']);
     const cleanSpecs = Object.entries(specs)
       .filter(([k, v]) => v && !EXCLUDE_FROM_TABLE.has(k) && String(v).trim().length > 0)
       .map(([k, v]) => ({ key: k, label: k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()), value: String(v).trim() }));
@@ -1434,7 +1434,7 @@ router.post('/generate-description', async (req, res) => {
       ? `\nProduct Specifications (ALL of these must appear in the spec table):\n${cleanSpecs.map(s=>`• ${s.label}: ${s.value}`).join('\n')}`
       : '';
     const bulletSection = hasBullets
-      ? `\nAmazon Product Features (USE these as the basis for photo rows and feature cards):\n${cleanBullets.map((b,i)=>`${i+1}. ${b}`).join('\n')}`
+      ? `\nProduct Features (USE these as the basis for photo rows and feature cards):\n${cleanBullets.map((b,i)=>`${i+1}. ${b}`).join('\n')}`
       : '';
     const trustSection = [
       specs.description ? `Product description: ${String(specs.description).slice(0, 400)}` : '',
