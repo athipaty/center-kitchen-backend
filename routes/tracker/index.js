@@ -696,7 +696,9 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
       { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
     );
     const existingUrls = (existing.data.resources || []).map(r => r.secure_url).filter(Boolean);
-    if (!forceUpload && existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
+    if (existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
+      // Always skip if existing count >= new count — never downgrade images even on forceUpload.
+      // forceUpload only matters when the new scrape found MORE images than what's stored.
       console.log(`fetchAndUploadImages: folder ${folder} already has ${existingUrls.length}/${amazonImages.length} images — skipping upload`);
       await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
       return existingUrls;
