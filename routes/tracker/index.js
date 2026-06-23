@@ -323,6 +323,66 @@ const BROWSER_HEADERS = [
   },
 ];
 
+// Scrape all structured product data from an Amazon HTML page.
+// Returns { bullets, specs, description } to enrich the DB record.
+function extractAmazonProductData(html) {
+  const stripTags = s => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ')
+    .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ').trim();
+
+  const result = { bullets: [], specs: {}, description: '' };
+  const addSpec = (rawKey, rawVal) => {
+    const k = stripTags(rawKey).replace(/:$/, '').trim();
+    const v = stripTags(rawVal).trim();
+    if (!k || !v || k.length > 80 || v.length > 400) return;
+    const key = k.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const SKIP = new Set(['customer_reviews','bestsellers_rank','best_sellers_rank','asin_','date_first','feedback']);
+    if (key && key.length > 1 && ![...SKIP].some(s => key.startsWith(s))) result.specs[key] = v;
+  };
+
+  // ── 1. Feature bullets ("About this item") ───────────────────────────────
+  const featureBulletsBlock = html.match(/id="feature-bullets"[\s\S]*?<\/div>/);
+  if (featureBulletsBlock) {
+    for (const m of featureBulletsBlock[0].matchAll(/<span[^>]*class="[^"]*a-list-item[^"]*"[^>]*>([\s\S]*?)<\/span>/g)) {
+      const text = stripTags(m[1]);
+      if (text.length > 15 && text.length < 600 && !/^\s*$/.test(text)) result.bullets.push(text);
+    }
+  }
+
+  // ── 2. Table-format specs: <th>key</th><td>value</td> ────────────────────
+  for (const m of html.matchAll(/<tr[^>]*>[\s\S]*?<th[^>]*>([\s\S]*?)<\/th>[\s\S]*?<td[^>]*>([\s\S]*?)<\/td>[\s\S]*?<\/tr>/g)) {
+    addSpec(m[1], m[2]);
+  }
+
+  // ── 3. Detail-bullet list: <span class="a-text-bold">Key:</span> Value ───
+  for (const m of html.matchAll(/<span[^>]*class="[^"]*a-text-bold[^"]*"[^>]*>([\s\S]*?)<\/span>[\s\S]{0,30}<span[^>]*>([\s\S]*?)<\/span>/g)) {
+    addSpec(m[1], m[2]);
+  }
+
+  // ── 4. productDetails dl-style: <div class="a-section"><label>…</label><div>…</div> ──
+  for (const m of html.matchAll(/<th[^>]*class="[^"]*prodDetSectionEntry[^"]*"[^>]*>([\s\S]*?)<\/th>[\s\S]*?<td[^>]*class="[^"]*prodDetAttrValue[^"]*"[^>]*>([\s\S]*?)<\/td>/g)) {
+    addSpec(m[1], m[2]);
+  }
+
+  // ── 5. Product description text ───────────────────────────────────────────
+  const descBlock = html.match(/id="productDescription"[^>]*>[\s\S]*?<div[^>]*>([\s\S]*?)<\/div>/);
+  if (descBlock) {
+    const text = stripTags(descBlock[1]);
+    if (text.length > 30) result.description = text.slice(0, 1500);
+  }
+  // Fallback: A+ content description
+  if (!result.description) {
+    const aplusBlock = html.match(/class="[^"]*aplus-v2[^"]*"[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/);
+    if (aplusBlock) {
+      const text = stripTags(aplusBlock[1]);
+      if (text.length > 30) result.description = text.slice(0, 1500);
+    }
+  }
+
+  // Deduplicate bullets
+  result.bullets = [...new Set(result.bullets)].slice(0, 12);
+  return result;
+}
+
 // Extract the full colorImages map from Amazon's HTML using brace-counting.
 // Amazon embeds ALL color variants' galleries in one page — returns normalizedKey → [urls].
 // The 'initial' key holds images for the currently-selected color.
@@ -500,29 +560,40 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
 
         console.log(`fetchAndUploadImages: extracted ${amazonImages.length} images from Amazon HTML for ${product._id}`);
 
-        // While we have the HTML, also scrape the product detail tables for extra specs
+        // Scrape ALL product data from the Amazon HTML — specs, bullets, description.
+        // This enriches the DB record so the eBay description generator has maximum data.
         try {
-          const extraSpecs = {};
-          const rowRe = /<tr[^>]*>[\s\S]*?<th[^>]*>([\s\S]*?)<\/th>[\s\S]*?<td[^>]*>([\s\S]*?)<\/td>[\s\S]*?<\/tr>/g;
-          let rm;
-          while ((rm = rowRe.exec(html)) !== null) {
-            const k = rm[1].replace(/<[^>]+>/g, '').trim();
-            const v = rm[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-            if (k && v && k.length < 60 && v.length < 200) extraSpecs[k] = v;
+          const amazonData = extractAmazonProductData(html);
+          const update = {};
+
+          // Bullets: use Amazon's if richer than what Keepa provided
+          if (amazonData.bullets.length > (product.bullets?.length || 0)) {
+            update.bullets = amazonData.bullets;
+            console.log(`fetchAndUploadImages: ${amazonData.bullets.length} bullets from Amazon for ${product._id}`);
           }
-          const existingSpecs = product.specs || {};
-          if (Object.keys(extraSpecs).length > 0) {
-            const merged = { ...existingSpecs };
-            for (const [k, v] of Object.entries(extraSpecs)) {
-              const key = k.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-              if (key && !merged[key]) merged[key] = v;
+
+          // Specs: merge Amazon specs on top of Keepa specs (never overwrite existing keys)
+          if (Object.keys(amazonData.specs).length > 0) {
+            const merged = { ...(product.specs || {}) };
+            for (const [k, v] of Object.entries(amazonData.specs)) {
+              if (!merged[k]) merged[k] = v;
             }
-            await Product.findByIdAndUpdate(product._id, { specs: merged });
-            console.log(`fetchAndUploadImages: enriched specs for ${product._id} (+${Object.keys(extraSpecs).length} fields from Amazon)`);
+            update.specs = merged;
+            console.log(`fetchAndUploadImages: +${Object.keys(amazonData.specs).length} specs from Amazon for ${product._id}`);
           }
+
+          // Description: store if not already present
+          if (amazonData.description && !(product.specs?.description)) {
+            update.specs = { ...(update.specs || product.specs || {}), description: amazonData.description };
+          }
+
+          // Prime correction
           if (!product.isPrime && /a-icon-prime|i-prime|prime-logo|primeBadge/i.test(html)) {
-            await Product.findByIdAndUpdate(product._id, { isPrime: true });
-            console.log(`fetchAndUploadImages: corrected isPrime=true for ${product._id} from Amazon HTML`);
+            update.isPrime = true;
+          }
+
+          if (Object.keys(update).length > 0) {
+            await Product.findByIdAndUpdate(product._id, update);
           }
         } catch {}
         break; // got images — no need to retry
