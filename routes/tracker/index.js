@@ -508,6 +508,17 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
   const crypto = require('crypto');
   let amazonImages = [];
 
+  // If seedImages are pre-extracted Amazon CDN image URLs (from colorImages sibling seeding),
+  // skip the ScraperAPI page fetch entirely — saves 10 credits per sibling.
+  // Seeds qualify when they have 3+ real image URLs (not GIF placeholders).
+  const CDN_RE = /(?:m\.media-amazon\.com|images-na\.ssl-images-amazon\.com)\/images\/I\//;
+  const realSeeds = seedImages.filter(u => CDN_RE.test(u));
+  if (!forceUpload && realSeeds.length >= 3) {
+    console.log(`fetchAndUploadImages: using ${realSeeds.length} pre-extracted seeds for ${product._id} — skipping ScraperAPI`);
+    amazonImages = realSeeds;
+  }
+
+  if (!amazonImages.length) {
   const { url: primaryUrl, headers: scraperHeaders } = scraperUrl(product.url);
   const attemptsToTry = scraperHeaders ? [{ url: primaryUrl, headers: scraperHeaders }]
     : BROWSER_HEADERS.map(h => ({ url: primaryUrl, headers: h }));
@@ -602,6 +613,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
       console.log(`fetchAndUploadImages: request failed for ${product._id}: ${e.message}`);
     }
   }
+  } // end if (!amazonImages.length) — ScraperAPI/direct fetch block
 
 
   // Final fallback: probe legacy ASIN image URLs and keep only distinct images.
