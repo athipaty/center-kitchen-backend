@@ -253,10 +253,8 @@ router.post("/", async (req, res) => {
     await product.save();
     res.json(product);
 
-    // Always upload to Cloudinary in background — ensures cloudinaryFolder + Cloudinary URLs
-    // are set for every product, matching the old ScraperAPI behavior where all images were
-    // uploaded to Cloudinary before eBay listing. Keepa images passed as seed fallback.
-    fetchAndUploadImages(product, info.images || []).catch(e => console.error(`auto-image: failed for ${product._id}:`, e.message));
+    // Queue Cloudinary upload — serialized to prevent concurrent Amazon scrapes triggering bot detection
+    queueImageUpload(product, info.images || []).catch(e => console.error(`auto-image: failed for ${product._id}:`, e.message));
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
@@ -339,7 +337,12 @@ function extractAmazonImages(html) {
         ['hiRes','large'].forEach(k => { if (img[k]) urls.add(clean(img[k])); });
         if (img.main) Object.keys(img.main).forEach(u => urls.add(clean(u)));
       }
-    } catch {}
+    } catch {
+      // Apostrophes in values (e.g. "Men's") break the global ' → " replacement.
+      // Fall back to URL-only regex extraction from the raw colorImages block.
+      for (const m of colorBlock[1].matchAll(/"(https:\/\/[^"]+\.jpg[^"]*)"/g)) urls.add(clean(m[1]));
+      for (const m of colorBlock[1].matchAll(/'(https:\/\/[^']+\.jpg[^']*)'/g)) urls.add(clean(m[1]));
+    }
   }
 
   // 2. data-a-dynamic-image attr — JSON map of url→[w,h], present on main img element
@@ -372,7 +375,7 @@ function extractAmazonImages(html) {
   return [...urls].filter(u => CDN.test(u));
 }
 
-async function fetchAndUploadImages(product, seedImages = []) {
+async function fetchAndUploadImages(product, seedImages = [], { forceUpload = false } = {}) {
   const crypto = require('crypto');
   let amazonImages = [];
   for (const headers of BROWSER_HEADERS) {
@@ -478,7 +481,7 @@ async function fetchAndUploadImages(product, seedImages = []) {
       { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
     );
     const existingUrls = (existing.data.resources || []).map(r => r.secure_url).filter(Boolean);
-    if (existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
+    if (!forceUpload && existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
       console.log(`fetchAndUploadImages: folder ${folder} already has ${existingUrls.length}/${amazonImages.length} images — skipping upload`);
       await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
       return existingUrls;
@@ -527,6 +530,34 @@ async function fetchAndUploadImages(product, seedImages = []) {
   return cloudinaryUrls.length ? cloudinaryUrls : null;
 }
 
+// Serialize background image uploads so concurrent variant tracking doesn't hammer Amazon
+// simultaneously and trigger bot detection. One upload at a time, 3s gap between them.
+const _imageUploadQueue = [];
+let _imageUploadRunning = false;
+
+async function queueImageUpload(product, seedImages = []) {
+  return new Promise((resolve) => {
+    _imageUploadQueue.push({ product, seedImages, resolve });
+    if (!_imageUploadRunning) _drainImageQueue();
+  });
+}
+
+async function _drainImageQueue() {
+  if (_imageUploadRunning) return;
+  _imageUploadRunning = true;
+  while (_imageUploadQueue.length > 0) {
+    const { product, seedImages, resolve } = _imageUploadQueue.shift();
+    try {
+      resolve(await fetchAndUploadImages(product, seedImages));
+    } catch (e) {
+      console.error(`imageUploadQueue: failed for ${product._id}:`, e.message);
+      resolve(null);
+    }
+    if (_imageUploadQueue.length > 0) await new Promise(r => setTimeout(r, 3000));
+  }
+  _imageUploadRunning = false;
+}
+
 // POST re-fetch images for a product — tries Keepa first, falls back to Amazon HTML scrape + Cloudinary upload
 router.post("/:id/refresh-images", async (req, res) => {
   try {
@@ -552,7 +583,7 @@ router.post("/:id/refresh-images", async (req, res) => {
     // Step 2: Amazon HTML scrape + Cloudinary — always run so we get the full
     // per-variant gallery (6-12 images). Keepa only gives 1 swatch per child ASIN;
     // the Amazon page has all the colour-specific product photos.
-    const cloudinaryUrls = await fetchAndUploadImages(product, images);
+    const cloudinaryUrls = await fetchAndUploadImages(product, images, { forceUpload: true });
     if (cloudinaryUrls?.length) {
       return res.json({ ok: true, source: 'amazon+cloudinary', count: cloudinaryUrls.length, image: cloudinaryUrls[0], images: cloudinaryUrls, specs: info.specs || {}, bullets: info.bullets || [] });
     }
@@ -764,5 +795,21 @@ router.get("/profit-summary", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// On startup, queue repair for products that never got Cloudinary images (e.g. were blocked
+// by Amazon bot detection when first tracked). Runs 45s after server start to let it settle.
+setTimeout(async () => {
+  try {
+    const broken = await Product.find({
+      $or: [{ cloudinaryFolder: null }, { cloudinaryFolder: { $exists: false } }],
+      status: { $nin: ['archived'] },
+    }).sort({ createdAt: -1 }).limit(15).lean();
+    if (!broken.length) return;
+    console.log(`image-repair: queuing ${broken.length} products without Cloudinary images`);
+    for (const p of broken) await queueImageUpload(p, p.images || []);
+  } catch (e) {
+    console.error('image-repair startup:', e.message);
+  }
+}, 45000);
 
 module.exports = router;
