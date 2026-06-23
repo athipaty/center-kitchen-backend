@@ -759,9 +759,17 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
 const _imageUploadQueue = [];
 let _imageUploadRunning = false;
 
+// Track which product IDs are already in the queue to avoid duplicate entries.
+// For large multi-variant products, sibling seeding creates O(n²) queue entries
+// without deduplication (11 variants × 10 seeds each = 110 entries, 99 wasteful).
+const _imageUploadQueued = new Set();
+
 async function queueImageUpload(product, seedImages = []) {
+  const id = String(product._id);
+  if (_imageUploadQueued.has(id)) return; // already queued — skip duplicate
+  _imageUploadQueued.add(id);
   return new Promise((resolve) => {
-    _imageUploadQueue.push({ product, seedImages, resolve });
+    _imageUploadQueue.push({ product, seedImages, resolve, id });
     if (!_imageUploadRunning) _drainImageQueue();
   });
 }
@@ -770,7 +778,8 @@ async function _drainImageQueue() {
   if (_imageUploadRunning) return;
   _imageUploadRunning = true;
   while (_imageUploadQueue.length > 0) {
-    const { product, seedImages, resolve } = _imageUploadQueue.shift();
+    const { product, seedImages, resolve, id } = _imageUploadQueue.shift();
+    if (id) _imageUploadQueued.delete(id); // allow re-queuing after processing
     try {
       resolve(await fetchAndUploadImages(product, seedImages));
     } catch (e) {
