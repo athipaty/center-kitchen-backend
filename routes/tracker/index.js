@@ -845,8 +845,17 @@ router.delete("/:id", async (req, res) => {
       }
     }
 
+    // Delete cloudinaryFolder (ebay-listings/ path set after auto-list)
     if (product.cloudinaryFolder) {
       deleteCloudinaryFolder(product.cloudinaryFolder).catch(() => {});
+    }
+    // Also delete tracker-images/ folder — separate from cloudinaryFolder which
+    // gets overwritten with the ebay-listings path after listing is created.
+    const asin = (product.url || '').match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
+    const trackerSlug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
+    const trackerFolder = `tracker-images/${trackerSlug}`;
+    if (trackerFolder !== product.cloudinaryFolder) {
+      deleteCloudinaryFolder(trackerFolder).catch(() => {});
     }
     res.json({ success: true });
   } catch (err) {
