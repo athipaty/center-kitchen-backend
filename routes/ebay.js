@@ -1433,7 +1433,7 @@ router.post('/generate-description', async (req, res) => {
       .filter(b => b.length > 20).slice(0, 8);
 
     const imgCount   = imageUrls.length;
-    const photoRowTarget = Math.min(4, Math.max(2, Math.floor(imgCount / 2)));
+    const photoRowTarget = Math.min(6, Math.max(5, Math.floor(imgCount / 2)));
     const specCount  = cleanSpecs.length;
     const hasBullets = cleanBullets.length > 0;
 
@@ -1453,42 +1453,46 @@ router.post('/generate-description', async (req, res) => {
       trustSection,
     ].filter(Boolean).join('\n');
 
-    const prompt = `You are writing eBay listing HTML description content for a product. Use EVERY piece of data provided — show buyers as much useful information as possible.
+    const prompt = `You are an expert eBay copywriter creating a premium, conversion-focused listing description. Use EVERY piece of product data provided — buyers need specifics to make purchase decisions.
 
 Product title: ${title}
 Images available: ${imgCount}${extraSection ? `\n${extraSection}` : ''}${specSection}${bulletSection}
 
 Generate a JSON object (raw JSON only, no markdown fences):
 {
-  "tagline": "Short punchy tagline (max 10 words)",
-  "heroSub": "1-2 sentences summarising top benefits (max 25 words)",
-  "trustItems": ["badge1","badge2","badge3","badge4","badge5"],
+  "tagline": "Punchy benefit-driven tagline (max 12 words)",
+  "heroSub": "2 sentences covering the top 2 customer benefits using specific product details (max 35 words)",
+  "trustItems": ["badge1","badge2","badge3","badge4","badge5","badge6"],
   "features": [
-    {"icon":"emoji","title":"Feature name","desc":"2 sentences using real product data"},
-    {"icon":"emoji","title":"Feature name","desc":"2 sentences using real product data"},
-    {"icon":"emoji","title":"Feature name","desc":"2 sentences using real product data"}
+    {"icon":"emoji","title":"Feature name","desc":"3 sentences with specific technical details, materials, measurements, or use-case benefits drawn from the product data"},
+    {"icon":"emoji","title":"Feature name","desc":"3 sentences with specific technical details, materials, measurements, or use-case benefits drawn from the product data"},
+    {"icon":"emoji","title":"Feature name","desc":"3 sentences with specific technical details, materials, measurements, or use-case benefits drawn from the product data"},
+    {"icon":"emoji","title":"Feature name","desc":"3 sentences with specific technical details, materials, measurements, or use-case benefits drawn from the product data"},
+    {"icon":"emoji","title":"Feature name","desc":"3 sentences with specific technical details, materials, measurements, or use-case benefits drawn from the product data"}
   ],
   "photoRows": [
-    {"label":"Feature 01","heading":"Heading","body":"2–3 sentences from product data","bullets":["specific point","specific point","specific point","specific point"]},
-    ... generate exactly ${photoRowTarget} photo rows total
+    {"label":"Feature 01","heading":"Benefit-focused heading","body":"3 sentences from product data — be specific, use numbers/materials/dimensions","bullets":["specific measurable point","specific point with data","specific point with data","specific point with data","specific point with data"]},
+    ... generate exactly ${photoRowTarget} photo rows total, each covering a distinct feature or benefit
   ],
-  "ctaHeading": "Compelling CTA headline",
-  "ctaSub": "One encouraging sentence",
-  "seoText": "2-3 natural readable sentences that describe the product using the keywords buyers actually search for — include product type, material, size/quantity, use cases, and key features as plain prose. Write it for a human reader, not as a keyword list.",
+  "ctaHeading": "Compelling action-oriented headline",
+  "ctaSub": "2 sentences that reinforce value and reassure the buyer",
+  "seoText": "4-5 natural readable sentences describing the product for buyers — include product type, key materials, dimensions/quantities, primary use cases, who it's for, and standout features as flowing prose. Write for a human reader.",
   "theme": "blue|green|orange|navy|teal|red|purple"
 }
 
 CRITICAL rules:
-- Generate EXACTLY ${photoRowTarget} photoRows
-- If Amazon features are provided, base photo rows DIRECTLY on those features — don't invent new ones
-- Use SPECIFIC data (numbers, materials, dimensions) not vague language
-- seoText must use natural prose — no bullet points, no keyword stuffing, no repetition
-- theme: green=natural/bamboo/organic, orange=pest/bug/zapper, blue=fans/water/cooling, navy=car/travel/tech, teal=bathroom/home, red=pest/insect, purple=garden/outdoor
-- FORBIDDEN: competitor names, fake reviews, false urgency, external links, HTML tags inside string values`;
+- Generate EXACTLY ${photoRowTarget} photoRows — each covering a DIFFERENT feature or use case
+- Each photoRow must have EXACTLY 5 bullets — all specific, no filler
+- If Amazon bullets/features are provided, base content DIRECTLY on those — extract exact specs, materials, dimensions
+- Use SPECIFIC data everywhere: numbers, percentages, materials, certifications, dimensions — never vague adjectives alone
+- seoText: natural flowing prose, 4-5 sentences, no lists, no repetition
+- theme: blue=water/pool/cooling/tech, green=natural/eco/bamboo/organic, orange=energy/sport/outdoor, navy=car/travel/professional, teal=bathroom/home/wellness, red=pest/safety/alert, purple=garden/luxury/premium
+- trustItems: use real product attributes (warranty, certification, material quality, shipping speed, return policy) — no generic filler
+- FORBIDDEN: competitor names, fake reviews, false urgency, external links, HTML tags inside JSON string values`;
 
     const msg = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2000,
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }],
     });
 
@@ -1591,8 +1595,8 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#222;background
 .sh h2{font-family:Georgia,serif;font-size:22px;color:${t.dk};margin-bottom:6px}
 .div{width:48px;height:3px;background:${t.accent};margin:8px auto 0;border-radius:2px}
 
-/* ── Feature grid: 3-equal-col on desktop ── */
-.fg{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:18px 20px 34px}
+/* ── Feature grid: auto-fill cols, min 240px ── */
+.fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;padding:18px 20px 34px}
 .fc{background:${t.light};border:1px solid ${t.border};border-radius:12px;padding:22px 18px;text-align:center}
 .fi{font-size:34px;margin-bottom:10px;display:block}
 .fc h3{font-family:Georgia,serif;font-size:15px;color:${t.dk};margin-bottom:7px}
