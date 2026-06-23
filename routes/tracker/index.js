@@ -323,26 +323,86 @@ const BROWSER_HEADERS = [
   },
 ];
 
+// Extract the full colorImages map from Amazon's HTML using brace-counting.
+// Amazon embeds ALL color variants' galleries in one page — returns normalizedKey → [urls].
+// The 'initial' key holds images for the currently-selected color.
+function extractColorImagesMap(html) {
+  const CDN = /(?:m\.media-amazon\.com|images-na\.ssl-images-amazon\.com)\/images\/I\//;
+  const clean = u => u.replace(/\\u002F/g, '/').replace(/\\/g, '');
+
+  const keyIdx = html.indexOf("'colorImages'");
+  if (keyIdx === -1) return {};
+  let braceStart = -1;
+  for (let i = keyIdx + 13; i < Math.min(html.length, keyIdx + 100); i++) {
+    if (html[i] === '{') { braceStart = i; break; }
+  }
+  if (braceStart === -1) return {};
+
+  // Walk braces to find the matching closing brace for the colorImages object
+  let depth = 0, end = braceStart;
+  for (let i = braceStart; i < Math.min(html.length, braceStart + 500000); i++) {
+    if (html[i] === '{') depth++;
+    else if (html[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  const raw = html.slice(braceStart, end + 1);
+  const result = {};
+
+  // Extract each color key's image array using bracket counting
+  const keyRe = /'([^']+)'\s*:\s*\[/g;
+  let km;
+  while ((km = keyRe.exec(raw)) !== null) {
+    const colorKey = km[1].toLowerCase().replace(/\s+/g, ' ').trim();
+    const arrStart = km.index + km[0].length - 1;
+    let arrDepth = 0, arrEnd = arrStart;
+    for (let i = arrStart; i < raw.length; i++) {
+      if (raw[i] === '[') arrDepth++;
+      else if (raw[i] === ']') { arrDepth--; if (arrDepth === 0) { arrEnd = i; break; } }
+    }
+    const arr = raw.slice(arrStart, arrEnd + 1);
+    const us = new Set();
+    for (const m of arr.matchAll(/"(?:hiRes|large)"\s*:\s*"(https:\/\/[^"]+)"/g)) {
+      const u = clean(m[1]); if (CDN.test(u)) us.add(u);
+    }
+    for (const m of arr.matchAll(/"(https:\/\/[^"]+\._AC_[A-Z0-9_,]+\.jpg[^"]*)"/g)) {
+      const u = clean(m[1]);
+      if (CDN.test(u) && !/_SS\d|_SR\d|_CR\d|thumb/i.test(u)) us.add(u);
+    }
+    if (us.size > 0) result[colorKey] = [...us];
+  }
+  return result;
+}
+
+// Match a variant label to the best key in a colorImages map
+function matchColorKey(colorMap, variantLabel) {
+  if (!variantLabel || !Object.keys(colorMap).length) return null;
+  const norm = variantLabel.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (colorMap[norm]) return colorMap[norm];
+  for (const [key, urls] of Object.entries(colorMap)) {
+    if (key === 'initial') continue;
+    if (norm.includes(key) || key.includes(norm)) return urls;
+  }
+  const nw = norm.split(' ').filter(w => w.length > 2);
+  let best = null, bestScore = 0;
+  for (const [key, urls] of Object.entries(colorMap)) {
+    if (key === 'initial') continue;
+    const kw = key.split(' ').filter(w => w.length > 2);
+    const overlap = kw.filter(w => nw.includes(w)).length;
+    const score = overlap / Math.max(kw.length, nw.length, 1);
+    if (score > bestScore && score >= 0.4) { bestScore = score; best = urls; }
+  }
+  return best;
+}
+
 function extractAmazonImages(html) {
   const CDN = /(?:m\.media-amazon\.com|images-na\.ssl-images-amazon\.com)\/images\/I\//;
   const clean = u => u.replace(/\\u002F/g, '/').replace(/\\/g, '');
   const urls = new Set();
 
-  // 1. colorImages JSON embedded in script — richest source, has hiRes for all gallery slots
-  const colorBlock = html.match(/'colorImages'\s*:\s*\{[^}]*'initial'\s*:\s*(\[[\s\S]*?\])\s*\}/);
-  if (colorBlock) {
-    try {
-      const arr = JSON.parse(colorBlock[1].replace(/'/g, '"'));
-      for (const img of arr) {
-        ['hiRes','large'].forEach(k => { if (img[k]) urls.add(clean(img[k])); });
-        if (img.main) Object.keys(img.main).forEach(u => urls.add(clean(u)));
-      }
-    } catch {
-      // Apostrophes in values (e.g. "Men's") break the global ' → " replacement.
-      // Fall back to URL-only regex extraction from the raw colorImages block.
-      for (const m of colorBlock[1].matchAll(/"(https:\/\/[^"]+\.jpg[^"]*)"/g)) urls.add(clean(m[1]));
-      for (const m of colorBlock[1].matchAll(/'(https:\/\/[^']+\.jpg[^']*)'/g)) urls.add(clean(m[1]));
-    }
+  // 1. colorImages JSON — use brace-counting map extraction (robust against apostrophes and
+  //    nested objects; replaces brittle [^}]* regex that failed on complex colorImages objects)
+  const colorMap = extractColorImagesMap(html);
+  if (colorMap.initial?.length) {
+    for (const u of colorMap.initial) urls.add(u);
   }
 
   // 2. data-a-dynamic-image attr — JSON map of url→[w,h], present on main img element
@@ -391,7 +451,35 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
       const imgs = extractAmazonImages(html);
       if (imgs.length > 0) {
         amazonImages = imgs;
-        console.log(`fetchAndUploadImages: extracted ${imgs.length} images from Amazon HTML for ${product._id}`);
+
+        // Extract the full colorImages map — Amazon embeds ALL color variants' galleries
+        // in one page. Use variant-specific gallery if it has more images than the default.
+        const colorMap = extractColorImagesMap(html);
+        const variantGallery = matchColorKey(colorMap, product.variant);
+        if (variantGallery && variantGallery.length > amazonImages.length) {
+          amazonImages = variantGallery;
+          console.log(`fetchAndUploadImages: variant-specific gallery "${product.variant}": ${amazonImages.length} images`);
+        }
+
+        // Opportunistically queue sibling variants that have no Cloudinary images yet,
+        // seeding them with their color-specific gallery from this same page scrape.
+        if (product.groupId && Object.keys(colorMap).length > 1) {
+          Product.find({
+            groupId: product.groupId,
+            _id: { $ne: product._id },
+            $or: [{ cloudinaryFolder: null }, { cloudinaryFolder: { $exists: false } }],
+          }).lean().then(siblings => {
+            for (const sib of siblings) {
+              const sibGallery = matchColorKey(colorMap, sib.variant);
+              if (sibGallery?.length) {
+                console.log(`fetchAndUploadImages: seeding sibling "${sib.variant}" with ${sibGallery.length} images from same page`);
+                queueImageUpload(sib, sibGallery).catch(() => {});
+              }
+            }
+          }).catch(() => {});
+        }
+
+        console.log(`fetchAndUploadImages: extracted ${amazonImages.length} images from Amazon HTML for ${product._id}`);
 
         // While we have the HTML, also scrape the product detail tables for extra specs
         try {
