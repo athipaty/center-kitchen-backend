@@ -832,11 +832,17 @@ router.delete("/:id", async (req, res) => {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ error: "Product not found" });
 
-    // End the eBay listing if one was active
+    // End the eBay listing only if no other tracked variants still use it.
+    // For multi-variation listings, deleting one variant should NOT end the whole listing.
     if (product.ebayListingId) {
-      endListing(product.ebayListingId).catch(e => {
-        console.warn(`delete: failed to end eBay listing ${product.ebayListingId}:`, e.message);
-      });
+      const remainingWithListing = await Product.countDocuments({ ebayListingId: product.ebayListingId });
+      if (remainingWithListing === 0) {
+        endListing(product.ebayListingId).catch(e => {
+          console.warn(`delete: failed to end eBay listing ${product.ebayListingId}:`, e.message);
+        });
+      } else {
+        console.log(`delete: listing ${product.ebayListingId} kept alive — ${remainingWithListing} variant(s) still active`);
+      }
     }
 
     if (product.cloudinaryFolder) {
