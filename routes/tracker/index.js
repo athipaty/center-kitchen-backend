@@ -435,16 +435,34 @@ function extractAmazonImages(html) {
   return [...urls].filter(u => CDN.test(u));
 }
 
+// Build the URL to fetch an Amazon page. If SCRAPER_API_KEY is set, route through
+// ScraperAPI residential proxies (bypasses Amazon bot detection). Falls back to direct.
+function scraperUrl(amazonUrl) {
+  const key = process.env.SCRAPER_API_KEY;
+  if (!key) return { url: amazonUrl, headers: null };
+  const proxied = `http://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(amazonUrl)}&country_code=us&render=false`;
+  return { url: proxied, headers: {} }; // ScraperAPI handles all headers itself
+}
+
 async function fetchAndUploadImages(product, seedImages = [], { forceUpload = false } = {}) {
   const crypto = require('crypto');
   let amazonImages = [];
-  for (const headers of BROWSER_HEADERS) {
+
+  const { url: primaryUrl, headers: scraperHeaders } = scraperUrl(product.url);
+  const attemptsToTry = scraperHeaders ? [{ url: primaryUrl, headers: scraperHeaders }]
+    : BROWSER_HEADERS.map(h => ({ url: primaryUrl, headers: h }));
+
+  for (const attempt of attemptsToTry) {
     try {
-      const { data: html } = await axios.get(product.url, { timeout: 18000, headers, decompress: true });
+      const { data: html } = await axios.get(attempt.url, {
+        timeout: scraperHeaders ? 60000 : 18000,
+        headers: attempt.headers,
+        decompress: true,
+      });
 
       // Block detection: if Amazon served a robot-check or login page, skip
       if (/robot|captcha|sign-in|ap\/signin|validateCaptcha/i.test(html.slice(0, 3000))) {
-        console.log(`fetchAndUploadImages: Amazon blocked request for ${product._id} (attempt with UA: ${headers['User-Agent'].slice(0,30)})`);
+        console.log(`fetchAndUploadImages: Amazon blocked request for ${product._id}`);
         continue;
       }
 
