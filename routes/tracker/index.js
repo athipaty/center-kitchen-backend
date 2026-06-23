@@ -495,13 +495,24 @@ function extractAmazonImages(html) {
   return [...urls].filter(u => CDN.test(u));
 }
 
-// Build the URL to fetch an Amazon page. If SCRAPER_API_KEY is set, route through
-// ScraperAPI residential proxies (bypasses Amazon bot detection). Falls back to direct.
-function scraperUrl(amazonUrl) {
+// Fetch an Amazon product page via ScraperAPI autoparse=true.
+// Returns structured JSON: { name, images, highResImages, feature_bullets,
+// product_information, full_description, customization_options }.
+// autoparse is not blocked by Amazon and costs 1 credit on the free plan.
+async function scraperApiAutoparse(amazonUrl) {
   const key = process.env.SCRAPER_API_KEY;
-  if (!key) return { url: amazonUrl, headers: null };
-  const proxied = `http://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(amazonUrl)}&country_code=us&premium=true`;
-  return { url: proxied, headers: {} }; // ScraperAPI handles all headers itself
+  if (!key) return null;
+  try {
+    const { data } = await axios.get('http://api.scraperapi.com/', {
+      params: { api_key: key, url: amazonUrl, autoparse: 'true' },
+      timeout: 60000,
+    });
+    if (data && (data.name || data.images)) return data;
+    return null;
+  } catch (e) {
+    console.warn(`scraperApiAutoparse failed for ${amazonUrl}: ${e.message}`);
+    return null;
+  }
 }
 
 async function fetchAndUploadImages(product, seedImages = [], { forceUpload = false } = {}) {
@@ -519,101 +530,115 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
   }
 
   if (!amazonImages.length) {
-  const { url: primaryUrl, headers: scraperHeaders } = scraperUrl(product.url);
-  const attemptsToTry = scraperHeaders ? [{ url: primaryUrl, headers: scraperHeaders }]
-    : BROWSER_HEADERS.map(h => ({ url: primaryUrl, headers: h }));
+    // ── Path A: ScraperAPI autoparse (structured JSON, not blocked by Amazon) ──
+    const parsed = await scraperApiAutoparse(product.url);
+    if (parsed) {
+      const forceHiRes = u => String(u).replace(/\._AC_(?:US\d+|SX\d+|SY\d+|SS\d+)?_?(?=\.jpg)/i, '._AC_SL1500_');
+      const hiRes = (parsed.highResImages || [])
+        .map(img => forceHiRes(typeof img === 'string' ? img : (img.link || img.url || '')))
+        .filter(u => u.includes('media-amazon') || u.includes('ssl-images-amazon'));
 
-  for (const attempt of attemptsToTry) {
-    try {
-      const { data: html } = await axios.get(attempt.url, {
-        timeout: scraperHeaders ? 60000 : 18000,
-        headers: attempt.headers,
-        decompress: true,
-      });
+      const selectedVariant = (parsed.customization_options?.Color || []).find(c => c.is_selected);
+      const swatch = selectedVariant?.image ? forceHiRes(selectedVariant.image) : null;
+      amazonImages = swatch ? [swatch, ...hiRes] : hiRes;
 
-      // Block detection: if Amazon served a robot-check or login page, skip
-      if (/robot|captcha|sign-in|ap\/signin|validateCaptcha/i.test(html.slice(0, 3000))) {
-        console.log(`fetchAndUploadImages: Amazon blocked request for ${product._id}`);
-        continue;
-      }
+      if (amazonImages.length) {
+        console.log(`fetchAndUploadImages: autoparse got ${amazonImages.length} images for ${product._id}`);
 
-      const imgs = extractAmazonImages(html);
-      if (imgs.length > 0) {
-        amazonImages = imgs;
+        // Save bullets, specs, description from structured response
+        try {
+          const bullets = (parsed.feature_bullets || []).map(b => String(b).trim()).filter(b => b.length > 15).slice(0, 12);
+          const specs = {};
+          const SKIP = new Set(['best_sellers_rank','customer_reviews','asin']);
+          for (const [k, v] of Object.entries(parsed.product_information || {})) {
+            if (typeof v === 'string' && v.trim()) {
+              const key = k.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+              if (key && key.length > 1 && !SKIP.has(key)) specs[key] = v.trim();
+            }
+          }
+          const update = {};
+          if (bullets.length > (product.bullets?.length || 0)) update.bullets = bullets;
+          if (Object.keys(specs).length) {
+            const merged = { ...(product.specs || {}) };
+            for (const [k, v] of Object.entries(specs)) { if (!merged[k]) merged[k] = v; }
+            update.specs = merged;
+          }
+          if (parsed.full_description && !(product.specs?.description)) {
+            update.specs = { ...(update.specs || product.specs || {}), description: String(parsed.full_description).slice(0, 1500) };
+          }
+          if (Object.keys(update).length) await Product.findByIdAndUpdate(product._id, update);
+        } catch {}
 
-        // Extract the full colorImages map — Amazon embeds ALL color variants' galleries
-        // in one page. Use variant-specific gallery if it has more images than the default.
-        const colorMap = extractColorImagesMap(html);
-        const variantGallery = matchColorKey(colorMap, product.variant);
-        if (variantGallery && variantGallery.length > amazonImages.length) {
-          amazonImages = variantGallery;
-          console.log(`fetchAndUploadImages: variant-specific gallery "${product.variant}": ${amazonImages.length} images`);
-        }
-
-        // Opportunistically queue sibling variants that have no Cloudinary images yet,
-        // seeding them with their color-specific gallery from this same page scrape.
-        if (product.groupId && Object.keys(colorMap).length > 1) {
-          Product.find({
-            groupId: product.groupId,
-            _id: { $ne: product._id },
-          }).lean().then(siblings => {
-            // Only seed siblings that don't yet have real Cloudinary images
+        // Seed siblings: customization_options has every variant's swatch + same hiRes shots
+        if (product.groupId && (parsed.customization_options?.Color?.length || 0) > 1) {
+          Product.find({ groupId: product.groupId, _id: { $ne: product._id } }).lean().then(siblings => {
             siblings = siblings.filter(s => !s.images?.some(u => u.includes('cloudinary')));
             for (const sib of siblings) {
-              const sibGallery = matchColorKey(colorMap, sib.variant);
-              if (sibGallery?.length) {
-                console.log(`fetchAndUploadImages: seeding sibling "${sib.variant}" with ${sibGallery.length} images from same page`);
-                queueImageUpload(sib, sibGallery).catch(() => {});
+              const norm = (sib.variant || '').toLowerCase().replace(/[^a-z0-9]/g,' ').trim();
+              const match = parsed.customization_options.Color.find(c => {
+                const cv = (c.value || '').toLowerCase().replace(/[^a-z0-9]/g,' ').trim();
+                return cv === norm || cv.includes(norm) || norm.includes(cv);
+              });
+              const sibSwatch = match?.image ? forceHiRes(match.image) : null;
+              const sibImages = sibSwatch ? [sibSwatch, ...hiRes] : hiRes;
+              if (sibImages.length >= 2) {
+                console.log(`autoparse: seeding "${sib.variant}" with ${sibImages.length} images`);
+                queueImageUpload(sib, sibImages).catch(() => {});
               }
             }
           }).catch(() => {});
         }
-
-        console.log(`fetchAndUploadImages: extracted ${amazonImages.length} images from Amazon HTML for ${product._id}`);
-
-        // Scrape ALL product data from the Amazon HTML — specs, bullets, description.
-        // This enriches the DB record so the eBay description generator has maximum data.
-        try {
-          const amazonData = extractAmazonProductData(html);
-          const update = {};
-
-          // Bullets: use Amazon's if richer than what Keepa provided
-          if (amazonData.bullets.length > (product.bullets?.length || 0)) {
-            update.bullets = amazonData.bullets;
-            console.log(`fetchAndUploadImages: ${amazonData.bullets.length} bullets from Amazon for ${product._id}`);
-          }
-
-          // Specs: merge Amazon specs on top of Keepa specs (never overwrite existing keys)
-          if (Object.keys(amazonData.specs).length > 0) {
-            const merged = { ...(product.specs || {}) };
-            for (const [k, v] of Object.entries(amazonData.specs)) {
-              if (!merged[k]) merged[k] = v;
-            }
-            update.specs = merged;
-            console.log(`fetchAndUploadImages: +${Object.keys(amazonData.specs).length} specs from Amazon for ${product._id}`);
-          }
-
-          // Description: store if not already present
-          if (amazonData.description && !(product.specs?.description)) {
-            update.specs = { ...(update.specs || product.specs || {}), description: amazonData.description };
-          }
-
-          // Prime correction
-          if (!product.isPrime && /a-icon-prime|i-prime|prime-logo|primeBadge/i.test(html)) {
-            update.isPrime = true;
-          }
-
-          if (Object.keys(update).length > 0) {
-            await Product.findByIdAndUpdate(product._id, update);
-          }
-        } catch {}
-        break; // got images — no need to retry
       }
-    } catch (e) {
-      console.log(`fetchAndUploadImages: request failed for ${product._id}: ${e.message}`);
     }
-  }
-  } // end if (!amazonImages.length) — ScraperAPI/direct fetch block
+
+    // ── Path B: direct Amazon HTML scrape (fallback when no ScraperAPI key) ──
+    if (!amazonImages.length) {
+    for (const headers of BROWSER_HEADERS) {
+      try {
+        const { data: html } = await axios.get(product.url, { timeout: 18000, headers, decompress: true });
+        if (/robot|captcha|sign-in|ap\/signin|validateCaptcha/i.test(html.slice(0, 3000))) {
+          console.log(`fetchAndUploadImages: Amazon blocked for ${product._id}`);
+          continue;
+        }
+        const imgs = extractAmazonImages(html);
+        if (imgs.length > 0) {
+          amazonImages = imgs;
+          const colorMap = extractColorImagesMap(html);
+          const variantGallery = matchColorKey(colorMap, product.variant);
+          if (variantGallery && variantGallery.length > amazonImages.length) amazonImages = variantGallery;
+          if (product.groupId && Object.keys(colorMap).length > 1) {
+            Product.find({ groupId: product.groupId, _id: { $ne: product._id } }).lean().then(siblings => {
+              siblings = siblings.filter(s => !s.images?.some(u => u.includes('cloudinary')));
+              for (const sib of siblings) {
+                const sibGallery = matchColorKey(colorMap, sib.variant);
+                if (sibGallery?.length) queueImageUpload(sib, sibGallery).catch(() => {});
+              }
+            }).catch(() => {});
+          }
+          try {
+            const amazonData = extractAmazonProductData(html);
+            const update = {};
+            if (amazonData.bullets.length > (product.bullets?.length || 0)) update.bullets = amazonData.bullets;
+            if (Object.keys(amazonData.specs).length) {
+              const merged = { ...(product.specs || {}) };
+              for (const [k, v] of Object.entries(amazonData.specs)) { if (!merged[k]) merged[k] = v; }
+              update.specs = merged;
+            }
+            if (amazonData.description && !(product.specs?.description)) {
+              update.specs = { ...(update.specs || product.specs || {}), description: amazonData.description };
+            }
+            if (!product.isPrime && /a-icon-prime|i-prime|prime-logo|primeBadge/i.test(html)) update.isPrime = true;
+            if (Object.keys(update).length) await Product.findByIdAndUpdate(product._id, update);
+          } catch {}
+          console.log(`fetchAndUploadImages: HTML scrape got ${amazonImages.length} images for ${product._id}`);
+          break;
+        }
+      } catch (e) {
+        console.log(`fetchAndUploadImages: request failed for ${product._id}: ${e.message}`);
+      }
+    }
+    } // end Path B
+  } // end if (!amazonImages.length)
 
 
   // Final fallback: probe legacy ASIN image URLs and keep only distinct images.
