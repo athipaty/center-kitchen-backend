@@ -467,8 +467,9 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
           Product.find({
             groupId: product.groupId,
             _id: { $ne: product._id },
-            $or: [{ cloudinaryFolder: null }, { cloudinaryFolder: { $exists: false } }],
           }).lean().then(siblings => {
+            // Only seed siblings that don't yet have real Cloudinary images
+            siblings = siblings.filter(s => !s.images?.some(u => u.includes('cloudinary')));
             for (const sib of siblings) {
               const sibGallery = matchColorKey(colorMap, sib.variant);
               if (sibGallery?.length) {
