@@ -440,7 +440,7 @@ function extractAmazonImages(html) {
 function scraperUrl(amazonUrl) {
   const key = process.env.SCRAPER_API_KEY;
   if (!key) return { url: amazonUrl, headers: null };
-  const proxied = `http://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(amazonUrl)}&country_code=us&render=false`;
+  const proxied = `http://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(amazonUrl)}&country_code=us&premium=true`;
   return { url: proxied, headers: {} }; // ScraperAPI handles all headers itself
 }
 
