@@ -502,6 +502,13 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
       } catch {
         ({ data: imgBuffer } = await axios.get(amazonImages[i], { responseType: 'arraybuffer', timeout: 15000 }));
       }
+      // Skip GIF placeholders — Amazon serves a 43-byte 1x1 GIF when the real image
+      // isn't accessible. Uploading these to Cloudinary causes blank photos on eBay.
+      const buf = Buffer.from(imgBuffer);
+      if (buf.length < 500 || (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46)) {
+        console.log(`fetchAndUploadImages: skipping GIF/tiny placeholder (${buf.length}b) for image ${i + 1}`);
+        continue;
+      }
       const publicId  = `${slug}-${String(i + 1).padStart(2, '0')}`;
       const timestamp = Math.floor(Date.now() / 1000);
       const eager     = 'c_limit,q_auto:best,w_3000';
