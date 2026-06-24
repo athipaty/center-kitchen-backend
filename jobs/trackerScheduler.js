@@ -2,7 +2,7 @@ const cron = require("node-cron");
 const axios = require("axios");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
-const { syncEbayPrice, syncEbayQty, endListing, calcEbayPrice } = require("./ebayPriceSync");
+const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice } = require("./ebayPriceSync");
 const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 
 let io = null;
@@ -272,6 +272,57 @@ async function runWeeklyOptimize() {
     console.log(`weekly-optimize: started — ${data.total} listings queued`);
   } catch (e) {
     console.error('weekly-optimize: failed to start:', e.message);
+  }
+}
+
+// Weekly variation sync: for every multi-variation listing, remove any eBay variations
+// that no longer exist in the tracker DB. "If anything doesn't match, delete it."
+async function runWeeklyVariationSync() {
+  console.log('weekly-variation-sync: starting…');
+  const PORT = process.env.PORT || 5000;
+  try {
+    const token = await getAccessToken();
+    const products = await Product.find({ ebayListingId: { $exists: true, $ne: null } }).lean();
+
+    // Group by listing ID
+    const byListing = {};
+    for (const p of products) {
+      const id = String(p.ebayListingId);
+      if (!byListing[id]) byListing[id] = [];
+      byListing[id].push(p);
+    }
+
+    let fixed = 0;
+    for (const [listingId, dbVariants] of Object.entries(byListing)) {
+      try {
+        // Fetch live eBay variations via the local API (reuses caching + auth logic)
+        const { data: priceData } = await axios.get(`http://localhost:${PORT}/api/ebay/listing/${listingId}/prices`, { timeout: 20000 });
+        const ebayVariations = priceData.variations || [];
+        if (ebayVariations.length === 0) continue; // single listing — no variation sync needed
+
+        const dbLabels = dbVariants.map(p => (p.variant || '').toLowerCase().trim()).filter(Boolean);
+
+        const extraOnEbay = ebayVariations.filter(ev => {
+          const ebayLabel = Object.values(ev.specs || {})[0]?.toString().toLowerCase().trim() || '';
+          return !dbLabels.some(dl => dl === ebayLabel || dl.includes(ebayLabel) || ebayLabel.includes(dl));
+        });
+
+        for (const extra of extraOnEbay) {
+          const ebayLabel = Object.values(extra.specs || {})[0]?.toString() || '';
+          console.log(`weekly-variation-sync: removing extra eBay variation "${ebayLabel}" from listing ${listingId}`);
+          await removeVariation(listingId, ebayLabel);
+          fixed++;
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      } catch (e) {
+        console.error(`weekly-variation-sync: error on listing ${listingId}:`, e.message);
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    console.log(`weekly-variation-sync: done — ${fixed} extra variation(s) removed`);
+  } catch (e) {
+    console.error('weekly-variation-sync: failed:', e.message);
   }
 }
 
@@ -715,6 +766,8 @@ function start(socketIo) {
   cron.schedule("*/5 * * * *", runDueChecks);
   // Re-optimize all listings every Sunday at 3am
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
+  // Variation sync: remove eBay variations not in tracker — Sunday 3:15am (after optimize)
+  cron.schedule("15 3 * * 0", runWeeklyVariationSync);
   // Auto-end listings 4+ days old with 0 views — disabled, user prefers manual control
   // cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
   // Auto-restock sold listings back to qty 1 — runs every 30 minutes (was 15, halves GetOrders calls)
