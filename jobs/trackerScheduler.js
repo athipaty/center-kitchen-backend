@@ -88,16 +88,18 @@ async function checkProduct(p, syncedListings = null) {
     const priceChanged  = info.price !== oldPrice;
     const justRestocked = previousStatus !== 'active';
 
-    // Cache the calculated eBay price. Capture old value first so we can skip the
-    // eBay API call when the rounded price (floor+0.99) hasn't actually changed —
-    // many small Amazon fluctuations don't move the eBay price at all.
+    // Calculate the eBay price but don't write it to the DB yet — only update
+    // p.ebayPrice after a successful sync so a failed call doesn't make the tracker
+    // think eBay is already correct (which would suppress all future retries).
     const oldEbayPrice = p.ebayPrice;
     const newEbayPrice = p.ebayListingId ? calcEbayPrice(info.price) : null;
-    if (newEbayPrice != null) p.ebayPrice = newEbayPrice;
 
     const ebayPriceChanged = newEbayPrice != null && (oldEbayPrice == null || Math.abs(newEbayPrice - oldEbayPrice) > 0.005);
     const alreadySynced = syncedListings && p.ebayListingId && syncedListings.has(String(p.ebayListingId));
     if (alreadySynced) {
+      // A sibling variant already called ReviseFixedPriceItem for this listing this batch,
+      // pricing all variations — safe to record the new price without another API call.
+      if (newEbayPrice != null) p.ebayPrice = newEbayPrice;
       console.log(`eBay sync skipped (already synced this batch): listing ${p.ebayListingId}`);
     }
     if (p.ebayListingId && (ebayPriceChanged || justRestocked) && !isEbayRateLimited() && !alreadySynced) {
@@ -110,6 +112,7 @@ async function checkProduct(p, syncedListings = null) {
             console.log(`eBay qty restored: listing ${p.ebayListingId} variant="${p.variant}" → 1 (was ${previousStatus})`);
           }
           if (ebayPriceChanged) {
+            p.ebayPrice = newEbayPrice; // only record after confirmed success
             console.log(`eBay price synced: listing ${p.ebayListingId} variant="${p.variant}" amazon=$${info.price} → ebay=$${newEbayPrice}`);
           }
           if (syncedListings && p.ebayListingId) syncedListings.add(String(p.ebayListingId));
@@ -129,6 +132,7 @@ async function checkProduct(p, syncedListings = null) {
         }
       }
       if (syncErr) {
+        // p.ebayPrice retains oldEbayPrice — next check will detect the mismatch and retry
         console.error(`eBay price sync failed for listing ${p.ebayListingId} after 2 attempts:`, syncErr.message);
         if (io) io.emit('tracker:ebay:sync:fail', { productId: String(p._id), error: syncErr.message });
       } else {
