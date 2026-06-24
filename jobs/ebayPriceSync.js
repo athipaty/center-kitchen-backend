@@ -340,7 +340,9 @@ async function removeVariation(listingId, variantLabel) {
   if (kept.length === varBlocks.length) return; // variation not found — already gone
   if (kept.length === 0) return; // last variant — caller handles ending the listing
 
-  const variationXml = kept.map(vBlock => {
+  const toDelete = varBlocks.filter(vBlock => !kept.includes(vBlock));
+
+  const keptXml = kept.map(vBlock => {
     const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0.00';
     const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
     const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
@@ -350,9 +352,17 @@ async function removeVariation(listingId, variantLabel) {
     return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
   }).join('');
 
+  // eBay requires explicit <Delete>true</Delete> — omitting a variation is not enough to remove it.
+  const deletedXml = toDelete.map(vBlock => {
+    const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+    const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+    const skuXml = sku ? `<SKU>${escXml(sku)}</SKU>` : '';
+    return `<Variation>${skuXml}<VariationSpecifics>${specificsContent}</VariationSpecifics><Delete>true</Delete></Variation>`;
+  }).join('');
+
   const picturesXml = extractVariationPictures(getItemXml);
   const { data: xml } = await tradingPost(token, 'ReviseFixedPriceItem',
-    `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
+    `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${keptXml}${deletedXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
   );
   const err = checkFailure(xml);
   if (err) throw new Error(err);
