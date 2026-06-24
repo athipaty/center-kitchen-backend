@@ -306,4 +306,56 @@ async function endListing(listingId) {
   if (err) throw new Error(err);
 }
 
-module.exports = { syncEbayPrice, syncEbayQty, endListing, getAccessToken, bestVariantMatch, calcEbayPrice };
+// Remove a single variation from a multi-variation listing.
+// Called when a tracker variant is deleted but siblings remain.
+async function removeVariation(listingId, variantLabel) {
+  const token = await getAccessToken();
+  const cleanId = String(listingId).trim().replace(/\D/g, '');
+  const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+  const label = (variantLabel || '').toLowerCase().trim();
+  if (!cleanId || !label) throw new Error('listingId and variantLabel are required');
+
+  const { data: getItemXml } = await tradingPost(token, 'GetItem',
+    `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
+  );
+  const getErr = checkFailure(getItemXml);
+  if (getErr) throw new Error(getErr);
+
+  const varBlocks = [];
+  const varRe = /<Variation>([\s\S]*?)<\/Variation>/g;
+  let vm;
+  while ((vm = varRe.exec(getItemXml)) !== null) varBlocks.push(vm[0]);
+  if (!varBlocks.length) return; // no variations — nothing to remove
+
+  const kept = varBlocks.filter(vBlock => {
+    const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+    let nv;
+    while ((nv = nvRe.exec(vBlock)) !== null) {
+      const raw = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+      if (labelMatch(raw, label)) return false;
+    }
+    return true;
+  });
+
+  if (kept.length === varBlocks.length) return; // variation not found — already gone
+  if (kept.length === 0) return; // last variant — caller handles ending the listing
+
+  const variationXml = kept.map(vBlock => {
+    const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0.00';
+    const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+    const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+    const varVal = vBlock.match(/<Value>([\s\S]*?)<\/Value>/)?.[1] || '';
+    const skuXml = sku ? `<SKU>${escXml(sku)}</SKU>` : `<SKU>${escXml(`${cleanId}-${varVal}`.slice(0, 50))}</SKU>`;
+    const qty = vBlock.match(/<Quantity>([\d]+)<\/Quantity>/)?.[1] || '1';
+    return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
+  }).join('');
+
+  const picturesXml = extractVariationPictures(getItemXml);
+  const { data: xml } = await tradingPost(token, 'ReviseFixedPriceItem',
+    `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
+  );
+  const err = checkFailure(xml);
+  if (err) throw new Error(err);
+}
+
+module.exports = { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, bestVariantMatch, calcEbayPrice };

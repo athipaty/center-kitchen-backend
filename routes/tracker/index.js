@@ -10,7 +10,7 @@ const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 const { deleteCloudinaryFolder } = require("../../utils/cloudinaryUtils");
-const { endListing } = require("../../jobs/ebayPriceSync");
+const { endListing, removeVariation } = require("../../jobs/ebayPriceSync");
 
 router.get("/settings", async (req, res) => {
   res.json({});
@@ -849,8 +849,10 @@ router.delete("/:id", async (req, res) => {
         endListing(product.ebayListingId).catch(e => {
           console.warn(`delete: failed to end eBay listing ${product.ebayListingId}:`, e.message);
         });
-      } else {
-        console.log(`delete: listing ${product.ebayListingId} kept alive — ${remainingWithListing} variant(s) still active`);
+      } else if (product.variant) {
+        removeVariation(product.ebayListingId, product.variant).catch(e => {
+          console.warn(`delete: failed to remove variation "${product.variant}" from eBay listing ${product.ebayListingId}:`, e.message);
+        });
       }
     }
 
