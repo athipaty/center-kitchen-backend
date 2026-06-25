@@ -17,7 +17,8 @@ async function deleteCloudinaryFolder(folder) {
     await cloudinary.api.delete_folder(folder).catch(() => {});
     console.log(`cloudinary: deleted folder ${folder}`);
   } catch (e) {
-    console.error(`cloudinary: failed to delete folder ${folder}:`, e.message || e);
+    const msg = e.message || e.http_code || e.error?.message || (typeof e === 'object' ? JSON.stringify(e).slice(0, 120) : String(e));
+    console.error(`cloudinary: failed to delete folder ${folder}: ${msg}`);
   }
 }
 

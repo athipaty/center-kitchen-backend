@@ -365,6 +365,8 @@ async function removeVariation(listingId, variantLabel) {
     `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${keptXml}${deletedXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
   );
   const err = checkFailure(xml);
+  // Treat ended-listing errors as success — the listing is already gone, nothing to revise.
+  if (err && /already been closed|not allowed to revise ended|listing has ended|does not exist/i.test(err)) return;
   if (err) throw new Error(err);
 }
 

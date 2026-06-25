@@ -844,13 +844,15 @@ router.delete("/:id", async (req, res) => {
     // For multi-variation listings, deleting one variant should NOT end the whole listing.
     if (product.ebayListingId) {
       const remainingWithListing = await Product.countDocuments({ ebayListingId: product.ebayListingId });
+      // eBay sometimes closes listings before we do (expiry, policy). Treat those as success.
+      const isAlreadyEnded = e => /already been closed|not allowed to revise ended|listing has ended|does not exist/i.test(e.message || '');
       if (remainingWithListing === 0) {
         endListing(product.ebayListingId).catch(e => {
-          console.warn(`delete: failed to end eBay listing ${product.ebayListingId}:`, e.message);
+          if (!isAlreadyEnded(e)) console.warn(`delete: failed to end eBay listing ${product.ebayListingId}:`, e.message);
         });
       } else if (product.variant) {
         removeVariation(product.ebayListingId, product.variant).catch(e => {
-          console.warn(`delete: failed to remove variation "${product.variant}" from eBay listing ${product.ebayListingId}:`, e.message);
+          if (!isAlreadyEnded(e)) console.warn(`delete: failed to remove variation "${product.variant}" from eBay listing ${product.ebayListingId}:`, e.message);
         });
       }
     }
