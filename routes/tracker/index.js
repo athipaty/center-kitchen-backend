@@ -874,6 +874,16 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// POST manually trigger Cloudinary orphan cleanup now
+router.post("/cloudinary-cleanup", async (req, res) => {
+  try {
+    await scheduler.cloudinaryCleanup();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST reset all error/unavailable/OOS products for immediate recheck
 router.post("/retry-errors", async (req, res) => {
   try {
