@@ -2409,15 +2409,43 @@ router.post('/listing/variation-photos', async (req, res) => {
     const withImages = variants.filter(v => v.images?.length || v.image);
     if (!withImages.length) return res.status(400).json({ error: 'No variant images provided' });
 
-    const pictureSets = withImages.map(v => {
-      const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []);
-      // Use eBay's exact label spelling (preserves case eBay stored) or fall back to what was sent
-      const exactLabel = ebayLabelMap[(v.label || '').toLowerCase()] || v.label;
+    // Build map of incoming images by lowercase label
+    const incomingMap = {};
+    for (const v of withImages) {
+      incomingMap[(v.label || '').toLowerCase()] = v.images?.length ? v.images : (v.image ? [v.image] : []);
+    }
+
+    // Parse existing VariationSpecificPictureSet blocks from eBay so we can preserve
+    // photos for variants not included in this request — replacing the full <Pictures>
+    // block without them would wipe their photos.
+    const existingPicMap = {};
+    const picSetRe = /<VariationSpecificPictureSet>([\s\S]*?)<\/VariationSpecificPictureSet>/g;
+    let psm;
+    while ((psm = picSetRe.exec(getXml)) !== null) {
+      const block = psm[1];
+      const val = decodeXml(block.match(/<VariationSpecificValue>([\s\S]*?)<\/VariationSpecificValue>/)?.[1] || '');
+      const pics = [...block.matchAll(/<PictureURL>([\s\S]*?)<\/PictureURL>/g)].map(m => decodeXml(m[1]));
+      if (val && pics.length) existingPicMap[val.toLowerCase()] = { label: val, pics };
+    }
+
+    // Merge: use incoming images where provided; fall back to existing eBay photos for the rest.
+    // Result includes ALL known variation labels so no variant loses its photos.
+    const allLabels = new Set([
+      ...Object.keys(ebayLabelMap),
+      ...Object.keys(existingPicMap),
+      ...withImages.map(v => (v.label || '').toLowerCase()),
+    ]);
+
+    const pictureSets = [...allLabels].map(lowerLabel => {
+      const exactLabel = ebayLabelMap[lowerLabel] || existingPicMap[lowerLabel]?.label
+        || withImages.find(v => v.label?.toLowerCase() === lowerLabel)?.label || lowerLabel;
+      const imgs = incomingMap[lowerLabel] || existingPicMap[lowerLabel]?.pics || [];
+      if (!imgs.length) return '';
       return `<VariationSpecificPictureSet>
         <VariationSpecificValue>${escXml(exactLabel)}</VariationSpecificValue>
         ${imgs.map(img => `<PictureURL>${escXml(img)}</PictureURL>`).join('')}
       </VariationSpecificPictureSet>`;
-    }).join('');
+    }).filter(Boolean).join('');
 
     const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
       ${creds}
