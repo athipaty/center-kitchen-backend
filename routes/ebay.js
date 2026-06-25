@@ -121,10 +121,8 @@ router.post('/upload-images', async (req, res) => {
       const folder = `ebay-listings/${slug}`;
       const publicId = `${slug}-${String(i + 1).padStart(2, '0')}`;
       const timestamp = Math.floor(Date.now() / 1000);
-      const eager = 'c_limit,q_auto:best,w_3000';
 
-      // eager must come before folder/public_id/timestamp alphabetically
-      const toSign = `eager=${eager}&folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+      const toSign = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
       const signature = crypto.createHash('sha1').update(toSign).digest('hex');
 
       const b64 = Buffer.from(imgBuffer).toString('base64');
@@ -138,7 +136,6 @@ router.post('/upload-images', async (req, res) => {
         signature,
         folder,
         public_id: publicId,
-        eager,
       });
 
       const { data: uploaded } = await axios.post(
@@ -146,8 +143,7 @@ router.post('/upload-images', async (req, res) => {
         uploadParams.toString(),
         { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
       );
-      // Use the compressed eager version; fall back to original if eager wasn't generated
-      cloudinaryUrls.push(uploaded.eager?.[0]?.secure_url || uploaded.secure_url);
+      cloudinaryUrls.push(uploaded.secure_url);
     } catch (e) {
       console.error(`upload-images: failed for ${url}:`, e.response?.data || e.message);
     }

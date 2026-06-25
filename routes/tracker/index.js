@@ -728,19 +728,18 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
       }
       const publicId  = `${slug}-${String(i + 1).padStart(2, '0')}`;
       const timestamp = Math.floor(Date.now() / 1000);
-      const eager     = 'c_limit,q_auto:best,w_3000';
-      const toSign    = `eager=${eager}&folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+      const toSign    = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
       const signature = crypto.createHash('sha1').update(toSign).digest('hex');
       const uploadParams = new URLSearchParams({
         file: `data:image/jpeg;base64,${Buffer.from(imgBuffer).toString('base64')}`,
-        api_key: apiKey, timestamp: String(timestamp), signature, folder, public_id: publicId, eager,
+        api_key: apiKey, timestamp: String(timestamp), signature, folder, public_id: publicId,
       });
       const { data: uploaded } = await axios.post(
         `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
         uploadParams.toString(),
         { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
       );
-      cloudinaryUrls.push(uploaded.eager?.[0]?.secure_url || uploaded.secure_url);
+      cloudinaryUrls.push(uploaded.secure_url);
     } catch (e) {
       console.error(`fetchAndUploadImages: cloudinary upload failed:`, e.message);
     }
