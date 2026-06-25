@@ -2365,6 +2365,7 @@ router.post('/listing/variation-photos', async (req, res) => {
     let dimName = variantDimension || 'Color';
     const ebayLabelMap = {}; // lowercase → exact stored label
     let existingVarXml = ''; // preserve existing <Variation> elements alongside Pictures
+    const existingPicMap = {}; // lowercase label → { label, pics } from current eBay Photos block
     try {
       const { data: getXml } = await axios.post('https://api.ebay.com/ws/api.dll',
         `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`,
@@ -2420,6 +2421,17 @@ router.post('/listing/variation-photos', async (req, res) => {
         const sku3   = skuM   ? `<SKU>${skuM[1]}</SKU>` : '';
         existingVarXml += `<Variation>${sku3}<StartPrice currencyID="USD">${price3}</StartPrice><Quantity>${qty3}</Quantity><VariationSpecifics>${specs3}</VariationSpecifics></Variation>`;
       }
+
+      // Parse existing VariationSpecificPictureSet blocks so we can preserve photos
+      // for variants not included in this request (partial updates must not wipe others).
+      const picSetRe = /<VariationSpecificPictureSet>([\s\S]*?)<\/VariationSpecificPictureSet>/g;
+      let psm;
+      while ((psm = picSetRe.exec(getXml)) !== null) {
+        const block = psm[1];
+        const val = decodeXml(block.match(/<VariationSpecificValue>([\s\S]*?)<\/VariationSpecificValue>/)?.[1] || '');
+        const pics = [...block.matchAll(/<PictureURL>([\s\S]*?)<\/PictureURL>/g)].map(m => decodeXml(m[1]));
+        if (val && pics.length) existingPicMap[val.toLowerCase()] = { label: val, pics };
+      }
     } catch (e) {
       console.log('variation-photos: GetItem failed, using supplied dimension:', dimName, e.message);
     }
@@ -2431,19 +2443,6 @@ router.post('/listing/variation-photos', async (req, res) => {
     const incomingMap = {};
     for (const v of withImages) {
       incomingMap[(v.label || '').toLowerCase()] = v.images?.length ? v.images : (v.image ? [v.image] : []);
-    }
-
-    // Parse existing VariationSpecificPictureSet blocks from eBay so we can preserve
-    // photos for variants not included in this request — replacing the full <Pictures>
-    // block without them would wipe their photos.
-    const existingPicMap = {};
-    const picSetRe = /<VariationSpecificPictureSet>([\s\S]*?)<\/VariationSpecificPictureSet>/g;
-    let psm;
-    while ((psm = picSetRe.exec(getXml)) !== null) {
-      const block = psm[1];
-      const val = decodeXml(block.match(/<VariationSpecificValue>([\s\S]*?)<\/VariationSpecificValue>/)?.[1] || '');
-      const pics = [...block.matchAll(/<PictureURL>([\s\S]*?)<\/PictureURL>/g)].map(m => decodeXml(m[1]));
-      if (val && pics.length) existingPicMap[val.toLowerCase()] = { label: val, pics };
     }
 
     // Merge: use incoming images where provided; fall back to existing eBay photos for the rest.
