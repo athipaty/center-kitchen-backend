@@ -7,6 +7,7 @@ const EbayToken = require('../models/shared/EbayToken');
 
 const Product = require('../models/tracker/Product');
 const { bestVariantMatch, calcEbayPrice } = require('../jobs/ebayPriceSync');
+const { deleteCloudinaryFolder } = require('../utils/cloudinaryUtils');
 
 let _io = null;
 function setIo(socketIo) { _io = socketIo; }
@@ -153,6 +154,10 @@ router.post('/upload-images', async (req, res) => {
   }
 
   if (!cloudinaryUrls.length) return res.status(500).json({ error: 'All image uploads failed' });
+
+  // tracker-images/ is now redundant — ebay-listings/ has the canonical copies.
+  deleteCloudinaryFolder(`tracker-images/${slug}`).catch(() => {});
+
   res.json({ cloudinaryUrls });
 });
 

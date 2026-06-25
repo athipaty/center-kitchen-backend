@@ -707,10 +707,14 @@ async function runCloudinaryCleanup() {
     const activeFolders = new Set();
     for (const p of products) {
       if (p.cloudinaryFolder) activeFolders.add(p.cloudinaryFolder);
-      // Also protect the tracker-images folder (may differ from cloudinaryFolder after listing)
-      const asin = (p.url || '').match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || p._id.toString();
-      const slug = `${p._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
-      activeFolders.add(`tracker-images/${slug}`);
+      // Only protect tracker-images/ if the product hasn't been listed yet.
+      // Once listed, cloudinaryFolder is updated to ebay-listings/ and the tracker-images/
+      // folder is redundant — let the cleanup reclaim it.
+      if (!p.cloudinaryFolder || p.cloudinaryFolder.startsWith('tracker-images/')) {
+        const asin = (p.url || '').match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || p._id.toString();
+        const slug = `${p._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
+        activeFolders.add(`tracker-images/${slug}`);
+      }
     }
 
     // 2. List all images under both prefixes, extract unique folder names
