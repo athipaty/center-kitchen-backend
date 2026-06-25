@@ -2655,7 +2655,26 @@ router.delete('/listing/:id/variation', async (req, res) => {
     const body = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
     const { data: xml } = await tradingPost('ReviseFixedPriceItem', body);
     const err = checkFailure(xml);
-    if (err) return res.status(400).json({ error: err });
+    if (err) {
+      // eBay blocks deletion of variations with completed transactions.
+      // Fall back to qty=0 so the variation is hidden from buyers but stays on eBay.
+      const isTransactionBlock = /transaction|sold|cannot (delete|remove|modify)/i.test(err);
+      if (isTransactionBlock) {
+        const zeroXml = toDelete.map(vBlock => {
+          const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0.00';
+          const specificsContent = vBlock.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
+          const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
+          const skuXml = sku ? `<SKU>${sku}</SKU>` : '';
+          return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>0</Quantity><VariationSpecifics>${specificsContent}</VariationSpecifics></Variation>`;
+        }).join('');
+        const fallbackBody = `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${cleanId}</ItemID><Variations>${keptXml}${zeroXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`;
+        const { data: fallbackXml } = await tradingPost('ReviseFixedPriceItem', fallbackBody);
+        const fallbackErr = checkFailure(fallbackXml);
+        if (fallbackErr) return res.status(400).json({ error: fallbackErr });
+        return res.json({ ok: true, removed: false, zeroed: true, keptCount: kept.length, message: 'Variation has sales history — set to qty 0 instead of deleting' });
+      }
+      return res.status(400).json({ error: err });
+    }
 
     res.json({ ok: true, removed: true, keptCount: kept.length });
   } catch (err) {
