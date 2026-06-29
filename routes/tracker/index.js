@@ -10,6 +10,7 @@ const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 const { deleteCloudinaryFolder } = require("../../utils/cloudinaryUtils");
+const { deleteB2Prefix } = require("../../utils/b2Utils");
 const { endListing, removeVariation } = require("../../jobs/ebayPriceSync");
 
 router.get("/settings", async (req, res) => {
@@ -682,14 +683,65 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
 
   if (!amazonImages.length) return null;
 
-  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
-  if (!cloud || !apiKey || !apiSecret) return null;
+  const { b2Enabled, uploadToB2, listB2Files } = require('../../utils/b2Utils');
 
   const asin = product.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
   const slug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
   const folder = `tracker-images/${slug}`;
+
+  if (b2Enabled()) {
+    // ── B2 path ──────────────────────────────────────────────────────
+    let existingUrls = [];
+    try {
+      existingUrls = await listB2Files(folder + '/');
+      if (existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
+        console.log(`fetchAndUploadImages: B2 folder ${folder} already has ${existingUrls.length}/${amazonImages.length} images — skipping`);
+        await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
+        return existingUrls;
+      }
+      if (existingUrls.length > 0) {
+        console.log(`fetchAndUploadImages: B2 folder ${folder} has ${existingUrls.length}/${amazonImages.length} — uploading ${amazonImages.length - existingUrls.length} new`);
+      }
+    } catch {}
+
+    const startIndex = existingUrls.length;
+    const b2Urls = [...existingUrls];
+
+    for (let i = startIndex; i < amazonImages.length; i++) {
+      try {
+        const fullResUrl = amazonImages[i].replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
+        let imgBuffer;
+        try {
+          ({ data: imgBuffer } = await axios.get(fullResUrl, { responseType: 'arraybuffer', timeout: 15000 }));
+        } catch {
+          ({ data: imgBuffer } = await axios.get(amazonImages[i], { responseType: 'arraybuffer', timeout: 15000 }));
+        }
+        const buf = Buffer.from(imgBuffer);
+        if (buf.length < 500 || (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46)) {
+          console.log(`fetchAndUploadImages: skipping GIF/tiny placeholder (${buf.length}b) for image ${i + 1}`);
+          continue;
+        }
+        const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
+        const b2Url = await uploadToB2(buf, fileKey);
+        b2Urls.push(b2Url);
+      } catch (e) {
+        console.error(`fetchAndUploadImages: B2 upload failed for image ${i + 1}:`, e.message);
+      }
+    }
+
+    if (b2Urls.length > existingUrls.length) {
+      await Product.findByIdAndUpdate(product._id, { image: b2Urls[0], images: b2Urls, cloudinaryFolder: folder });
+      console.log(`fetchAndUploadImages: saved ${b2Urls.length} B2 images for ${product._id}`);
+    }
+
+    return b2Urls.length ? b2Urls : null;
+  }
+
+  // ── Cloudinary path ───────────────────────────────────────────────
+  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  if (!cloud || !apiKey || !apiSecret) return null;
 
   // Check what's already in Cloudinary — skip fully if count is sufficient, upload only missing otherwise
   let existingUrls = [];
@@ -861,9 +913,10 @@ router.delete("/:id", async (req, res) => {
       }
     }
 
-    // Delete cloudinaryFolder (ebay-listings/ path set after auto-list)
+    // Delete stored images (both Cloudinary and B2 if migrated)
     if (product.cloudinaryFolder) {
       deleteCloudinaryFolder(product.cloudinaryFolder).catch(() => {});
+      deleteB2Prefix(product.cloudinaryFolder + '/').catch(() => {});
     }
     // Also delete tracker-images/ folder — separate from cloudinaryFolder which
     // gets overwritten with the ebay-listings path after listing is created.
@@ -872,6 +925,7 @@ router.delete("/:id", async (req, res) => {
     const trackerFolder = `tracker-images/${trackerSlug}`;
     if (trackerFolder !== product.cloudinaryFolder) {
       deleteCloudinaryFolder(trackerFolder).catch(() => {});
+      deleteB2Prefix(trackerFolder + '/').catch(() => {});
     }
     res.json({ success: true });
   } catch (err) {
@@ -1055,6 +1109,53 @@ router.get("/profit-summary", async (req, res) => {
         topEarners:          listings.slice(0, 5),
         needsAttention:      listings.filter(l => l.avgMargin < 15),
       },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST test B2 migration for a single product — uploads images to B2, returns URLs
+// Does NOT touch the product's DB record or the live Cloudinary pipeline.
+router.post("/:id/test-b2", async (req, res) => {
+  try {
+    const { uploadToB2, b2Enabled } = require('../../utils/b2Utils');
+    const product = await Product.findById(req.params.id).lean();
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    // Use existing Cloudinary images as source (already on CDN, no re-scrape needed)
+    const sourceUrls = (product.images || []).filter(Boolean).slice(0, 8);
+    if (!sourceUrls.length) return res.status(400).json({ error: 'Product has no images to migrate' });
+
+    const asin = (product.url || '').match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
+    const slug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
+    const folder = `tracker-images/${slug}`;
+
+    const b2Urls = [];
+    for (let i = 0; i < sourceUrls.length; i++) {
+      const url = sourceUrls[i];
+      try {
+        const { data: imgBuffer } = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
+        const buf = Buffer.from(imgBuffer);
+        if (buf.length < 500) { console.log(`test-b2: skipping tiny file ${i+1}`); continue; }
+        const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
+        const b2Url = await uploadToB2(buf, fileKey);
+        b2Urls.push(b2Url);
+        console.log(`test-b2: uploaded image ${i+1}/${sourceUrls.length} → ${b2Url}`);
+      } catch (e) {
+        console.error(`test-b2: failed image ${i+1}:`, e.message);
+      }
+    }
+
+    res.json({
+      ok: true,
+      productId: product._id,
+      title: (product.title || '').slice(0, 60),
+      source: 'cloudinary',
+      uploaded: b2Urls.length,
+      total: sourceUrls.length,
+      b2Urls,
+      sampleUrl: b2Urls[0] || null,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

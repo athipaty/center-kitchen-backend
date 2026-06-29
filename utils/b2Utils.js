@@ -1,0 +1,132 @@
+const axios = require('axios');
+const crypto = require('crypto');
+
+let _auth = null;
+
+async function getAuth() {
+  if (_auth && Date.now() < _auth.expiresAt) return _auth;
+  const cred = Buffer.from(`${process.env.B2_KEY_ID}:${process.env.B2_APP_KEY}`).toString('base64');
+  const { data } = await axios.get('https://api.backblazeb2.com/b2api/v3/b2_authorize_account', {
+    headers: { Authorization: `Basic ${cred}` },
+    timeout: 10000,
+  });
+  _auth = {
+    apiUrl:      data.apiInfo.storageApi.apiUrl,
+    authToken:   data.authorizationToken,
+    downloadUrl: data.apiInfo.storageApi.downloadUrl,
+    bucketId:    data.apiInfo.storageApi.bucketId,
+    expiresAt:   Date.now() + 23 * 3600 * 1000,
+  };
+  return _auth;
+}
+
+// Returns the public HTTPS URL for a file key in the images bucket
+function b2PublicUrl(fileKey) {
+  const bucket = process.env.B2_BUCKET; // maesai-pdfs
+  // downloadUrl is e.g. https://f004.backblazeb2.com
+  const base = (_auth?.downloadUrl) || 'https://f004.backblazeb2.com';
+  return `${base}/file/${bucket}/${fileKey}`;
+}
+
+// Upload a Buffer to B2, returns the public URL
+async function uploadToB2(buffer, fileKey, contentType = 'image/jpeg') {
+  const b2 = await getAuth();
+
+  // Each upload needs a fresh one-time upload URL
+  const { data: upData } = await axios.post(`${b2.apiUrl}/b2api/v3/b2_get_upload_url`,
+    { bucketId: b2.bucketId },
+    { headers: { Authorization: b2.authToken }, timeout: 10000 }
+  );
+
+  const sha1 = crypto.createHash('sha1').update(buffer).digest('hex');
+  // B2 requires forward slashes preserved, other chars URL-encoded
+  const encodedName = fileKey.split('/').map(encodeURIComponent).join('/');
+
+  await axios.post(upData.uploadUrl, buffer, {
+    headers: {
+      Authorization:      upData.authorizationToken,
+      'X-Bz-File-Name':   encodedName,
+      'Content-Type':     contentType,
+      'Content-Length':   buffer.length,
+      'X-Bz-Content-Sha1': sha1,
+    },
+    maxBodyLength: 20 * 1024 * 1024,
+    timeout: 30000,
+  });
+
+  return b2PublicUrl(fileKey);
+}
+
+// Server-side copy within B2 (no download bandwidth cost), returns new public URL
+async function copyB2File(sourceFileKey, destFileKey) {
+  const b2 = await getAuth();
+
+  // Need the fileId of the source — list to find it
+  const { data: listData } = await axios.post(`${b2.apiUrl}/b2api/v3/b2_list_file_names`,
+    { bucketId: b2.bucketId, prefix: sourceFileKey, maxFileCount: 1 },
+    { headers: { Authorization: b2.authToken }, timeout: 10000 }
+  );
+  const sourceFile = listData.files?.[0];
+  if (!sourceFile || sourceFile.fileName !== sourceFileKey) {
+    throw new Error(`b2: source file not found: ${sourceFileKey}`);
+  }
+
+  const encodedDest = destFileKey.split('/').map(encodeURIComponent).join('/');
+  const { data: copied } = await axios.post(`${b2.apiUrl}/b2api/v3/b2_copy_file`,
+    { sourceFileId: sourceFile.fileId, fileName: encodedDest },
+    { headers: { Authorization: b2.authToken }, timeout: 15000 }
+  );
+
+  return b2PublicUrl(destFileKey);
+}
+
+// Delete all files under a prefix (mirrors deleteCloudinaryFolder)
+async function deleteB2Prefix(prefix) {
+  if (!prefix || !process.env.B2_KEY_ID) return;
+  try {
+    const b2 = await getAuth();
+    let nextFileName = undefined;
+    let deleted = 0;
+
+    while (true) {
+      const body = { bucketId: b2.bucketId, prefix, maxFileCount: 1000 };
+      if (nextFileName) body.startFileName = nextFileName;
+      const { data } = await axios.post(`${b2.apiUrl}/b2api/v3/b2_list_file_names`,
+        body, { headers: { Authorization: b2.authToken }, timeout: 15000 }
+      );
+      const files = data.files || [];
+      if (!files.length) break;
+
+      for (const f of files) {
+        await axios.post(`${b2.apiUrl}/b2api/v3/b2_delete_file_version`,
+          { fileId: f.fileId, fileName: f.fileName },
+          { headers: { Authorization: b2.authToken }, timeout: 10000 }
+        ).catch(() => {});
+        deleted++;
+      }
+
+      if (data.nextFileName) { nextFileName = data.nextFileName; } else { break; }
+    }
+
+    if (deleted) console.log(`b2: deleted ${deleted} files under ${prefix}`);
+  } catch (e) {
+    console.error(`b2: failed to delete prefix ${prefix}:`, e.message);
+  }
+}
+
+// List public URLs for all files under a prefix (for checking existing uploads)
+async function listB2Files(prefix) {
+  const b2 = await getAuth();
+  const { data } = await axios.post(`${b2.apiUrl}/b2api/v3/b2_list_file_names`,
+    { bucketId: b2.bucketId, prefix, maxFileCount: 50 },
+    { headers: { Authorization: b2.authToken }, timeout: 10000 }
+  );
+  return (data.files || []).map(f => b2PublicUrl(f.fileName));
+}
+
+// Check if B2 image storage is configured
+function b2Enabled() {
+  return !!(process.env.B2_KEY_ID && process.env.B2_APP_KEY && process.env.B2_BUCKET && process.env.B2_IMAGES_ENABLED === 'true');
+}
+
+module.exports = { uploadToB2, copyB2File, deleteB2Prefix, listB2Files, b2PublicUrl, b2Enabled };

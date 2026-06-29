@@ -8,6 +8,7 @@ const EbayToken = require('../models/shared/EbayToken');
 const Product = require('../models/tracker/Product');
 const { bestVariantMatch, calcEbayPrice } = require('../jobs/ebayPriceSync');
 const { deleteCloudinaryFolder, renameCloudinaryImage } = require('../utils/cloudinaryUtils');
+const { b2Enabled, uploadToB2, listB2Files, copyB2File, deleteB2Prefix } = require('../utils/b2Utils');
 
 let _io = null;
 function setIo(socketIo) { _io = socketIo; }
@@ -66,16 +67,76 @@ function upgradeAmazonImageUrl(url) {
   return url;
 }
 
-// ── Upload Amazon images to Cloudinary permanently ─────────────────
+// ── Upload Amazon images to Cloudinary or B2 permanently ───────────
 router.post('/upload-images', async (req, res) => {
   const { imageUrls, slug } = req.body;
   if (!imageUrls?.length || !slug) return res.status(400).json({ error: 'imageUrls and slug required' });
 
+  const folder = `ebay-listings/${slug}`;
+
+  if (b2Enabled()) {
+    // ── B2 path ────────────────────────────────────────────────────
+    let existingUrls = [];
+    try {
+      existingUrls = await listB2Files(folder + '/');
+      const hasGif = existingUrls.some(u => u.endsWith('.gif'));
+      if (existingUrls.length >= imageUrls.length && !hasGif) {
+        console.log(`upload-images: B2 folder ${folder} already has ${existingUrls.length} images — skipping`);
+        return res.json({ cloudinaryUrls: existingUrls, cached: true });
+      }
+      if (hasGif) existingUrls = [];
+    } catch (e) {
+      console.log('upload-images: B2 folder check failed, uploading fresh:', e.message);
+    }
+
+    const startIndex = existingUrls.length;
+    const b2Urls = [...existingUrls];
+
+    for (let i = startIndex; i < imageUrls.length; i++) {
+      const url = imageUrls[i];
+      const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
+      try {
+        // If source is already a B2 tracker-images file, server-side copy — no download cost
+        const isB2TrackerUrl = url.includes('backblazeb2.com') && url.includes('/tracker-images/');
+        if (isB2TrackerUrl) {
+          const srcKey = url.replace(/^https?:\/\/[^/]+\/file\/[^/]+\//, '');
+          const newUrl = await copyB2File(srcKey, fileKey);
+          console.log(`upload-images: B2 copied ${srcKey} → ${fileKey}`);
+          b2Urls.push(newUrl);
+          continue;
+        }
+
+        // Standard path: download and upload to B2
+        const fullResUrl = upgradeAmazonImageUrl(url);
+        let imgBuffer;
+        try {
+          ({ data: imgBuffer } = await axios.get(fullResUrl, {
+            responseType: 'arraybuffer', timeout: 15000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+          }));
+        } catch {
+          ({ data: imgBuffer } = await axios.get(url, {
+            responseType: 'arraybuffer', timeout: 15000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+          }));
+        }
+        const b2Url = await uploadToB2(Buffer.from(imgBuffer), fileKey);
+        b2Urls.push(b2Url);
+      } catch (e) {
+        console.error(`upload-images: B2 failed for ${url}:`, e.message);
+      }
+    }
+
+    if (!b2Urls.length) return res.status(500).json({ error: 'All B2 image uploads failed' });
+
+    deleteB2Prefix(`tracker-images/${slug}/`).catch(() => {});
+    return res.json({ cloudinaryUrls: b2Urls });
+  }
+
+  // ── Cloudinary path ────────────────────────────────────────────────
   const cloud = process.env.CLOUDINARY_CLOUD_NAME;
   const apiKey = process.env.CLOUDINARY_API_KEY;
   const apiSecret = process.env.CLOUDINARY_API_SECRET;
-
-  const folder = `ebay-listings/${slug}`;
 
   // Check what's already in Cloudinary — skip fully if count is sufficient, upload only missing otherwise
   let existingCloudinaryUrls = [];
