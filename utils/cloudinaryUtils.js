@@ -22,4 +22,17 @@ async function deleteCloudinaryFolder(folder) {
   }
 }
 
-module.exports = { deleteCloudinaryFolder };
+async function renameCloudinaryImage(oldPublicId, newPublicId) {
+  if (!process.env.CLOUDINARY_CLOUD_NAME) return null;
+  getClient();
+  try {
+    const result = await cloudinary.uploader.rename(oldPublicId, newPublicId, { overwrite: true });
+    return result.secure_url;
+  } catch (e) {
+    const msg = e.message || (typeof e === 'object' ? JSON.stringify(e).slice(0, 120) : String(e));
+    console.error(`cloudinary: rename ${oldPublicId} → ${newPublicId} failed: ${msg}`);
+    return null;
+  }
+}
+
+module.exports = { deleteCloudinaryFolder, renameCloudinaryImage };

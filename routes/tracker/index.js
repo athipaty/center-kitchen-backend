@@ -515,7 +515,7 @@ async function scraperApiAutoparse(amazonUrl) {
   }
 }
 
-async function fetchAndUploadImages(product, seedImages = [], { forceUpload = false } = {}) {
+async function fetchAndUploadImages(product, seedImages = [], { forceUpload = false, skipSiblings = false } = {}) {
   const crypto = require('crypto');
   let amazonImages = [];
 
@@ -569,8 +569,10 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
           if (Object.keys(update).length) await Product.findByIdAndUpdate(product._id, update);
         } catch {}
 
-        // Seed siblings: customization_options has every variant's swatch + same hiRes shots
-        if (product.groupId && (parsed.customization_options?.Color?.length || 0) > 1) {
+        // Seed siblings: customization_options has every variant's swatch + same hiRes shots.
+        // Skip during auto-list (skipSiblings=true) — the frontend already calls refresh-images
+        // for every variant sequentially, so sibling seeding would cause redundant uploads.
+        if (!skipSiblings && product.groupId && (parsed.customization_options?.Color?.length || 0) > 1) {
           Product.find({ groupId: product.groupId, _id: { $ne: product._id } }).lean().then(siblings => {
             siblings = siblings.filter(s => !s.images?.some(u => u.includes('cloudinary')));
             for (const sib of siblings) {
@@ -606,7 +608,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
           const colorMap = extractColorImagesMap(html);
           const variantGallery = matchColorKey(colorMap, product.variant);
           if (variantGallery && variantGallery.length > amazonImages.length) amazonImages = variantGallery;
-          if (product.groupId && Object.keys(colorMap).length > 1) {
+          if (!skipSiblings && product.groupId && Object.keys(colorMap).length > 1) {
             Product.find({ groupId: product.groupId, _id: { $ne: product._id } }).lean().then(siblings => {
               siblings = siblings.filter(s => !s.images?.some(u => u.includes('cloudinary')));
               for (const sib of siblings) {
@@ -689,28 +691,30 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
   const slug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
   const folder = `tracker-images/${slug}`;
 
-  // Skip upload only if Cloudinary already has >= as many images as we found on Amazon
+  // Check what's already in Cloudinary — skip fully if count is sufficient, upload only missing otherwise
+  let existingUrls = [];
   try {
     const existing = await axios.get(
       `https://api.cloudinary.com/v1_1/${cloud}/resources/image?prefix=${encodeURIComponent(folder + '/')}&max_results=50&type=upload`,
       { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
     );
-    const existingUrls = (existing.data.resources || []).map(r => r.secure_url).filter(Boolean);
+    existingUrls = (existing.data.resources || []).map(r => r.secure_url).filter(Boolean);
     if (existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
-      // Always skip if existing count >= new count — never downgrade images even on forceUpload.
-      // forceUpload only matters when the new scrape found MORE images than what's stored.
+      // Already have enough images — never downgrade even on forceUpload.
       console.log(`fetchAndUploadImages: folder ${folder} already has ${existingUrls.length}/${amazonImages.length} images — skipping upload`);
       await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
       return existingUrls;
     }
     if (existingUrls.length > 0) {
-      console.log(`fetchAndUploadImages: folder ${folder} has ${existingUrls.length} but Amazon has ${amazonImages.length} — re-uploading all`);
+      console.log(`fetchAndUploadImages: folder ${folder} has ${existingUrls.length}/${amazonImages.length} — uploading ${amazonImages.length - existingUrls.length} new images`);
     }
   } catch {}
 
-  const cloudinaryUrls = [];
+  // Start from where we left off — only upload images not already in Cloudinary
+  const startIndex = existingUrls.length;
+  const cloudinaryUrls = [...existingUrls];
 
-  for (let i = 0; i < amazonImages.length; i++) {
+  for (let i = startIndex; i < amazonImages.length; i++) {
     try {
       const fullResUrl = amazonImages[i].replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
       let imgBuffer;
@@ -745,7 +749,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
     }
   }
 
-  if (cloudinaryUrls.length) {
+  if (cloudinaryUrls.length > existingUrls.length) {
     await Product.findByIdAndUpdate(product._id, { image: cloudinaryUrls[0], images: cloudinaryUrls, cloudinaryFolder: folder });
     console.log(`fetchAndUploadImages: saved ${cloudinaryUrls.length} Cloudinary images for ${product._id}`);
   }
@@ -815,7 +819,7 @@ router.post("/:id/refresh-images", async (req, res) => {
     // Step 2: Amazon HTML scrape + Cloudinary — always run so we get the full
     // per-variant gallery (6-12 images). Keepa only gives 1 swatch per child ASIN;
     // the Amazon page has all the colour-specific product photos.
-    const cloudinaryUrls = await fetchAndUploadImages(product, images, { forceUpload: true });
+    const cloudinaryUrls = await fetchAndUploadImages(product, images, { forceUpload: true, skipSiblings: true });
     if (cloudinaryUrls?.length) {
       return res.json({ ok: true, source: 'amazon+cloudinary', count: cloudinaryUrls.length, image: cloudinaryUrls[0], images: cloudinaryUrls, specs: info.specs || {}, bullets: info.bullets || [] });
     }
