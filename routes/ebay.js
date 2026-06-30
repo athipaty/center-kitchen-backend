@@ -4415,6 +4415,116 @@ router.post('/batch-optimize', async (req, res) => {
   if (_io) _io.emit('ebay:optimize:done', { total, done });
 });
 
+// ── Bulk revise descriptions with current B2 image URLs ───────────────────────
+// Targets every active eBay listing, regenerates description HTML using the
+// product's current images (B2 URLs after migration), and pushes via ReviseFixedPriceItem.
+// Trigger once after the Cloudinary→B2 migration + rescrape are complete.
+// POST /api/ebay/bulk-revise-descriptions
+router.post('/bulk-revise-descriptions', async (req, res) => {
+  const BASE = `http://localhost:${process.env.PORT || 5000}`;
+
+  const products = await Product.find({
+    ebayListingId: { $exists: true, $ne: null },
+    images: { $exists: true, $not: { $size: 0 } },
+  }).lean();
+
+  // Group by listingId; for each listing pick the variant with the most specs/images as primary
+  const groups = {};
+  for (const p of products) {
+    if (!groups[p.ebayListingId]) groups[p.ebayListingId] = [];
+    groups[p.ebayListingId].push(p);
+  }
+  const listingIds = Object.keys(groups);
+  const total = listingIds.length;
+
+  res.json({ started: true, total });
+
+  // Process in background — concurrency 2 (each call costs Anthropic + eBay API)
+  const sem = { running: 0, queue: [] };
+  async function withLimit(fn) {
+    if (sem.running >= 2) await new Promise(r => sem.queue.push(r));
+    sem.running++;
+    try { return await fn(); } finally {
+      sem.running--;
+      if (sem.queue.length) sem.queue.shift()();
+    }
+  }
+
+  let done = 0, revised = 0, failed = 0;
+
+  await Promise.all(listingIds.map(listingId => withLimit(async () => {
+    const variants = groups[listingId];
+    // Pick active variant with most data as primary
+    const primary = variants
+      .filter(v => v.status === 'active')
+      .sort((a, b) => (Object.keys(b.specs || {}).length + (b.images?.length || 0)) - (Object.keys(a.specs || {}).length + (a.images?.length || 0)))[0]
+      || variants[0];
+
+    const imageUrls = (primary.images?.length ? primary.images : (primary.image ? [primary.image] : []))
+      .filter(u => !u.includes('res.cloudinary.com')); // skip any Cloudinary URLs still in DB
+
+    if (!imageUrls.length) {
+      done++;
+      console.log(`bulk-revise-descriptions [${done}/${total}] ${listingId} — no B2 images yet, skipping`);
+      if (_io) _io.emit('ebay:bulk-desc:progress', { done, total, listingId, ok: false, skipped: true });
+      return;
+    }
+
+    try {
+      const token = await getAccessToken();
+
+      // Generate fresh description HTML with current B2 image URLs
+      const descRes = await axios.post(`${BASE}/api/ebay/generate-description`, {
+        title: primary.title,
+        specs: primary.specs || {},
+        imageUrls,
+        bullets: primary.bullets || [],
+        upc: primary.upc,
+        variant: primary.variant,
+      });
+      const html = descRes.data.html;
+      if (!html) throw new Error('generate-description returned no HTML');
+
+      // Push description to eBay
+      const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+      const body = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+        ${creds}
+        <Item>
+          <ItemID>${escXml(listingId)}</ItemID>
+          <Description><![CDATA[${html}]]></Description>
+        </Item>
+      </ReviseFixedPriceItemRequest>`;
+
+      const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll', body, {
+        headers: {
+          'X-EBAY-API-SITEID': '0',
+          'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+          'X-EBAY-API-IAF-TOKEN': token,
+          'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem',
+          'Content-Type': 'text/xml',
+        },
+      });
+
+      const ok = !/<Ack>Failure<\/Ack>/.test(xml);
+      if (!ok) {
+        const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
+        throw new Error(msg);
+      }
+
+      done++; revised++;
+      console.log(`bulk-revise-descriptions [${done}/${total}] ${listingId} ✓ (${imageUrls.length} B2 images)`);
+      if (_io) _io.emit('ebay:bulk-desc:progress', { done, total, listingId, ok: true, title: primary.title });
+    } catch (e) {
+      done++; failed++;
+      console.error(`bulk-revise-descriptions [${done}/${total}] ${listingId} ✗:`, e.message);
+      if (_io) _io.emit('ebay:bulk-desc:progress', { done, total, listingId, ok: false, error: e.message });
+    }
+  })));
+
+  console.log(`bulk-revise-descriptions done — ${revised} revised, ${failed} failed`);
+  if (_io) _io.emit('ebay:bulk-desc:done', { total, revised, failed });
+});
+
 // Manual restock trigger — catches any sales missed by the cron window
 router.post('/restock-now', async (req, res) => {
   try {
