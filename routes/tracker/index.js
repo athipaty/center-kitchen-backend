@@ -858,22 +858,22 @@ router.post("/:id/refresh-images", async (req, res) => {
     const image  = info.image || images[0] || null;
 
     // Save specs/bullets from Keepa — but only overwrite images if product has
-    // no Cloudinary images yet (avoid clobbering good Cloudinary URLs with Keepa CDN swatches)
-    const hasCloudinaryImages = product.images?.some(u => u.includes('cloudinary'));
+    // no hosted images yet (avoid clobbering good B2/Cloudinary URLs with Keepa CDN swatches)
+    const hasHostedImages = product.images?.some(u => u.includes('cloudinary') || u.includes('backblazeb2.com'));
     if (image) {
       const update = {};
-      if (!hasCloudinaryImages) { update.image = image; update.images = images; }
+      if (!hasHostedImages) { update.image = image; update.images = images; }
       if (info.specs && Object.keys(info.specs).length) update.specs = info.specs;
       if (info.bullets?.length) update.bullets = info.bullets;
       if (Object.keys(update).length) await Product.findByIdAndUpdate(product._id, update);
     }
 
-    // Step 2: Amazon HTML scrape + Cloudinary — always run so we get the full
+    // Step 2: Amazon HTML scrape + upload — always run so we get the full
     // per-variant gallery (6-12 images). Keepa only gives 1 swatch per child ASIN;
     // the Amazon page has all the colour-specific product photos.
-    const cloudinaryUrls = await fetchAndUploadImages(product, images, { forceUpload: true, skipSiblings: true });
-    if (cloudinaryUrls?.length) {
-      return res.json({ ok: true, source: 'amazon+cloudinary', count: cloudinaryUrls.length, image: cloudinaryUrls[0], images: cloudinaryUrls, specs: info.specs || {}, bullets: info.bullets || [] });
+    const uploadedUrls = await fetchAndUploadImages(product, images, { forceUpload: true, skipSiblings: true });
+    if (uploadedUrls?.length) {
+      return res.json({ ok: true, source: 'amazon+storage', count: uploadedUrls.length, image: uploadedUrls[0], images: uploadedUrls, specs: info.specs || {}, bullets: info.bullets || [] });
     }
 
     // Keepa-only fallback if Amazon scrape found nothing new

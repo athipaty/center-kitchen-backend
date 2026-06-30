@@ -4,6 +4,7 @@ const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
 const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice } = require("./ebayPriceSync");
 const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
+const { b2Enabled, listB2Files, deleteB2Prefix } = require("../utils/b2Utils");
 
 let io = null;
 
@@ -761,6 +762,46 @@ async function runCloudinaryCleanup() {
     console.log(`cloudinaryCleanup: done — ${deleted} deleted, ${failed} failed`);
   } catch (e) {
     console.error('cloudinaryCleanup: error:', e.message);
+  }
+
+  // B2 orphan cleanup — mirrors the Cloudinary pass above
+  if (!b2Enabled()) return;
+  try {
+    const products = await Product.find({}, { _id: 1, url: 1, cloudinaryFolder: 1 }).lean();
+    const activeFolders = new Set();
+    for (const p of products) {
+      if (p.cloudinaryFolder) activeFolders.add(p.cloudinaryFolder);
+      if (!p.cloudinaryFolder || p.cloudinaryFolder.startsWith('tracker-images/')) {
+        const asin = (p.url || '').match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || p._id.toString();
+        const slug = `${p._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
+        activeFolders.add(`tracker-images/${slug}`);
+      }
+    }
+
+    const b2Orphans = new Set();
+    for (const prefix of ['tracker-images/', 'ebay-listings/']) {
+      const urls = await listB2Files(prefix).catch(() => []);
+      for (const url of urls) {
+        const key = url.replace(/^https?:\/\/[^/]+\/file\/[^/]+\//, '');
+        const parts = key.split('/');
+        if (parts.length >= 2) {
+          const folder = parts[0] + '/' + parts[1];
+          if (!activeFolders.has(folder)) b2Orphans.add(folder);
+        }
+      }
+    }
+
+    if (!b2Orphans.size) {
+      console.log('b2Cleanup: no orphaned prefixes found');
+      return;
+    }
+    console.log(`b2Cleanup: deleting ${b2Orphans.size} orphaned prefixes`);
+    for (const folder of b2Orphans) {
+      await deleteB2Prefix(folder + '/').catch(e => console.warn(`b2Cleanup: failed ${folder}:`, e.message));
+    }
+    console.log('b2Cleanup: done');
+  } catch (e) {
+    console.error('b2Cleanup: error:', e.message);
   }
 }
 
