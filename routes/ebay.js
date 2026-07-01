@@ -673,8 +673,9 @@ ${JSON.stringify(missing)}`;
     for (const [name, value] of Object.entries(filled)) {
       if (!value || aspects[name]) continue;
       const val = String(value).slice(0, 65);
-      // Never let AI set MPN to a barcode value
+      // Never let AI set MPN to a barcode value or placeholder
       if (name === 'MPN' && /^\d{8,14}$/.test(val.trim())) continue;
+      if (name === 'MPN' && MPN_PLACEHOLDERS.has(val.trim().toLowerCase())) continue;
       const info = catAspects[name];
       if (info?.values?.length) {
         const match = info.values.find(v => v.toLowerCase() === val.toLowerCase());
@@ -688,6 +689,10 @@ ${JSON.stringify(missing)}`;
     console.log('enrichAspectsWithAI failed:', e.message);
   }
 }
+
+// Amazon sometimes lists a literal placeholder like "No" instead of omitting the field
+// when a product has no model number — eBay rejects these as invalid MPN values.
+const MPN_PLACEHOLDERS = new Set(['no', 'n/a', 'na', 'none', 'null', 'unknown', '-', '--', 'not applicable', 'tbd']);
 
 // ── Create listing ─────────────────────────────────────────────────
 function buildAspects(specs) {
@@ -705,9 +710,10 @@ function buildAspects(specs) {
   for (const [k, label] of Object.entries(MAP)) {
     if (!specs[k]) continue;
     const val = String(specs[k]).slice(0, 65);
-    // Skip MPN if it looks like a barcode or random internal code — eBay rejects both
+    // Skip MPN if it looks like a barcode, random internal code, or placeholder — eBay rejects all three
     if (label === 'MPN' && /^\d{8,14}$/.test(val.trim())) continue;       // all-digit barcode
     if (label === 'MPN' && /^[A-Z0-9]{6,12}$/.test(val.trim())) continue; // random all-caps code (e.g. RIDOPXRA)
+    if (label === 'MPN' && MPN_PLACEHOLDERS.has(val.trim().toLowerCase())) continue; // e.g. "No", "N/A"
     aspects[label] = [val];
   }
   return aspects;
