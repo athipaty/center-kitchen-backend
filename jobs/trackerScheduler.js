@@ -249,20 +249,35 @@ async function checkDeadListings() {
   }
 }
 
+let _dueChecksRunning = false;
+
 async function runDueChecks() {
-  await checkDeadListings();
-  const due = await Product.find({ nextCheck: { $lte: new Date() } });
-  if (!due.length) return;
-
-  if (io) io.emit("tracker:check:start", { count: due.length, time: new Date().toISOString() });
-
-  const results = [];
-  const syncedListings = new Set();
-  for (const p of due) {
-    results.push(await checkProduct(p, syncedListings));
+  // At larger catalog sizes a batch of due products can take longer than the 5-minute
+  // cron interval to process (each eBay sync is throttled to 1 per 5s). Without this
+  // guard the next tick would start a second pass over overlapping products, causing
+  // duplicate eBay API calls and racy p.save() writes.
+  if (_dueChecksRunning) {
+    console.warn('runDueChecks: previous run still in progress — skipping this tick');
+    return;
   }
+  _dueChecksRunning = true;
+  try {
+    await checkDeadListings();
+    const due = await Product.find({ nextCheck: { $lte: new Date() } });
+    if (!due.length) return;
 
-  if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
+    if (io) io.emit("tracker:check:start", { count: due.length, time: new Date().toISOString() });
+
+    const results = [];
+    const syncedListings = new Set();
+    for (const p of due) {
+      results.push(await checkProduct(p, syncedListings));
+    }
+
+    if (io) io.emit("tracker:check:done", { time: new Date().toISOString(), results });
+  } finally {
+    _dueChecksRunning = false;
+  }
 }
 
 async function runWeeklyOptimize() {
@@ -340,11 +355,13 @@ async function runOrphanCleanup() {
       'Content-Type': 'text/xml',
     };
 
-    // Fetch ALL active eBay listings with watch counts — paginate until no more
+    // Fetch ALL active eBay listings with watch counts — paginate until no more.
+    // Page cap is just a safety net against a runaway loop; the real stop condition
+    // is HasMoreItems below. At 200 entries/page this covers 40,000 listings.
     const allEbayIds = [];
     const watchCountMap = {}; // listingId → watchCount
-    for (let page = 1; page <= 10; page++) {
-      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
+    for (let page = 1; page <= 200; page++) {
+      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
       const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling' } });
       if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
       const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
@@ -524,11 +541,12 @@ async function runRelistUnsoldWithEngagement() {
     };
     const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
 
-    // Fetch unsold listings (ended in the last 60 days) with watch counts
+    // Fetch unsold listings (ended in the last 60 days) with watch counts.
+    // Page cap is a safety net, not the stop condition — see HasMoreItems below.
     const unsoldIds = [];
     const watchCounts = {};
-    for (let page = 1; page <= 5; page++) {
-      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<UnsoldList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination><DurationInDays>60</DurationInDays></UnsoldList></GetMyeBaySellingRequest>`;
+    for (let page = 1; page <= 200; page++) {
+      const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<UnsoldList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination><DurationInDays>60</DurationInDays></UnsoldList></GetMyeBaySellingRequest>`;
       const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling' } });
       if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
       const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
