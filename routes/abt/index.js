@@ -625,6 +625,43 @@ router.get('/egp-rss', async (req, res) => {
   setImmediate(() => bgFetchEgp(anounceType).catch(() => {}))
 })
 
+// Nationwide e-GP feed — live pass-through, no department filter, no DB caching.
+// Kept separate from /egp-rss so it never touches the Maesai-scoped cache/cron.
+router.get('/egp-rss-national', async (req, res) => {
+  const anounceType = req.query.anounceType || 'D0'
+  const cheerio = require('cheerio')
+
+  try {
+    const xml = await fetchEgpXml({ anounceType })
+    const $ = cheerio.load(xml, { xmlMode: true })
+
+    const channelTitle = $('channel > title').first().text()
+    const channelDesc  = $('channel > description').first().text()
+    const items = []
+    $('item').each((_, el) => {
+      items.push({
+        title: $(el).find('title').text(),
+        link:  $(el).find('link').text(),
+        date:  $(el).find('pubDate').text() ? new Date($(el).find('pubDate').text()) : null,
+        desc:  $(el).find('description').text(),
+      })
+    })
+
+    const allText = [channelTitle, channelDesc, ...items.map(i => i.title)].join(' ')
+    if (isMaintenanceText(allText) || (items.length > 0 && items.every(i => isMaintenanceText(i.title)))) {
+      return res.status(503).json({
+        maintenance: true,
+        notice: items.map(i => i.title).filter(Boolean).join(' — ') || channelTitle || 'ระบบ e-GP ไม่พร้อมให้บริการในขณะนี้',
+        hours: '17:01–08:59 น.',
+      })
+    }
+
+    res.json({ items: items.slice(0, 200), fetchedAt: new Date().toISOString() })
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'ไม่สามารถเชื่อมต่อระบบ e-GP ได้' })
+  }
+})
+
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // STAFF
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
