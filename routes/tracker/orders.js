@@ -105,6 +105,7 @@ router.post("/:id/notify-buyer", async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: "order not found" });
+    if (!order.trackingNumber) return res.status(400).json({ error: "add a tracking number before notifying the buyer" });
 
     const buyerFirstName = order.shippingAddress?.name?.trim().split(' ')[0] || null;
     const messageText = `Hi${buyerFirstName ? ` ${buyerFirstName}` : ''}! Just letting you know your order has been delivered 📦 ` +
