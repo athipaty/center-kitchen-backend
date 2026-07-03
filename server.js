@@ -103,6 +103,7 @@ app.post('/api/tracker',            addProductLimiter);
 app.post('/api/tracker/check',      checkLimiter);
 app.post('/api/tracker/check/:id',  checkLimiter);
 app.use('/api/tracker', require('./routes/tracker'));
+app.use('/api/orders', require('./routes/tracker/orders'));
 
 // --- eBay ---
 const ebayRouter = require('./routes/ebay');

@@ -2,6 +2,7 @@ const cron = require("node-cron");
 const axios = require("axios");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
+const Order = require("../models/tracker/Order");
 const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice } = require("./ebayPriceSync");
 const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 const { b2Enabled, listB2Files, deleteB2Prefix } = require("../utils/b2Utils");
@@ -648,6 +649,54 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
     const { data: ordersXml } = await tradingPost('GetOrders',
       `<GetOrdersRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<CreateTimeFrom>${from}</CreateTimeFrom><CreateTimeTo>${to}</CreateTimeTo><OrderStatus>All</OrderStatus><DetailLevel>ReturnAll</DetailLevel></GetOrdersRequest>`
     );
+
+    // ── Capture full order + buyer/shipping details for the fulfillment tracker ──
+    // Reuses the GetOrders response above rather than making a second eBay call.
+    try {
+      const decodeXmlEntities = s => (s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+      const orderBlocksFull = [...ordersXml.matchAll(/<Order>([\s\S]*?)<\/Order>/g)];
+      for (const [, orderXml] of orderBlocksFull) {
+        const ebayOrderId = orderXml.match(/<OrderID>([\s\S]*?)<\/OrderID>/)?.[1];
+        if (!ebayOrderId) continue;
+
+        const buyerUserId = orderXml.match(/<BuyerUserID>([\s\S]*?)<\/BuyerUserID>/)?.[1] || null;
+        const createTimeEbay = orderXml.match(/<CreatedTime>([\s\S]*?)<\/CreatedTime>/)?.[1];
+        const addrXml = orderXml.match(/<ShippingAddress>([\s\S]*?)<\/ShippingAddress>/)?.[1] || '';
+        const shippingAddress = {
+          name: decodeXmlEntities(addrXml.match(/<Name>([\s\S]*?)<\/Name>/)?.[1]) || null,
+          street1: decodeXmlEntities(addrXml.match(/<Street1>([\s\S]*?)<\/Street1>/)?.[1]) || null,
+          street2: decodeXmlEntities(addrXml.match(/<Street2>([\s\S]*?)<\/Street2>/)?.[1]) || null,
+          cityName: decodeXmlEntities(addrXml.match(/<CityName>([\s\S]*?)<\/CityName>/)?.[1]) || null,
+          stateOrProvince: decodeXmlEntities(addrXml.match(/<StateOrProvince>([\s\S]*?)<\/StateOrProvince>/)?.[1]) || null,
+          postalCode: addrXml.match(/<PostalCode>([\s\S]*?)<\/PostalCode>/)?.[1] || null,
+          country: addrXml.match(/<Country>([\s\S]*?)<\/Country>/)?.[1] || null,
+          phone: addrXml.match(/<Phone>([\s\S]*?)<\/Phone>/)?.[1] || null,
+        };
+
+        const txBlocksFull = [...orderXml.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)];
+        for (const [, tx] of txBlocksFull) {
+          const ebayItemId = tx.match(/<ItemID>(\d+)<\/ItemID>/)?.[1] || null;
+          if (!ebayItemId) continue;
+          const title = decodeXmlEntities(tx.match(/<Title>([\s\S]*?)<\/Title>/)?.[1]) || null;
+          const variationValue = decodeXmlEntities(tx.match(/<Variation>[\s\S]*?<Value>([\s\S]*?)<\/Value>/)?.[1]) || null;
+          const quantity = parseInt(tx.match(/<QuantityPurchased>(\d+)<\/QuantityPurchased>/)?.[1] || '1', 10);
+          const price = parseFloat(tx.match(/<TransactionPrice[^>]*>([\d.]+)<\/TransactionPrice>/)?.[1] || '0') || null;
+
+          const result = await Order.findOneAndUpdate(
+            { ebayOrderId, ebayItemId, variationValue },
+            { $setOnInsert: {
+              ebayOrderId, ebayItemId, title, variationValue, quantity, price,
+              buyerUserId, shippingAddress,
+              createTimeEbay: createTimeEbay ? new Date(createTimeEbay) : null,
+            } },
+            { upsert: true, new: true, rawResult: true }
+          );
+          if (result.lastErrorObject?.upserted && io) io.emit('tracker:order:new', { order: result.value });
+        }
+      }
+    } catch (e) {
+      console.error('order-capture: error:', e.message);
+    }
 
     // Extract (ItemID, VariationSpecifics) pairs from all transactions
     const toRestock = []; // [{ itemId, variationSpecifics }]
