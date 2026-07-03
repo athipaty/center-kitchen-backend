@@ -31,7 +31,6 @@ const orderSchema = new mongoose.Schema(
     amazonOrderId: { type: String, default: null },
     trackingNumber: { type: String, default: null },
     carrier: { type: String, default: null },
-    deliveryPhotoUrl: { type: String, default: null },
     buyerMessageSent: { type: Boolean, default: false },
     buyerMessageText: { type: String, default: null },
     createTimeEbay: { type: Date, default: null },

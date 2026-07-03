@@ -1,32 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
-const multer = require("multer");
-const upload = multer({ storage: multer.memoryStorage() });
 
 const Order = require("../../models/tracker/Order");
 const Product = require("../../models/tracker/Product");
 const { getAccessToken, bestVariantMatch } = require("../../jobs/ebayPriceSync");
-const { uploadToB2 } = require("../../utils/b2Utils");
-
-function tradingPost(token, callName, body) {
-  return axios.post('https://api.ebay.com/ws/api.dll',
-    `<?xml version="1.0" encoding="utf-8"?>${body}`,
-    {
-      headers: {
-        'X-EBAY-API-SITEID': '0',
-        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-        'X-EBAY-API-CALL-NAME': callName,
-        'X-EBAY-API-IAF-TOKEN': token,
-        'Content-Type': 'text/xml',
-      },
-    }
-  );
-}
-
-function escapeXml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 // GET all orders — newest eBay sale first
 router.get("/", async (req, res) => {
@@ -120,61 +98,23 @@ router.patch("/:id/tracking", async (req, res) => {
   }
 });
 
-// POST upload the delivery photo (e.g. from the courier's "delivered" photo)
-router.post("/:id/delivery-photo", upload.single("photo"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "photo file is required" });
-    const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ error: "order not found" });
-
-    const ext = (req.file.mimetype || 'image/jpeg').split('/')[1] || 'jpg';
-    const url = await uploadToB2(req.file.buffer, `delivery-photos/${order._id}.${ext}`, req.file.mimetype);
-    order.deliveryPhotoUrl = url;
-    await order.save();
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST notify the buyer that their item was delivered, with the delivery photo.
-// Best-effort: eBay's buyer-messaging surface is legacy (Trading API) and finicky, so on
-// failure we still return the composed message text so the UI can offer a manual copy/paste.
+// POST compose a thank-you message for the buyer — just generates the text for you
+// to copy and paste into eBay's message center yourself (eBay's buyer-messaging API
+// is legacy and unreliable, so this skips trying to auto-send entirely).
 router.post("/:id/notify-buyer", async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: "order not found" });
-    if (!order.buyerUserId) return res.status(400).json({ error: "no buyer on this order" });
 
-    const messageText = `Hi! Your package has arrived 📦 ` +
-      (order.deliveryPhotoUrl ? `Here's a photo of it delivered: ${order.deliveryPhotoUrl} ` : '') +
-      `Thank you so much for your order! If you have a moment, we'd really appreciate your feedback 🙏`;
+    const buyerFirstName = order.shippingAddress?.name?.trim().split(' ')[0] || null;
+    const messageText = `Hi${buyerFirstName ? ` ${buyerFirstName}` : ''}! Just letting you know your order has been delivered 📦 ` +
+      `Thanks so much for shopping with us — we'd love to hear your feedback! 🙏`;
+
     order.buyerMessageText = messageText;
-
-    let sent = false;
-    try {
-      const token = await getAccessToken();
-      const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
-      const { data: xml } = await tradingPost(token, 'AddMemberMessageAAQToPartner',
-        `<AddMemberMessagesAAQToPartnerRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}` +
-        `<ItemID>${order.ebayItemId}</ItemID>` +
-        `<MemberMessage>` +
-        `<Body>${escapeXml(messageText)}</Body>` +
-        `<QuestionType>General</QuestionType>` +
-        `<RecipientID>${escapeXml(order.buyerUserId)}</RecipientID>` +
-        `<DisplayToPublic>false</DisplayToPublic>` +
-        `</MemberMessage>` +
-        `</AddMemberMessagesAAQToPartnerRequest>`
-      );
-      sent = !/<Ack>Failure<\/Ack>/.test(xml);
-    } catch (e) {
-      sent = false;
-    }
-
-    order.buyerMessageSent = sent;
-    if (sent) order.status = 'notified';
+    order.buyerMessageSent = true;
+    order.status = 'notified';
     await order.save();
-    res.json({ sent, messageText, order });
+    res.json({ messageText, order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
