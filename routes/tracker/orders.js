@@ -28,12 +28,10 @@ function escapeXml(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// GET all orders — needs_purchase first, then newest first
+// GET all orders — newest eBay sale first
 router.get("/", async (req, res) => {
   try {
-    const orders = await Order.find().sort({ status: 1, createdAt: -1 });
-    const rank = { needs_purchase: 0, purchased: 1, shipped: 2, notified: 3 };
-    orders.sort((a, b) => (rank[a.status] - rank[b.status]) || (b.createdAt - a.createdAt));
+    const orders = await Order.find().sort({ createTimeEbay: -1, createdAt: -1 });
 
     // Attach the matching Amazon product URL for each order's item/variant, same
     // matching logic used to restock the right variant after a sale.
