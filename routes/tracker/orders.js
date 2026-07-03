@@ -36,7 +36,7 @@ router.get("/", async (req, res) => {
     // Attach the matching Amazon product URL for each order's item/variant, same
     // matching logic used to restock the right variant after a sale.
     const itemIds = [...new Set(orders.map(o => o.ebayItemId).filter(Boolean))];
-    const products = await Product.find({ ebayListingId: { $in: itemIds } }, { url: 1, ebayListingId: 1, variant: 1 }).lean();
+    const products = await Product.find({ ebayListingId: { $in: itemIds } }, { url: 1, ebayListingId: 1, variant: 1, image: 1 }).lean();
     const productsByListing = {};
     for (const p of products) (productsByListing[p.ebayListingId] ||= []).push(p);
 
@@ -45,7 +45,7 @@ router.get("/", async (req, res) => {
       const match = candidates.length
         ? (o.variationValue ? bestVariantMatch(candidates, o.variationValue) : candidates[0])
         : null;
-      return { ...o.toObject(), amazonUrl: match?.url || null };
+      return { ...o.toObject(), amazonUrl: match?.url || null, productImage: match?.image || null };
     });
 
     res.json(results);
