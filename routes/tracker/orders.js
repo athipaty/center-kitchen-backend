@@ -54,6 +54,17 @@ router.get("/", async (req, res) => {
   }
 });
 
+// DELETE remove an order from the list once it's fully handled
+router.delete("/:id", async (req, res) => {
+  try {
+    const order = await Order.findByIdAndDelete(req.params.id);
+    if (!order) return res.status(404).json({ error: "order not found" });
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PATCH mark an order as purchased on Amazon
 router.patch("/:id/purchased", async (req, res) => {
   try {
