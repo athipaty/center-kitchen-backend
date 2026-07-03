@@ -7,7 +7,6 @@ const EbayToken = require('../models/shared/EbayToken');
 
 const Product = require('../models/tracker/Product');
 const { bestVariantMatch, calcEbayPrice } = require('../jobs/ebayPriceSync');
-const { deleteCloudinaryFolder, renameCloudinaryImage } = require('../utils/cloudinaryUtils');
 const { b2Enabled, uploadToB2, listB2Files, copyB2File, deleteB2Prefix } = require('../utils/b2Utils');
 
 let _io = null;
@@ -67,7 +66,7 @@ function upgradeAmazonImageUrl(url) {
   return url;
 }
 
-// ── Upload Amazon images to Cloudinary or B2 permanently ───────────
+// ── Upload Amazon images to B2 permanently ──────────────────────────
 router.post('/upload-images', async (req, res) => {
   const { imageUrls, slug } = req.body;
   if (!imageUrls?.length || !slug) return res.status(400).json({ error: 'imageUrls and slug required' });
@@ -133,101 +132,7 @@ router.post('/upload-images', async (req, res) => {
     return res.json({ cloudinaryUrls: b2Urls });
   }
 
-  // ── Cloudinary path ────────────────────────────────────────────────
-  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
-
-  // Check what's already in Cloudinary — skip fully if count is sufficient, upload only missing otherwise
-  let existingCloudinaryUrls = [];
-  let hasGif = false;
-  try {
-    const searchRes = await axios.get(
-      `https://api.cloudinary.com/v1_1/${cloud}/resources/image?prefix=${encodeURIComponent(folder + '/')}&max_results=50&type=upload`,
-      { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
-    );
-    existingCloudinaryUrls = (searchRes.data.resources || []).map(r => r.secure_url).filter(Boolean);
-    hasGif = existingCloudinaryUrls.some(u => u.endsWith('.gif'));
-    if (existingCloudinaryUrls.length >= imageUrls.length && !hasGif) {
-      console.log(`upload-images: folder ${folder} already has ${existingCloudinaryUrls.length} images — skipping upload`);
-      return res.json({ cloudinaryUrls: existingCloudinaryUrls, cached: true });
-    }
-    if (hasGif) {
-      existingCloudinaryUrls = []; // force full re-upload when GIFs are present
-      console.log(`upload-images: folder ${folder} has GIF placeholders — forcing re-upload`);
-    } else if (existingCloudinaryUrls.length > 0) {
-      console.log(`upload-images: folder ${folder} has ${existingCloudinaryUrls.length}/${imageUrls.length} — uploading ${imageUrls.length - existingCloudinaryUrls.length} new images`);
-    }
-  } catch (e) {
-    console.log('upload-images: folder check failed, uploading fresh:', e.message);
-  }
-
-  // Start from where we left off — only upload images not already in Cloudinary
-  const startIndex = existingCloudinaryUrls.length;
-  const cloudinaryUrls = [...existingCloudinaryUrls];
-
-  for (let i = startIndex; i < imageUrls.length; i++) {
-    const url = imageUrls[i];
-    const publicId = `${slug}-${String(i + 1).padStart(2, '0')}`;
-    try {
-      // Fix: if the source is already a tracker-images Cloudinary asset, rename it instead
-      // of downloading + re-uploading — saves transformation credits and bandwidth.
-      const isTrackerUrl = url.includes('res.cloudinary.com') && url.includes('/tracker-images/');
-      if (isTrackerUrl) {
-        const m = url.match(/\/image\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-z]+)?$/i);
-        const oldPublicId = m?.[1];
-        if (oldPublicId) {
-          const newUrl = await renameCloudinaryImage(oldPublicId, `${folder}/${publicId}`);
-          if (newUrl) {
-            console.log(`upload-images: renamed ${oldPublicId} → ${folder}/${publicId}`);
-            cloudinaryUrls.push(newUrl);
-            continue;
-          }
-        }
-      }
-
-      // Standard path: download from Amazon (or any non-Cloudinary URL) and upload
-      const fullResUrl = upgradeAmazonImageUrl(url);
-      let imgBuffer;
-      try {
-        ({ data: imgBuffer } = await axios.get(fullResUrl, {
-          responseType: 'arraybuffer', timeout: 15000,
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-        }));
-        if (fullResUrl !== url) console.log(`upload-images: upgraded ${url.split('/').pop()} → full-res (${(imgBuffer.length / 1024).toFixed(0)} KB)`);
-      } catch {
-        ({ data: imgBuffer } = await axios.get(url, {
-          responseType: 'arraybuffer', timeout: 15000,
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-        }));
-      }
-
-      const timestamp = Math.floor(Date.now() / 1000);
-      const toSign = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
-      const signature = crypto.createHash('sha1').update(toSign).digest('hex');
-
-      const uploadParams = new URLSearchParams({
-        file: `data:image/jpeg;base64,${Buffer.from(imgBuffer).toString('base64')}`,
-        api_key: apiKey, timestamp: String(timestamp), signature, folder, public_id: publicId,
-      });
-
-      const { data: uploaded } = await axios.post(
-        `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
-        uploadParams.toString(),
-        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
-      );
-      cloudinaryUrls.push(uploaded.secure_url);
-    } catch (e) {
-      console.error(`upload-images: failed for ${url}:`, e.response?.data || e.message);
-    }
-  }
-
-  if (!cloudinaryUrls.length) return res.status(500).json({ error: 'All image uploads failed' });
-
-  // tracker-images/ is now redundant — ebay-listings/ has the canonical copies.
-  deleteCloudinaryFolder(`tracker-images/${slug}`).catch(() => {});
-
-  res.json({ cloudinaryUrls });
+  res.status(500).json({ error: 'B2 image storage is not configured (B2_IMAGES_ENABLED)' });
 });
 
 function getCached(key) {

@@ -1,23 +1,11 @@
 ﻿const express = require("express");
 const multer = require("multer");
-const cloudinary = require("cloudinary").v2;
-const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const Recipe = require("../../models/recipe/Recipe");
+const { uploadToB2 } = require("../../utils/b2Utils");
 
 const router = express.Router();
 
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: { folder: "sgo-recipes" },
-});
-
-const upload = multer({ storage });
+const upload = multer({ storage: multer.memoryStorage() });
 
 // GET all recipes
 router.get("/", async (req, res) => {
@@ -64,12 +52,17 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// POST upload image to Cloudinary
+// POST upload image
 router.post("/upload-image", (req, res) => {
-  upload.single("image")(req, res, (err) => {
+  upload.single("image")(req, res, async (err) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-    res.json({ url: req.file.path });
+    try {
+      const url = await uploadToB2(req.file.buffer, `recipe-images/${Date.now()}-${req.file.originalname}`, req.file.mimetype);
+      res.json({ url });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 });
 

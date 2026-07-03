@@ -517,7 +517,6 @@ async function scraperApiAutoparse(amazonUrl) {
 }
 
 async function fetchAndUploadImages(product, seedImages = [], { forceUpload = false, skipSiblings = false } = {}) {
-  const crypto = require('crypto');
   let amazonImages = [];
 
   // If seedImages are pre-extracted Amazon CDN image URLs (from colorImages sibling seeding),
@@ -737,76 +736,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
     return b2Urls.length ? b2Urls : null;
   }
 
-  // ── Cloudinary path ───────────────────────────────────────────────
-  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
-  if (!cloud || !apiKey || !apiSecret) return null;
-
-  // Check what's already in Cloudinary — skip fully if count is sufficient, upload only missing otherwise
-  let existingUrls = [];
-  try {
-    const existing = await axios.get(
-      `https://api.cloudinary.com/v1_1/${cloud}/resources/image?prefix=${encodeURIComponent(folder + '/')}&max_results=50&type=upload`,
-      { auth: { username: apiKey, password: apiSecret }, timeout: 8000 }
-    );
-    existingUrls = (existing.data.resources || []).map(r => r.secure_url).filter(Boolean);
-    if (existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
-      // Already have enough images — never downgrade even on forceUpload.
-      console.log(`fetchAndUploadImages: folder ${folder} already has ${existingUrls.length}/${amazonImages.length} images — skipping upload`);
-      await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
-      return existingUrls;
-    }
-    if (existingUrls.length > 0) {
-      console.log(`fetchAndUploadImages: folder ${folder} has ${existingUrls.length}/${amazonImages.length} — uploading ${amazonImages.length - existingUrls.length} new images`);
-    }
-  } catch {}
-
-  // Start from where we left off — only upload images not already in Cloudinary
-  const startIndex = existingUrls.length;
-  const cloudinaryUrls = [...existingUrls];
-
-  for (let i = startIndex; i < amazonImages.length; i++) {
-    try {
-      const fullResUrl = amazonImages[i].replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
-      let imgBuffer;
-      try {
-        ({ data: imgBuffer } = await axios.get(fullResUrl, { responseType: 'arraybuffer', timeout: 15000 }));
-      } catch {
-        ({ data: imgBuffer } = await axios.get(amazonImages[i], { responseType: 'arraybuffer', timeout: 15000 }));
-      }
-      // Skip GIF placeholders — Amazon serves a 43-byte 1x1 GIF when the real image
-      // isn't accessible. Uploading these to Cloudinary causes blank photos on eBay.
-      const buf = Buffer.from(imgBuffer);
-      if (buf.length < 500 || (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46)) {
-        console.log(`fetchAndUploadImages: skipping GIF/tiny placeholder (${buf.length}b) for image ${i + 1}`);
-        continue;
-      }
-      const publicId  = `${slug}-${String(i + 1).padStart(2, '0')}`;
-      const timestamp = Math.floor(Date.now() / 1000);
-      const toSign    = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
-      const signature = crypto.createHash('sha1').update(toSign).digest('hex');
-      const uploadParams = new URLSearchParams({
-        file: `data:image/jpeg;base64,${Buffer.from(imgBuffer).toString('base64')}`,
-        api_key: apiKey, timestamp: String(timestamp), signature, folder, public_id: publicId,
-      });
-      const { data: uploaded } = await axios.post(
-        `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
-        uploadParams.toString(),
-        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
-      );
-      cloudinaryUrls.push(uploaded.secure_url);
-    } catch (e) {
-      console.error(`fetchAndUploadImages: cloudinary upload failed:`, e.message);
-    }
-  }
-
-  if (cloudinaryUrls.length > existingUrls.length) {
-    await Product.findByIdAndUpdate(product._id, { image: cloudinaryUrls[0], images: cloudinaryUrls, cloudinaryFolder: folder });
-    console.log(`fetchAndUploadImages: saved ${cloudinaryUrls.length} Cloudinary images for ${product._id}`);
-  }
-
-  return cloudinaryUrls.length ? cloudinaryUrls : null;
+  return null;
 }
 
 // Serialize background image uploads so concurrent variant tracking doesn't hammer Amazon

@@ -3,8 +3,26 @@ const Catalog = require("../../models/inventory/Catalog");
 const router = express.Router();
 const multer = require("multer");
 const XLSX = require("xlsx");
+const sharp = require("sharp");
+const { uploadToB2 } = require("../../utils/b2Utils");
 
 const upload = multer({ storage: multer.memoryStorage() });
+
+// ===============================
+// UPLOAD PRODUCT IMAGE (returns main + thumbnail B2 URLs)
+// ===============================
+router.post("/upload", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    const stamp = Date.now();
+    const main = await uploadToB2(req.file.buffer, `productportal-images/${stamp}-${req.file.originalname}`, req.file.mimetype);
+    const thumbBuffer = await sharp(req.file.buffer).resize(200, 200, { fit: "cover" }).toBuffer();
+    const thumbnail = await uploadToB2(thumbBuffer, `productportal-images/thumb-${stamp}-${req.file.originalname}`, req.file.mimetype);
+    res.json({ main, thumbnail });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 
 // ===============================
 // GET ALL + SEARCH

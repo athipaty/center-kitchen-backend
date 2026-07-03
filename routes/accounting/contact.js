@@ -1,25 +1,10 @@
 const express    = require('express');
 const multer     = require('multer');
-const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const router     = express.Router();
 const ContactReport = require('../../models/accounting/ContactReport');
+const { uploadToB2 } = require('../../utils/b2Utils');
 
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'pu_contact',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
-    transformation: [{ width: 1600, crop: 'limit' }],
-  },
-});
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // GET all reports (newest first)
 router.get('/', async (req, res) => {
@@ -34,10 +19,13 @@ router.post('/', upload.single('image'), async (req, res) => {
   try {
     const { subject, description, company } = req.body;
     if (!subject || !description) return res.status(400).json({ error: 'Subject and description required' });
+    const imageUrl = req.file
+      ? await uploadToB2(req.file.buffer, `contact-images/${Date.now()}-${req.file.originalname}`, req.file.mimetype)
+      : '';
     const report = await ContactReport.create({
       subject,
       description,
-      imageUrl: req.file ? req.file.path : '',
+      imageUrl,
       company:  company || 'Express',
     });
     res.status(201).json(report);

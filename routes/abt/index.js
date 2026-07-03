@@ -2,10 +2,9 @@
 const crypto  = require('crypto')
 const router  = express.Router()
 const multer = require('multer')
-const cloudinary = require('cloudinary').v2
-const { CloudinaryStorage } = require('multer-storage-cloudinary')
 const { S3Client } = require('@aws-sdk/client-s3')
 const multerS3 = require('multer-s3')
+const { uploadToB2 } = require('../../utils/b2Utils')
 
 const Token = require('../../models/shared/Token')
 const AbtProcurementPlan = require('../../models/abt/AbtProcurementPlan')
@@ -26,24 +25,10 @@ const AbtVisitor  = require('../../models/abt/AbtVisitor')
 const AbtBanner          = require('../../models/abt/AbtBanner')
 const AbtContactMessage  = require('../../models/abt/AbtContactMessage')
 const AbtEgpItem         = require('../../models/abt/AbtEgpItem')
+const AbtEgpPdfCache     = require('../../models/abt/AbtEgpPdfCache')
 const AbtNotice          = require('../../models/abt/AbtNotice')
 
-// â”€â”€ Cloudinary setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-})
-
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'abt_maesai',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-    transformation: [{ width: 1200, crop: 'limit' }],
-  },
-})
-const upload = multer({ storage })
+const upload = multer({ storage: multer.memoryStorage() })
 
 let _uploadPdf = null
 function getUploadPdf() {
@@ -79,15 +64,7 @@ function getUploadPdf() {
   return _uploadPdf
 }
 
-const excelStorage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'abt_maesai_excel',
-    resource_type: 'raw',
-    allowed_formats: ['xlsx', 'xls'],
-  },
-})
-const uploadExcel = multer({ storage: excelStorage })
+const uploadExcel = multer({ storage: multer.memoryStorage() })
 
 // â”€â”€ Auth middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function getClientIp(req) {
@@ -112,9 +89,14 @@ async function requireAuth(req, res, next) {
 }
 
 // â”€â”€ Image upload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-router.post('/upload', requireAuth, upload.single('image'), (req, res) => {
+router.post('/upload', requireAuth, upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
-  res.json({ url: req.file.path })
+  try {
+    const url = await uploadToB2(req.file.buffer, `abt-images/${Date.now()}-${req.file.originalname}`, req.file.mimetype)
+    res.json({ url })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 router.post('/upload-pdf', requireAuth, (req, res, next) => {
@@ -135,9 +117,14 @@ router.post('/upload-pdf', requireAuth, (req, res, next) => {
   res.json({ url: req.file.location })
 })
 
-router.post('/upload-excel', requireAuth, uploadExcel.single('excel'), (req, res) => {
+router.post('/upload-excel', requireAuth, uploadExcel.single('excel'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
-  res.json({ url: req.file.path })
+  try {
+    const url = await uploadToB2(req.file.buffer, `abt-excel/${Date.now()}-${req.file.originalname}`, req.file.mimetype)
+    res.json({ url })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -625,8 +612,53 @@ router.get('/egp-rss', async (req, res) => {
   setImmediate(() => bgFetchEgp(anounceType).catch(() => {}))
 })
 
-// Nationwide e-GP feed — live pass-through, no department filter, no DB caching.
+// Extract agency name + budget from a bid PDF via plain regex — no AI involved.
+// Government e-GP announcement PDFs follow a predictable opening template:
+// "ประกาศ<agency>\nเรื่อง ..." and "...เป็นเงินทั้งสิ้น...<amount> บาท".
+async function extractPdfInfo(link) {
+  try {
+    const { data: buf } = await require('axios').get(link, {
+      responseType: 'arraybuffer', timeout: 20000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' },
+    })
+    const { PDFParse } = require('pdf-parse')
+    const parser = new PDFParse({ data: buf })
+    const { text } = await parser.getText()
+
+    const agencyM = text.slice(0, 800).match(/ประกาศ([^\n]+?)\n+เรื่อง/)
+    const budgetM = text.match(/เป็นเงินทั้งสิ้น[\s\S]{0,80}?([๐-๙\d][๐-๙\d,]*\.[๐-๙\d]{2})\s*บาท/)
+
+    return {
+      agency: agencyM ? agencyM[1].trim() : null,
+      budget: budgetM ? thaiToNum(budgetM[1]) : null,
+      enriched: true,
+    }
+  } catch {
+    return { enriched: true }
+  }
+}
+
+async function bgEnrichNational(links) {
+  for (const link of links) {
+    try {
+      const exists = await AbtEgpPdfCache.findOne({ link }).lean()
+      if (!exists) {
+        const info = await extractPdfInfo(link)
+        await AbtEgpPdfCache.findOneAndUpdate(
+          { link },
+          { $setOnInsert: { link, ...info } },
+          { upsert: true }
+        )
+      }
+    } catch { /* skip and continue */ }
+    await new Promise((r) => setTimeout(r, 400))
+  }
+}
+
+// Nationwide e-GP feed — live pass-through, no department filter.
 // Kept separate from /egp-rss so it never touches the Maesai-scoped cache/cron.
+// Agency/budget are enriched from each item's PDF in the background and cached
+// in AbtEgpPdfCache (plain regex extraction, no AI).
 router.get('/egp-rss-national', async (req, res) => {
   const anounceType = req.query.anounceType || 'D0'
   const cheerio = require('cheerio')
@@ -656,7 +688,19 @@ router.get('/egp-rss-national', async (req, res) => {
       })
     }
 
-    res.json({ items: items.slice(0, 200), fetchedAt: new Date().toISOString() })
+    const trimmed = items.slice(0, 200)
+    const links = trimmed.map((i) => i.link).filter(Boolean)
+    const cached = await AbtEgpPdfCache.find({ link: { $in: links } }).lean()
+    const cacheByLink = new Map(cached.map((c) => [c.link, c]))
+    const withInfo = trimmed.map((item) => {
+      const c = cacheByLink.get(item.link)
+      return c ? { ...item, agency: c.agency, budget: c.budget } : item
+    })
+
+    res.json({ items: withInfo, fetchedAt: new Date().toISOString() })
+
+    const uncachedLinks = links.filter((l) => !cacheByLink.has(l)).slice(0, 20)
+    if (uncachedLinks.length) setImmediate(() => bgEnrichNational(uncachedLinks).catch(() => {}))
   } catch (err) {
     res.status(500).json({ error: err.message || 'ไม่สามารถเชื่อมต่อระบบ e-GP ได้' })
   }

@@ -513,7 +513,7 @@ async function runAutoEndZeroViews() {
         const folders = [...new Set(linked.map(p => p.cloudinaryFolder).filter(Boolean))];
         await Product.deleteMany({ ebayListingId: listingId });
         for (const folder of folders) {
-          await deleteCloudinaryFolder(folder).catch(() => {});
+          await deleteB2Prefix(folder + '/').catch(() => {});
         }
         console.log(`auto-end-zero-views: deleted listing ${listingId} (${linked.length} variant slot(s) freed)`);
       } catch (e) {
