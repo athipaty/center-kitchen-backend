@@ -5,7 +5,8 @@ const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage() });
 
 const Order = require("../../models/tracker/Order");
-const { getAccessToken } = require("../../jobs/ebayPriceSync");
+const Product = require("../../models/tracker/Product");
+const { getAccessToken, bestVariantMatch } = require("../../jobs/ebayPriceSync");
 const { uploadToB2 } = require("../../utils/b2Utils");
 
 function tradingPost(token, callName, body) {
@@ -33,7 +34,23 @@ router.get("/", async (req, res) => {
     const orders = await Order.find().sort({ status: 1, createdAt: -1 });
     const rank = { needs_purchase: 0, purchased: 1, shipped: 2, notified: 3 };
     orders.sort((a, b) => (rank[a.status] - rank[b.status]) || (b.createdAt - a.createdAt));
-    res.json(orders);
+
+    // Attach the matching Amazon product URL for each order's item/variant, same
+    // matching logic used to restock the right variant after a sale.
+    const itemIds = [...new Set(orders.map(o => o.ebayItemId).filter(Boolean))];
+    const products = await Product.find({ ebayListingId: { $in: itemIds } }, { url: 1, ebayListingId: 1, variant: 1 }).lean();
+    const productsByListing = {};
+    for (const p of products) (productsByListing[p.ebayListingId] ||= []).push(p);
+
+    const results = orders.map(o => {
+      const candidates = productsByListing[o.ebayItemId] || [];
+      const match = candidates.length
+        ? (o.variationValue ? bestVariantMatch(candidates, o.variationValue) : candidates[0])
+        : null;
+      return { ...o.toObject(), amazonUrl: match?.url || null };
+    });
+
+    res.json(results);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
