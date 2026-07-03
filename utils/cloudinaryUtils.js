@@ -14,6 +14,9 @@ async function deleteCloudinaryFolder(folder) {
   getClient();
   try {
     await cloudinary.api.delete_resources_by_prefix(folder + '/', { invalidate: true });
+    // Also clear non-image resources (PDFs, Excel, etc.) — delete_resources_by_prefix
+    // defaults to resource_type: 'image' and silently leaves raw files behind.
+    await cloudinary.api.delete_resources_by_prefix(folder + '/', { resource_type: 'raw', invalidate: true }).catch(() => {});
     await cloudinary.api.delete_folder(folder).catch(() => {});
     console.log(`cloudinary: deleted folder ${folder}`);
   } catch (e) {
