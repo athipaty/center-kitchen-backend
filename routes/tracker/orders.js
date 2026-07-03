@@ -135,9 +135,9 @@ router.post("/:id/notify-buyer", async (req, res) => {
     if (!order) return res.status(404).json({ error: "order not found" });
     if (!order.buyerUserId) return res.status(400).json({ error: "no buyer on this order" });
 
-    const messageText = `Hi! Your package has arrived 📦 Here's a photo of it delivered: ` +
-      `${order.deliveryPhotoUrl || '(no photo attached)'} Thank you so much for your order! ` +
-      `If you have a moment, we'd really appreciate your feedback 🙏`;
+    const messageText = `Hi! Your package has arrived 📦 ` +
+      (order.deliveryPhotoUrl ? `Here's a photo of it delivered: ${order.deliveryPhotoUrl} ` : '') +
+      `Thank you so much for your order! If you have a moment, we'd really appreciate your feedback 🙏`;
     order.buyerMessageText = messageText;
 
     let sent = false;
