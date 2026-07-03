@@ -28,8 +28,11 @@ function b2PublicUrl(fileKey) {
   return `${base}/file/${bucket}/${fileKey}`;
 }
 
-// Upload a Buffer to B2, returns the public URL
-async function uploadToB2(buffer, fileKey, contentType = 'image/jpeg') {
+// Upload a Buffer to B2, returns the public URL. `cacheControl` defaults to a
+// forever-cache since most callers use a timestamped, never-reused fileKey;
+// callers that overwrite the same fileKey with new content (e.g. re-scraped
+// product photos) must pass a short revalidating value instead.
+async function uploadToB2(buffer, fileKey, contentType = 'image/jpeg', cacheControl = 'public, max-age=31536000, immutable') {
   const b2 = await getAuth();
 
   // Each upload needs a fresh one-time upload URL
@@ -49,6 +52,9 @@ async function uploadToB2(buffer, fileKey, contentType = 'image/jpeg') {
       'Content-Type':     contentType,
       'Content-Length':   buffer.length,
       'X-Bz-Content-Sha1': sha1,
+      // B2 echoes X-Bz-Info-Cache-Control back as the Cache-Control response
+      // header on download, so this controls actual browser caching behavior.
+      'X-Bz-Info-Cache-Control': encodeURIComponent(cacheControl),
     },
     maxBodyLength: 20 * 1024 * 1024,
     timeout: 30000,

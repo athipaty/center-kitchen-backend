@@ -721,7 +721,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
           continue;
         }
         const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
-        const b2Url = await uploadToB2(buf, fileKey);
+        const b2Url = await uploadToB2(buf, fileKey, 'image/jpeg', 'public, max-age=300, must-revalidate');
         b2Urls.push(b2Url);
       } catch (e) {
         console.error(`fetchAndUploadImages: B2 upload failed for image ${i + 1}:`, e.message);
@@ -1069,7 +1069,7 @@ router.post("/:id/test-b2", async (req, res) => {
         const buf = Buffer.from(imgBuffer);
         if (buf.length < 500) { console.log(`test-b2: skipping tiny file ${i+1}`); continue; }
         const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
-        const b2Url = await uploadToB2(buf, fileKey);
+        const b2Url = await uploadToB2(buf, fileKey, 'image/jpeg', 'public, max-age=300, must-revalidate');
         b2Urls.push(b2Url);
         console.log(`test-b2: uploaded image ${i+1}/${sourceUrls.length} → ${b2Url}`);
       } catch (e) {
