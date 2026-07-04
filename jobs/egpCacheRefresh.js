@@ -11,6 +11,7 @@ const axios       = require('axios')
 const cheerio     = require('cheerio')
 const AbtSettings = require('../models/abt/AbtSettings')
 const AbtEgpItem  = require('../models/abt/AbtEgpItem')
+const { enrichAnnouncement } = require('../utils/egpEnrich')
 
 const DEPT_SUB_ID = '1509903843'
 // CGD manual specifies process3 as the correct hostname for RSS
@@ -21,39 +22,9 @@ function isMaintenanceText(str) {
   return /ไม่พร้อมให้บริการ|ปิดปรับปรุง|not available|maintenance/i.test(str || '')
 }
 
-function thaiToNum(str) {
-  if (!str) return null
-  const thai = '๐๑๒๓๔๕๖๗๘๙'
-  const arabic = str.split('').map(c => { const i = thai.indexOf(c); return i >= 0 ? String(i) : c }).join('')
-  const n = parseFloat(arabic.replace(/,/g, ''))
-  return isNaN(n) ? null : n
-}
-
 async function enrichItem(item) {
   if (!item.link || item.enriched) return null
-  try {
-    const { data: buf } = await axios.get(item.link, {
-      responseType: 'arraybuffer', timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' },
-    })
-    const text = new TextDecoder('windows-874').decode(buf)
-      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
-
-    const titleM  = text.match(/ประกาศผู้ชนะการเสนอราคา\s+(.+?)\s+(?:นั้น|โดย|ตาม)/)
-    const winnerM = text.match(/ผู้(?:ได้รับการคัดเลือก|ชนะการเสนอราคา)[^ก-๙]*ได้แก่\s+(.+?)\s+(?:โดยเสนอราคา|ซึ่งมี|งวด|เป็นเงิน)/)
-    const amountM = text.match(/เป็นเงินทั้งสิ้น\s+([๐-๙\d,.]+)\s+บาท/)
-    const methodM = text.match(/โดย(วิธี[ก-๙a-zA-Z\s\-]+?)(?=\s|$|[,\.])/)
-
-    return {
-      title:  titleM  ? titleM[1].trim()  : undefined,
-      winner: winnerM ? winnerM[1].trim() : null,
-      amount: amountM ? thaiToNum(amountM[1]) : null,
-      method: methodM ? methodM[1].trim() : null,
-      enriched: true,
-    }
-  } catch {
-    return { enriched: true }
-  }
+  return enrichAnnouncement(item.link)
 }
 
 async function fetchAndCache(anounceType) {

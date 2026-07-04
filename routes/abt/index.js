@@ -5,6 +5,8 @@ const multer = require('multer')
 const { S3Client } = require('@aws-sdk/client-s3')
 const multerS3 = require('multer-s3')
 const { uploadToB2 } = require('../../utils/b2Utils')
+const { enrichAnnouncement } = require('../../utils/egpEnrich')
+const { buildProjectCards } = require('../../utils/egpPhayaoGroup')
 
 const Token = require('../../models/shared/Token')
 const AbtProcurementPlan = require('../../models/abt/AbtProcurementPlan')
@@ -26,6 +28,7 @@ const AbtBanner          = require('../../models/abt/AbtBanner')
 const AbtContactMessage  = require('../../models/abt/AbtContactMessage')
 const AbtEgpItem         = require('../../models/abt/AbtEgpItem')
 const AbtEgpPdfCache     = require('../../models/abt/AbtEgpPdfCache')
+const AbtEgpPhayaoItem   = require('../../models/abt/AbtEgpPhayaoItem')
 const AbtNotice          = require('../../models/abt/AbtNotice')
 
 const upload = multer({ storage: multer.memoryStorage() })
@@ -358,39 +361,9 @@ function isMaintenanceText(str) {
   return /ไม่พร้อมให้บริการ|ปิดปรับปรุง|not available|maintenance/i.test(str || '')
 }
 
-function thaiToNum(str) {
-  if (!str) return null
-  const thai = '๐๑๒๓๔๕๖๗๘๙'
-  const arabic = str.split('').map(c => { const i = thai.indexOf(c); return i >= 0 ? String(i) : c }).join('')
-  const n = parseFloat(arabic.replace(/,/g, ''))
-  return isNaN(n) ? null : n
-}
-
 async function enrichEgpItem(item) {
   if (!item.link || item.enriched) return null
-  try {
-    const { data: buf } = await require('axios').get(item.link, {
-      responseType: 'arraybuffer', timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' },
-    })
-    const text = new TextDecoder('windows-874').decode(buf)
-      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
-
-    const titleM  = text.match(/ประกาศผู้ชนะการเสนอราคา\s+(.+?)\s+(?:นั้น|โดย|ตาม)/)
-    const winnerM = text.match(/ผู้(?:ได้รับการคัดเลือก|ชนะการเสนอราคา)[^ก-๙]*ได้แก่\s+(.+?)\s+(?:โดยเสนอราคา|ซึ่งมี|งวด|เป็นเงิน)/)
-    const amountM = text.match(/เป็นเงินทั้งสิ้น\s+([๐-๙\d,.]+)\s+บาท/)
-    const methodM = text.match(/โดย(วิธี[ก-๙a-zA-Z\s\-]+?)(?=\s|$|[,\.])/)
-
-    return {
-      title:  titleM  ? titleM[1].trim()  : undefined,
-      winner: winnerM ? winnerM[1].trim() : null,
-      amount: amountM ? thaiToNum(amountM[1]) : null,
-      method: methodM ? methodM[1].trim() : null,
-      enriched: true,
-    }
-  } catch {
-    return { enriched: true }  // mark done even on failure so we don't retry forever
-  }
+  return enrichAnnouncement(item.link)
 }
 
 // CGD manual specifies process3 as the correct hostname for RSS
@@ -612,38 +585,12 @@ router.get('/egp-rss', async (req, res) => {
   setImmediate(() => bgFetchEgp(anounceType).catch(() => {}))
 })
 
-// Extract agency name + budget from a bid PDF via plain regex — no AI involved.
-// Government e-GP announcement PDFs follow a predictable opening template:
-// "ประกาศ<agency>\nเรื่อง ..." and "...เป็นเงินทั้งสิ้น...<amount> บาท".
-async function extractPdfInfo(link) {
-  try {
-    const { data: buf } = await require('axios').get(link, {
-      responseType: 'arraybuffer', timeout: 20000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' },
-    })
-    const { PDFParse } = require('pdf-parse')
-    const parser = new PDFParse({ data: buf })
-    const { text } = await parser.getText()
-
-    const agencyM = text.slice(0, 800).match(/ประกาศ([^\n]+?)\n+เรื่อง/)
-    const budgetM = text.match(/เป็นเงินทั้งสิ้น[\s\S]{0,80}?([๐-๙\d][๐-๙\d,]*\.[๐-๙\d]{2})\s*บาท/)
-
-    return {
-      agency: agencyM ? agencyM[1].trim() : null,
-      budget: budgetM ? thaiToNum(budgetM[1]) : null,
-      enriched: true,
-    }
-  } catch {
-    return { enriched: true }
-  }
-}
-
 async function bgEnrichNational(links) {
   for (const link of links) {
     try {
       const exists = await AbtEgpPdfCache.findOne({ link }).lean()
       if (!exists) {
-        const info = await extractPdfInfo(link)
+        const info = await enrichAnnouncement(link)
         await AbtEgpPdfCache.findOneAndUpdate(
           { link },
           { $setOnInsert: { link, ...info } },
@@ -703,6 +650,38 @@ router.get('/egp-rss-national', async (req, res) => {
     if (uncachedLinks.length) setImmediate(() => bgEnrichNational(uncachedLinks).catch(() => {}))
   } catch (err) {
     res.status(500).json({ error: err.message || 'ไม่สามารถเชื่อมต่อระบบ e-GP ได้' })
+  }
+})
+
+// Phayao e-GP hub — announcements scoped to พะเยา, collapsed into project cards.
+// Backed by AbtEgpPhayaoItem (populated by jobs/egpPhayaoRefresh.js), not a live fetch.
+router.get('/egp-phayao', async (req, res) => {
+  try {
+    const { type, minAmount, maxAmount, status } = req.query
+    const filter = {}
+    if (type) filter.anounceType = type
+
+    const [items, meta] = await Promise.all([
+      AbtEgpPhayaoItem.find(filter).sort({ date: -1 }).limit(500).lean(),
+      AbtSettings.findOne({ key: 'egp_phayao_meta' }),
+    ])
+
+    const m = meta?.value || {}
+    if (items.length === 0 && m.maintenance) {
+      return res.status(503).json({ maintenance: true, notice: m.notice, hours: '17:01–08:59 น.' })
+    }
+
+    const projects = buildProjectCards(items, { minAmount, maxAmount, status })
+
+    res.json({
+      projects,
+      fetchedAt: m.maintenance ? undefined : (m.lastFetchAt || null),
+      stale:     m.maintenance && items.length > 0 ? true : undefined,
+      staleAt:   m.maintenance && items.length > 0 ? m.checkedAt : undefined,
+      notice:    m.maintenance ? m.notice : undefined,
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
   }
 })
 

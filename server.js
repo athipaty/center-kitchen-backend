@@ -119,6 +119,7 @@ mongoose
     console.log("✅ Connected to MongoDB");
     require("./jobs/trackerScheduler").start(io);
     require("./jobs/egpCacheRefresh").start();
+    require("./jobs/egpPhayaoRefresh").start();
   })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
