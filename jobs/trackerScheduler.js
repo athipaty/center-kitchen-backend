@@ -590,8 +590,13 @@ async function runRelistUnsoldWithEngagement() {
       console.warn('relist-unsold: could not fetch view counts:', e.message);
     }
 
-    const toRelist = unsoldIds.filter(id => (viewCounts[id] || 0) > 0 || watchCounts[id] > 0);
-    console.log(`relist-unsold: ${unsoldIds.length} unsold listings, ${toRelist.length} have views/watches → relisting`);
+    // Only relist listings the tracker actually owns — otherwise old/manual eBay
+    // listings with leftover views or watchers get swept up and relisted forever.
+    const trackedProducts = await Product.find({ ebayListingId: { $in: unsoldIds } }, 'ebayListingId').lean();
+    const trackedIds = new Set(trackedProducts.map(p => String(p.ebayListingId)));
+
+    const toRelist = unsoldIds.filter(id => trackedIds.has(id) && ((viewCounts[id] || 0) > 0 || watchCounts[id] > 0));
+    console.log(`relist-unsold: ${unsoldIds.length} unsold listings, ${toRelist.length} tracked with views/watches → relisting`);
 
     let relisted = 0;
     for (const oldId of toRelist) {
