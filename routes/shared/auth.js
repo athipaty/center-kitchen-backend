@@ -1,9 +1,19 @@
-﻿const express = require("express");
-const crypto  = require("crypto");
-const router  = express.Router();
-const Token   = require("../../models/shared/Token");
+﻿const express   = require("express");
+const crypto    = require("crypto");
+const rateLimit = require("express-rate-limit");
+const router    = express.Router();
+const Token     = require("../../models/shared/Token");
 
 const TOKEN_VALID_DAYS = 7;
+
+// Password guessing is otherwise unbounded — cap attempts per IP.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many login attempts — try again later" },
+});
 
 function generateToken() {
   return crypto.randomBytes(32).toString("hex");
@@ -19,7 +29,7 @@ function getTodayPassword() {
   return process.env.ADMIN_PASSWORD || "555";
 }
 
-router.post("/login", async (req, res) => {
+router.post("/login", loginLimiter, async (req, res) => {
   try {
     const { password } = req.body;
     const ip = getClientIp(req);
