@@ -39,6 +39,9 @@ const productSchema = new mongoose.Schema(
     // Times an order for this listing/variant has blown eBay's 24h tracking deadline —
     // surfaces chronically-late SKUs so their handling time can be bumped on eBay.
     lateShipmentCount: { type: Number, default: 0 },
+    // Set when a zero-view listing gets an automatic retitle rescue attempt — gives it
+    // a 7-day second-chance window before auto-end-zero-views actually ends it.
+    zeroViewRescueAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

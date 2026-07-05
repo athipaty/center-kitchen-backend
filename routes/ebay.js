@@ -4245,7 +4245,13 @@ router.post('/batch-optimize', async (req, res) => {
     if (!groups[p.ebayListingId]) groups[p.ebayListingId] = [];
     groups[p.ebayListingId].push(p);
   }
-  const listingIds = Object.keys(groups);
+  let listingIds = Object.keys(groups);
+  // Optional scope-down — e.g. the zero-view rescue job only wants to retitle the
+  // specific listings it found dead, not run a full-catalog optimize pass.
+  if (Array.isArray(req.body?.listingIds) && req.body.listingIds.length) {
+    const only = new Set(req.body.listingIds.map(String));
+    listingIds = listingIds.filter(id => only.has(id));
+  }
   const total = listingIds.length;
 
   res.json({ started: true, total });

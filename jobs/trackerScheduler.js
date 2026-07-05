@@ -499,13 +499,53 @@ async function runAutoEndZeroViews() {
       if (viewCounts[id] == null) viewCounts[id] = 0;
     }
 
-    // Only end listings with 0 views AND 0 watchers — keep anything with buyer interest
-    const toEnd = oldListings.filter(id => viewCounts[id] === 0 && (watchCounts[id] || 0) === 0);
+    // Zero views AND zero watchers — anything with buyer interest is kept regardless.
+    const zeroViewIds = oldListings.filter(id => viewCounts[id] === 0 && (watchCounts[id] || 0) === 0);
     const kept = oldListings.filter(id => viewCounts[id] > 0 || (watchCounts[id] || 0) > 0);
     if (kept.length) {
       console.log(`auto-end-zero-views: keeping ${kept.length} listing(s) with views/watches: ${kept.map(id => `${id}(v:${viewCounts[id]},w:${watchCounts[id]||0})`).join(', ')}`);
     }
-    console.log(`auto-end-zero-views: ${toEnd.length} listings have 0 views and 0 watches → ending`);
+    if (!zeroViewIds.length) {
+      console.log('auto-end-zero-views: no zero-view listings found');
+      return;
+    }
+
+    // A zero-view listing gets one retitle rescue attempt before it's ever ended — a bad
+    // title is a more common cause of zero views than genuinely no demand. Only actually
+    // ends it if it's STILL at zero 7 days after that rescue attempt.
+    const rescueDocs = await Product.find(
+      { ebayListingId: { $in: zeroViewIds } }, 'ebayListingId zeroViewRescueAt'
+    ).lean();
+    const rescuedAtByListing = {};
+    for (const d of rescueDocs) {
+      if (d.zeroViewRescueAt) rescuedAtByListing[d.ebayListingId] = d.zeroViewRescueAt;
+    }
+
+    const RESCUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+    const toRescue = [];
+    const toEnd = [];
+    for (const id of zeroViewIds) {
+      const rescuedAt = rescuedAtByListing[id];
+      if (!rescuedAt) toRescue.push(id);
+      else if (Date.now() - new Date(rescuedAt).getTime() >= RESCUE_WINDOW_MS) toEnd.push(id);
+      // else: still inside its 7-day post-rescue observation window — leave it alone
+    }
+
+    if (toRescue.length) {
+      console.log(`auto-end-zero-views: ${toRescue.length} zero-view listing(s) getting a retitle rescue: ${toRescue.join(', ')}`);
+      try {
+        await axios.post(`http://localhost:${process.env.PORT || 5000}/api/ebay/batch-optimize`, { listingIds: toRescue });
+        await Product.updateMany({ ebayListingId: { $in: toRescue } }, { $set: { zeroViewRescueAt: new Date() } });
+      } catch (e) {
+        console.error('auto-end-zero-views: rescue optimize failed:', e.message);
+      }
+    }
+
+    if (!toEnd.length) {
+      console.log('auto-end-zero-views: no listings past their rescue window yet');
+      return;
+    }
+    console.log(`auto-end-zero-views: ${toEnd.length} listing(s) still zero views 7+ days after rescue → ending`);
 
     for (const listingId of toEnd) {
       try {
@@ -963,8 +1003,9 @@ function start(socketIo) {
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
   // Variation sync: remove eBay variations not in tracker — Sunday 3:15am (after optimize)
   cron.schedule("15 3 * * 0", runWeeklyVariationSync);
-  // Auto-end listings 4+ days old with 0 views — disabled, user prefers manual control
-  // cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
+  // Zero-view listings (4+ days old): retitle once as a rescue attempt, only end them if
+  // still zero-view a week after that — daily at 19:00 Singapore time
+  cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
   // Auto-restock sold listings back to qty 1 — runs every 30 minutes (was 15, halves GetOrders calls)
   cron.schedule("*/30 * * * *", () => runAutoRestock());
   // Orphan cleanup once daily at 1am — was every 6h + startup (saves ~44 GetMyeBaySelling calls/day)
