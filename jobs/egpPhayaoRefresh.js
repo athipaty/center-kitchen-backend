@@ -102,7 +102,8 @@ async function enrichAll() {
   const pending = await AbtEgpPhayaoItem.find({ enriched: false }).limit(50).lean()
   let enriched = 0
   for (const item of pending) {
-    const update = await enrichAnnouncement(item.link)
+    const { province, ...fields } = await enrichAnnouncement(item.link)
+    const update = province ? { ...fields, matchedProvince: province } : fields
     await AbtEgpPhayaoItem.findByIdAndUpdate(item._id, update)
     if (update.winner || update.agency) enriched++
     await new Promise(r => setTimeout(r, 800))
