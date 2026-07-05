@@ -122,7 +122,12 @@ mongoose
     console.log("✅ Connected to MongoDB");
     require("./jobs/trackerScheduler").start(io);
     require("./jobs/egpCacheRefresh").start();
-    require("./jobs/egpPhayaoRefresh").start();
+    // egpPhayaoRefresh disabled — the nationwide RSS it scans is too sparse for the
+    // keyword-match approach to ever reliably find Phayao items (0 hits after 24+
+    // cycles), and the RSS doesn't accept the moiId province filter (confirmed by
+    // testing it directly). Needs either the gov open-data API (blocked by WAF at
+    // registration) or CAPTCHA-gated search automation to actually fix.
+    // require("./jobs/egpPhayaoRefresh").start();
   })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
