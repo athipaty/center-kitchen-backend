@@ -14,9 +14,12 @@ const io = new Server(httpServer, {
 });
 app.set('io', io);
 
-// Trust Render's proxy so express-rate-limit can read the real client IP
-// from X-Forwarded-For without throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
-app.set('trust proxy', 1);
+// Requests pass through two proxy hops before reaching this process:
+// Cloudflare's edge (fronts all *.onrender.com domains), then Render's own
+// internal proxy. Trusting only 1 hop made Express read Cloudflare's edge
+// IP -- which varies per request/PoP -- as the client, silently fragmenting
+// every IP-keyed rate limiter below across many keys instead of one.
+app.set('trust proxy', 2);
 
 // Rate limiters
 const addProductLimiter = rateLimit({ windowMs: 60_000, max: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many add requests — slow down' } });
