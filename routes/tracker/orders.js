@@ -127,6 +127,24 @@ router.patch("/:id/tracking", async (req, res) => {
   }
 });
 
+// PATCH mark an order delivered — a manual checkpoint (e.g. confirmed via the carrier's
+// tracking page or an Amazon delivery-confirmation email) between "shipped" and
+// actually messaging the buyer, since notifying before delivery is confirmed would be
+// premature.
+router.patch("/:id/delivered", async (req, res) => {
+  try {
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      { status: 'delivered' },
+      { new: true }
+    );
+    if (!order) return res.status(404).json({ error: "order not found" });
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST compose a thank-you message for the buyer — just generates the text for you
 // to copy and paste into eBay's message center yourself (eBay's buyer-messaging API
 // is legacy and unreliable, so this skips trying to auto-send entirely).
@@ -134,7 +152,7 @@ router.post("/:id/notify-buyer", async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: "order not found" });
-    if (!order.trackingNumber) return res.status(400).json({ error: "add a tracking number before notifying the buyer" });
+    if (order.status !== 'delivered') return res.status(400).json({ error: "mark the order delivered before messaging the buyer" });
 
     const buyerFirstName = order.shippingAddress?.name?.trim().split(' ')[0] || null;
     const messageText = `Hi${buyerFirstName ? ` ${buyerFirstName}` : ''}! Just letting you know your order has been delivered 📦 ` +
