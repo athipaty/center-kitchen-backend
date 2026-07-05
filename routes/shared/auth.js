@@ -67,5 +67,15 @@ router.post("/verify", async (req, res) => {
   }
 });
 
+router.post("/logout", async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (token) await Token.deleteOne({ token });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 module.exports = router;
 
