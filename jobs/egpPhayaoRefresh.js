@@ -53,6 +53,12 @@ async function fetchAndCache(anounceType) {
     return { ok: false, reason: 'maintenance' }
   }
 
+  await AbtSettings.findOneAndUpdate(
+    { key: 'egp_phayao_meta' },
+    { value: { maintenance: false, lastFetchAt: new Date().toISOString() } },
+    { upsert: true }
+  )
+
   const phayaoItems = rssItems.filter(i => `${i.title} ${i.desc}`.includes(PROVINCE_KEYWORD))
   if (phayaoItems.length === 0) return { ok: true, added: 0 }
 
@@ -72,12 +78,6 @@ async function fetchAndCache(anounceType) {
       }
     })),
     { ordered: false }
-  )
-
-  await AbtSettings.findOneAndUpdate(
-    { key: 'egp_phayao_meta' },
-    { value: { maintenance: false, lastFetchAt: new Date().toISOString() } },
-    { upsert: true }
   )
 
   return { ok: true, added: result.upsertedCount || 0 }
