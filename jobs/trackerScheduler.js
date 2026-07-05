@@ -3,7 +3,7 @@ const axios = require("axios");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
 const Order = require("../models/tracker/Order");
-const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice } = require("./ebayPriceSync");
+const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice, bestVariantMatch } = require("./ebayPriceSync");
 const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 const { b2Enabled, listB2Files, deleteB2Prefix } = require("../utils/b2Utils");
 const { ntfyPush } = require("../utils/ntfy");
@@ -766,11 +766,35 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
 }
 
 // eBay expects tracking uploaded within this many hours of payment (handling time) —
-// past this it's a late shipment against seller performance metrics. Warn with time
-// to react, then escalate once it's actually overdue. deadlineAlertsSent tracks which
-// tier already fired per order so this doesn't re-alert every 15 minutes.
+// past this it's a late shipment against seller performance metrics. deadlineAlertsSent
+// tracks which tier already fired per order so this doesn't re-alert every 15 minutes.
 const SHIP_DEADLINE_HOURS = 24;
-const WARN_BEFORE_HOURS = 6;
+
+// Ordered most-urgent-first. When a check finds hoursLeft has dropped past more than
+// one threshold at once (e.g. after the server was down a while), it sends only the
+// single most urgent unsent tier and marks the less-urgent ones sent too, rather than
+// firing a burst of stale warnings back to back.
+const WARN_TIERS = [
+  { key: 'warn2h',  hoursLeft: 2,  title: '🔴 ด่วนมาก! ใกล้เกินกำหนด',
+    priority: 'urgent', tags: ['red_circle'] },
+  { key: 'warn6h',  hoursLeft: 6,  title: '⏰ ใกล้ครบกำหนด',
+    priority: 'high', tags: ['alarm_clock'] },
+  { key: 'warn12h', hoursLeft: 12, title: '🔔 เตือนล่วงหน้า',
+    priority: 'default', tags: ['bell'] },
+];
+
+// Bumps lateShipmentCount on the Product doc(s) backing this order's listing/variant,
+// so chronically-late SKUs are visible and their eBay handling time can be adjusted.
+async function flagLateShipment(order) {
+  try {
+    const candidates = await Product.find({ ebayListingId: order.ebayItemId });
+    if (!candidates.length) return;
+    const match = order.variationValue ? bestVariantMatch(candidates, order.variationValue) : candidates[0];
+    if (match) await Product.updateOne({ _id: match._id }, { $inc: { lateShipmentCount: 1 } });
+  } catch (e) {
+    console.error('flagLateShipment: error:', e.message);
+  }
+}
 
 async function runShippingDeadlineCheck() {
   try {
@@ -782,20 +806,35 @@ async function runShippingDeadlineCheck() {
       const alerts = o.deadlineAlertsSent || [];
       const label = o.title || o.ebayItemId || o.ebayOrderId;
 
-      if (hoursLeft <= 0 && !alerts.includes('overdue24h')) {
-        const sent = await ntfyPush(
-          '🚨 เกินกำหนดส่งของแล้ว',
-          `"${label}" (order ${o.ebayOrderId}) เกิน 24 ชม. หลังชำระเงิน ${Math.abs(hoursLeft).toFixed(1)} ชม. — ใส่เลขพัสดุด่วน!`,
-          { priority: 'urgent', tags: ['rotating_light'] }
-        );
-        if (sent) { o.deadlineAlertsSent = [...alerts, 'overdue24h']; await o.save(); }
-      } else if (hoursLeft > 0 && hoursLeft <= WARN_BEFORE_HOURS && !alerts.includes('warn18h')) {
-        const sent = await ntfyPush(
-          '⏰ ใกล้ครบกำหนด',
-          `"${label}" (order ${o.ebayOrderId}) เหลือเวลาอีก ${hoursLeft.toFixed(1)} ชม. ก่อนเกิน 24 ชม. — กรุณาใส่เลขพัสดุ`,
-          { priority: 'high', tags: ['alarm_clock'] }
-        );
-        if (sent) { o.deadlineAlertsSent = [...alerts, 'warn18h']; await o.save(); }
+      if (hoursLeft <= 0) {
+        if (!alerts.includes('overdue24h')) {
+          const sent = await ntfyPush(
+            '🚨 เกินกำหนดส่งของแล้ว',
+            `"${label}" (order ${o.ebayOrderId}) เกิน 24 ชม. หลังชำระเงิน ${Math.abs(hoursLeft).toFixed(1)} ชม. — ใส่เลขพัสดุด่วน!`,
+            { priority: 'urgent', tags: ['rotating_light'] }
+          );
+          if (sent) {
+            o.deadlineAlertsSent = [...alerts, 'overdue24h'];
+            await o.save();
+            await flagLateShipment(o);
+          }
+        }
+        continue;
+      }
+
+      const tier = WARN_TIERS.find(t => hoursLeft <= t.hoursLeft && !alerts.includes(t.key));
+      if (!tier) continue;
+
+      const sent = await ntfyPush(
+        tier.title,
+        `"${label}" (order ${o.ebayOrderId}) เหลือเวลาอีก ${hoursLeft.toFixed(1)} ชม. ก่อนเกิน 24 ชม. — กรุณาใส่เลขพัสดุ`,
+        { priority: tier.priority, tags: tier.tags }
+      );
+      if (sent) {
+        // Mark this tier and every less-urgent tier as sent — they're moot now.
+        const supersededKeys = WARN_TIERS.filter(t => t.hoursLeft >= tier.hoursLeft).map(t => t.key);
+        o.deadlineAlertsSent = [...new Set([...alerts, ...supersededKeys])];
+        await o.save();
       }
     }
   } catch (e) {

@@ -36,6 +36,9 @@ const productSchema = new mongoose.Schema(
     listFailCount: { type: Number, default: 0 },
     listingBlocked: { type: Boolean, default: false },
     listingBlockReason: { type: String, default: null },
+    // Times an order for this listing/variant has blown eBay's 24h tracking deadline —
+    // surfaces chronically-late SKUs so their handling time can be bumped on eBay.
+    lateShipmentCount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
