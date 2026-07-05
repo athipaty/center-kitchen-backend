@@ -6,6 +6,7 @@ const Order = require("../models/tracker/Order");
 const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice } = require("./ebayPriceSync");
 const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 const { b2Enabled, listB2Files, deleteB2Prefix } = require("../utils/b2Utils");
+const { lineBroadcast } = require("../utils/lineNotify");
 
 let io = null;
 
@@ -764,6 +765,40 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
   }
 }
 
+// eBay expects tracking uploaded within this many hours of payment (handling time) —
+// past this it's a late shipment against seller performance metrics. Warn with time
+// to react, then escalate once it's actually overdue. deadlineAlertsSent tracks which
+// tier already fired per order so this doesn't re-alert every 15 minutes.
+const SHIP_DEADLINE_HOURS = 24;
+const WARN_BEFORE_HOURS = 6;
+
+async function runShippingDeadlineCheck() {
+  try {
+    const unshipped = await Order.find({ trackingNumber: null, createTimeEbay: { $ne: null } });
+    const now = Date.now();
+
+    for (const o of unshipped) {
+      const hoursLeft = (o.createTimeEbay.getTime() + SHIP_DEADLINE_HOURS * 3600 * 1000 - now) / 3600000;
+      const alerts = o.deadlineAlertsSent || [];
+      const label = o.title || o.ebayItemId || o.ebayOrderId;
+
+      if (hoursLeft <= 0 && !alerts.includes('overdue24h')) {
+        const sent = await lineBroadcast(
+          `🚨 เกินกำหนดส่งของแล้ว: "${label}" (order ${o.ebayOrderId}) เกิน 24 ชม. หลังชำระเงิน ${Math.abs(hoursLeft).toFixed(1)} ชม. — ใส่เลขพัสดุด่วน!`
+        );
+        if (sent) { o.deadlineAlertsSent = [...alerts, 'overdue24h']; await o.save(); }
+      } else if (hoursLeft > 0 && hoursLeft <= WARN_BEFORE_HOURS && !alerts.includes('warn18h')) {
+        const sent = await lineBroadcast(
+          `⏰ ใกล้ครบกำหนด: "${label}" (order ${o.ebayOrderId}) เหลือเวลาอีก ${hoursLeft.toFixed(1)} ชม. ก่อนเกิน 24 ชม. — กรุณาใส่เลขพัสดุ`
+        );
+        if (sent) { o.deadlineAlertsSent = [...alerts, 'warn18h']; await o.save(); }
+      }
+    }
+  } catch (e) {
+    console.error('shipping-deadline-check: error:', e.message);
+  }
+}
+
 // Delete Cloudinary folders that are no longer linked to any tracked product.
 // Covers both tracker-images/ and ebay-listings/ prefixes.
 async function runCloudinaryCleanup() {
@@ -895,6 +930,8 @@ function start(socketIo) {
   cron.schedule("30 3 * * *", runRelistUnsoldWithEngagement);
   // Cloudinary orphan cleanup — weekly Sunday 2am (between price-optimize jobs)
   cron.schedule("0 2 * * 0", runCloudinaryCleanup);
+  // Shipping-deadline check — every 15 minutes so a 6-hour warning window is never missed
+  cron.schedule("*/15 * * * *", runShippingDeadlineCheck);
 }
 
 // Called when user clicks "Check Now" for a specific product or all products
@@ -933,4 +970,4 @@ function getNextCheck() {
   return null; // now per-product, not global
 }
 
-module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors, autoEndZeroViews: runAutoEndZeroViews, autoRestock: runAutoRestock, orphanCleanup: runOrphanCleanup, relistUnsold: runRelistUnsoldWithEngagement, cloudinaryCleanup: runCloudinaryCleanup };
+module.exports = { start, triggerNow, checkOne: checkProduct, scheduleNew, getNextCheck, retryErrors, autoEndZeroViews: runAutoEndZeroViews, autoRestock: runAutoRestock, orphanCleanup: runOrphanCleanup, relistUnsold: runRelistUnsoldWithEngagement, cloudinaryCleanup: runCloudinaryCleanup, shippingDeadlineCheck: runShippingDeadlineCheck };

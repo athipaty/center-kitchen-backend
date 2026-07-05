@@ -6,7 +6,13 @@ const Order = require("../../models/tracker/Order");
 const Product = require("../../models/tracker/Product");
 const { getAccessToken, bestVariantMatch } = require("../../jobs/ebayPriceSync");
 
-// GET all orders — newest eBay sale first
+// eBay expects tracking uploaded within this many hours of payment (handling time) —
+// past this, the order counts as a late shipment against seller performance metrics.
+const SHIP_DEADLINE_HOURS = 24;
+
+// GET all orders — orders still needing tracking sort by closest-to-deadline first
+// (overdue ones on top), so what needs action is always at the top of the list.
+// Already-shipped orders follow, newest sale first.
 router.get("/", async (req, res) => {
   try {
     const orders = await Order.find().sort({ createTimeEbay: -1, createdAt: -1 });
@@ -18,12 +24,35 @@ router.get("/", async (req, res) => {
     const productsByListing = {};
     for (const p of products) (productsByListing[p.ebayListingId] ||= []).push(p);
 
+    const now = Date.now();
     const results = orders.map(o => {
       const candidates = productsByListing[o.ebayItemId] || [];
       const match = candidates.length
         ? (o.variationValue ? bestVariantMatch(candidates, o.variationValue) : candidates[0])
         : null;
-      return { ...o.toObject(), amazonUrl: match?.url || null, productImage: match?.image || null };
+
+      const shipDeadline = o.createTimeEbay
+        ? new Date(o.createTimeEbay.getTime() + SHIP_DEADLINE_HOURS * 3600 * 1000)
+        : null;
+      const hasTracking = Boolean(o.trackingNumber);
+      const hoursLeft = shipDeadline && !hasTracking ? (shipDeadline.getTime() - now) / 3600000 : null;
+
+      return {
+        ...o.toObject(),
+        amazonUrl: match?.url || null,
+        productImage: match?.image || null,
+        shipDeadline,
+        hoursLeft,
+        isOverdue: hoursLeft != null && hoursLeft <= 0,
+      };
+    });
+
+    results.sort((a, b) => {
+      const aUrgent = a.hoursLeft != null;
+      const bUrgent = b.hoursLeft != null;
+      if (aUrgent && bUrgent) return a.hoursLeft - b.hoursLeft; // soonest/most-overdue deadline first
+      if (aUrgent !== bUrgent) return aUrgent ? -1 : 1; // needs-tracking orders before shipped ones
+      return new Date(b.createTimeEbay || b.createdAt) - new Date(a.createTimeEbay || a.createdAt);
     });
 
     res.json(results);

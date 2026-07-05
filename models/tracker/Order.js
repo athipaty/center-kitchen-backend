@@ -34,6 +34,10 @@ const orderSchema = new mongoose.Schema(
     buyerMessageSent: { type: Boolean, default: false },
     buyerMessageText: { type: String, default: null },
     createTimeEbay: { type: Date, default: null },
+    // Which shipping-deadline alert tiers have already been sent for this order
+    // (e.g. ['warn18h', 'overdue24h']) — prevents re-sending the same LINE alert
+    // every time the deadline-check cron runs.
+    deadlineAlertsSent: { type: [String], default: [] },
   },
   { timestamps: true }
 );
