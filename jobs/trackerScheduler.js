@@ -6,7 +6,7 @@ const Order = require("../models/tracker/Order");
 const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice } = require("./ebayPriceSync");
 const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 const { b2Enabled, listB2Files, deleteB2Prefix } = require("../utils/b2Utils");
-const { lineBroadcast } = require("../utils/lineNotify");
+const { ntfyPush } = require("../utils/ntfy");
 
 let io = null;
 
@@ -783,13 +783,17 @@ async function runShippingDeadlineCheck() {
       const label = o.title || o.ebayItemId || o.ebayOrderId;
 
       if (hoursLeft <= 0 && !alerts.includes('overdue24h')) {
-        const sent = await lineBroadcast(
-          `🚨 เกินกำหนดส่งของแล้ว: "${label}" (order ${o.ebayOrderId}) เกิน 24 ชม. หลังชำระเงิน ${Math.abs(hoursLeft).toFixed(1)} ชม. — ใส่เลขพัสดุด่วน!`
+        const sent = await ntfyPush(
+          '🚨 เกินกำหนดส่งของแล้ว',
+          `"${label}" (order ${o.ebayOrderId}) เกิน 24 ชม. หลังชำระเงิน ${Math.abs(hoursLeft).toFixed(1)} ชม. — ใส่เลขพัสดุด่วน!`,
+          { priority: 'urgent', tags: ['rotating_light'] }
         );
         if (sent) { o.deadlineAlertsSent = [...alerts, 'overdue24h']; await o.save(); }
       } else if (hoursLeft > 0 && hoursLeft <= WARN_BEFORE_HOURS && !alerts.includes('warn18h')) {
-        const sent = await lineBroadcast(
-          `⏰ ใกล้ครบกำหนด: "${label}" (order ${o.ebayOrderId}) เหลือเวลาอีก ${hoursLeft.toFixed(1)} ชม. ก่อนเกิน 24 ชม. — กรุณาใส่เลขพัสดุ`
+        const sent = await ntfyPush(
+          '⏰ ใกล้ครบกำหนด',
+          `"${label}" (order ${o.ebayOrderId}) เหลือเวลาอีก ${hoursLeft.toFixed(1)} ชม. ก่อนเกิน 24 ชม. — กรุณาใส่เลขพัสดุ`,
+          { priority: 'high', tags: ['alarm_clock'] }
         );
         if (sent) { o.deadlineAlertsSent = [...alerts, 'warn18h']; await o.save(); }
       }
