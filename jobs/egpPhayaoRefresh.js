@@ -111,13 +111,14 @@ async function enrichAll() {
 }
 
 function start() {
-  cron.schedule('5 11 * * *', refreshAll, { timezone: 'UTC' })  // 18:05 TH
-  cron.schedule('5 13 * * *', refreshAll, { timezone: 'UTC' })  // 20:05 TH
-  cron.schedule('5 15 * * *', refreshAll, { timezone: 'UTC' })  // 22:05 TH
-  cron.schedule('35 11 * * *', enrichAll, { timezone: 'UTC' })  // 18:35 TH
-  cron.schedule('35 13 * * *', enrichAll, { timezone: 'UTC' })  // 20:35 TH
-  cron.schedule('35 15 * * *', enrichAll, { timezone: 'UTC' })  // 22:35 TH
-  console.log('✅ egpPhayaoRefresh scheduled: 18:05/20:05/22:05 TH (RSS) + enrichment 30min after each')
+  // The nationwide RSS only ever exposes the latest ~handful of items across all of
+  // Thailand — it's a firehose, not a full listing. Polling it 3x/day meant Phayao's
+  // few daily announcements almost always scrolled off before a poll caught them
+  // (0 matches across every run since launch). Poll every 15min instead so coverage
+  // approaches continuous; enrich on a 5min offset so it always has fresh items to work.
+  cron.schedule('*/15 * * * *', refreshAll, { timezone: 'UTC' })
+  cron.schedule('5-59/15 * * * *', enrichAll, { timezone: 'UTC' })
+  console.log('✅ egpPhayaoRefresh scheduled: every 15min (RSS) + enrichment on 5min offset')
 }
 
 module.exports = { start, refreshAll, enrichAll }
