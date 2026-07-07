@@ -3,9 +3,9 @@ const router = express.Router();
 const axios = require("axios");
 const Product = require("../../models/tracker/Product");
 
-// 30-minute cache for deal search results — each search costs 5 credits
+// 10-minute cache for deal search results — each search costs 5 credits
 const _dealSearchCache = new Map(); // query → { deals, expiresAt }
-const DEAL_CACHE_TTL = 12 * 60 * 60 * 1000; // 12h — conserves Keepa tokens (Deal API costs 5/call)
+const DEAL_CACHE_TTL = 10 * 60 * 1000; // 10 min — conserves Keepa tokens (Deal API costs 5/call)
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
