@@ -53,6 +53,7 @@ function getUploadPdf() {
         acl: (_req, _file, cb) => cb(null, undefined),
         contentType: (_req, _file, cb) => cb(null, 'application/pdf'),
         contentDisposition: (_req, _file, cb) => cb(null, 'inline'),
+        cacheControl: (_req, _file, cb) => cb(null, 'public, max-age=31536000, immutable'),
         key: (req, file, cb) => {
           const safe = file.originalname.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '')
           cb(null, `pdfs/${Date.now()}-${safe}`)
