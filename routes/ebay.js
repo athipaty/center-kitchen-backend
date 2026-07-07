@@ -119,7 +119,7 @@ router.post('/upload-images', async (req, res) => {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
           }));
         }
-        const b2Url = await uploadToB2(Buffer.from(imgBuffer), fileKey, 'image/jpeg', 'public, max-age=300, must-revalidate');
+        const b2Url = await uploadToB2(Buffer.from(imgBuffer), fileKey, 'image/jpeg');
         b2Urls.push(b2Url);
       } catch (e) {
         console.error(`upload-images: B2 failed for ${url}:`, e.message);

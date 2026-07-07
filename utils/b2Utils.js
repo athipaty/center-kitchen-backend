@@ -35,9 +35,8 @@ function b2PublicUrl(fileKey) {
 }
 
 // Upload a Buffer to B2, returns the public URL. `cacheControl` defaults to a
-// forever-cache since most callers use a timestamped, never-reused fileKey;
-// callers that overwrite the same fileKey with new content (e.g. re-scraped
-// product photos) must pass a short revalidating value instead.
+// forever-cache since every caller uses a fileKey that's never overwritten
+// with different content once uploaded.
 async function uploadToB2(buffer, fileKey, contentType = 'image/jpeg', cacheControl = 'public, max-age=31536000, immutable') {
   const b2 = await getAuth();
 
