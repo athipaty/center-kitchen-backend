@@ -14,6 +14,7 @@ const recipeSchema = new mongoose.Schema(
     ingredients: [ingredientSchema],
     method: { type: String, default: "" },
     active: { type: Boolean, default: false },
+    type: { type: String, enum: ["sale", "staff"], default: "sale" },
   },
   { timestamps: true }
 );
