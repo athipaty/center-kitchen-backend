@@ -4,7 +4,7 @@ const router  = express.Router()
 const multer = require('multer')
 const { S3Client } = require('@aws-sdk/client-s3')
 const multerS3 = require('multer-s3')
-const { uploadToB2 } = require('../../utils/b2Utils')
+const { uploadToB2, b2PublicUrl } = require('../../utils/b2Utils')
 const { enrichAnnouncement } = require('../../utils/egpEnrich')
 const { buildProjectCards } = require('../../utils/egpPhayaoGroup')
 
@@ -118,7 +118,7 @@ router.post('/upload-pdf', requireAuth, (req, res, next) => {
   }
 }, (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
-  res.json({ url: req.file.location })
+  res.json({ url: b2PublicUrl(req.file.key) })
 })
 
 router.post('/upload-excel', requireAuth, uploadExcel.single('excel'), async (req, res) => {

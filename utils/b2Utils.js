@@ -20,9 +20,15 @@ async function getAuth() {
   return _auth;
 }
 
-// Returns the public HTTPS URL for a file key in the images bucket
+// Returns the public HTTPS URL for a file key in the images bucket.
+// Routes through the Cloudflare-fronted CDN host (B2_CDN_HOST) when configured,
+// which gets edge-cached and qualifies for Backblaze's Bandwidth Alliance free
+// egress; falls back to hitting B2 directly otherwise.
 function b2PublicUrl(fileKey) {
   const bucket = process.env.B2_BUCKET; // maesai-pdfs
+  if (process.env.B2_CDN_HOST) {
+    return `https://${process.env.B2_CDN_HOST}/file/${bucket}/${fileKey}`;
+  }
   // downloadUrl is e.g. https://f004.backblazeb2.com
   const base = (_auth?.downloadUrl) || 'https://f004.backblazeb2.com';
   return `${base}/file/${bucket}/${fileKey}`;
