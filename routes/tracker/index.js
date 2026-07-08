@@ -682,6 +682,11 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
 
   if (!amazonImages.length) return null;
 
+  // Dedupe by URL — the color swatch is frequently the same shot as the first
+  // gallery image, and without this each duplicate gets uploaded as its own
+  // distinct B2 file (so a later Set-based dedup on the uploaded URLs can't catch it).
+  amazonImages = [...new Set(amazonImages)];
+
   const { b2Enabled, uploadToB2, listB2Files } = require('../../utils/b2Utils');
 
   const asin = product.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
