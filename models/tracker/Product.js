@@ -29,6 +29,11 @@ const productSchema = new mongoose.Schema(
     ebayPrice: { type: Number, default: null }, // last price successfully synced to eBay — used by frontend instead of GetItem
     listedAt: { type: Date, default: null },
     cloudinaryFolder: { type: String, default: null },
+    // Amazon image ID of this product's own hero/first gallery photo, as last scraped.
+    // Persisted (not just kept in-memory) so a re-scrape of a sibling in the same group
+    // can reliably filter out THIS product's hero if it leaks into the sibling's gallery,
+    // regardless of process restarts or which sibling gets scraped first.
+    heroImageId: { type: String, default: null },
     status: { type: String, enum: ['active', 'out_of_stock', 'unavailable', 'error', 'archived'], default: 'active' },
     failCount: { type: Number, default: 0 },
     unavailableSince: { type: Date, default: null },

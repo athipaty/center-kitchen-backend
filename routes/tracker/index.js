@@ -553,7 +553,25 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
 
       if (hiRes.length && productAsin) {
         const heroId = amazonImageId(hiRes[0]);
-        if (heroId && !heroImageRegistry.has(heroId)) heroImageRegistry.set(heroId, productAsin);
+        if (heroId) heroImageRegistry.set(heroId, productAsin);
+
+        // Pull in sibling group members' persisted hero IDs too — the in-memory registry
+        // alone only protects whichever sibling gets scraped SECOND in a given process
+        // lifetime. Checking the DB makes the filter symmetric and restart-proof: as long
+        // as a sibling has been scraped at least once before, its hero is known up front.
+        if (product.groupId) {
+          try {
+            const siblings = await Product.find({ groupId: product.groupId, _id: { $ne: product._id }, heroImageId: { $ne: null } })
+              .select('heroImageId url').lean();
+            for (const sib of siblings) {
+              const sibAsin = sib.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1];
+              if (sib.heroImageId && sibAsin && !heroImageRegistry.has(sib.heroImageId)) {
+                heroImageRegistry.set(sib.heroImageId, sibAsin);
+              }
+            }
+          } catch {}
+        }
+
         hiRes = hiRes.filter((u, i) => {
           if (i === 0) return true; // never drop this product's own hero
           const id = amazonImageId(u);
@@ -564,6 +582,10 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
           }
           return true;
         });
+
+        if (heroId) {
+          Product.findByIdAndUpdate(product._id, { heroImageId: heroId }).catch(() => {});
+        }
       }
 
       const selectedVariant = (parsed.customization_options?.Color || []).find(c => c.is_selected);

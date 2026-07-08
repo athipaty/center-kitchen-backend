@@ -218,6 +218,18 @@ function ebayError(err) {
   return ebayMsg || err.response?.data || err.message;
 }
 
+// Trading API responses can carry multiple <Errors> blocks — e.g. a routine account-level
+// Warning (funds on hold) alongside the real Error that actually failed the call. Picking
+// the first LongMessage in document order surfaces whichever one happens to come first,
+// which is often the irrelevant Warning. Prefer an Error-severity block if one exists.
+function extractTradingErrorMessage(xml, fallback = 'eBay error') {
+  const blocks = [...xml.matchAll(/<Errors>[\s\S]*?<\/Errors>/g)].map(m => m[0]);
+  const pick = block => block?.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
+    || block?.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1];
+  const errorBlock = blocks.find(b => /<SeverityCode>Error<\/SeverityCode>/.test(b));
+  return pick(errorBlock) || pick(blocks[0]) || fallback;
+}
+
 // ── OAuth ──────────────────────────────────────────────────────────
 router.get('/auth/login', (req, res) => {
   if (!process.env.EBAY_RUNAME) return res.status(500).json({ error: 'EBAY_RUNAME not set in .env' });
@@ -2302,8 +2314,7 @@ router.post('/listing/:id/revise-photos', async (req, res) => {
         'X-EBAY-API-IAF-TOKEN': token, 'X-EBAY-API-CALL-NAME': 'ReviseFixedPriceItem', 'Content-Type': 'text/xml' },
     });
     if (/<Ack>Failure<\/Ack>/.test(xml)) {
-      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
-      return res.status(400).json({ error: msg });
+      return res.status(400).json({ error: extractTradingErrorMessage(xml) });
     }
     res.json({ ok: true });
   } catch (err) {
@@ -2456,10 +2467,7 @@ router.post('/listing/variation-photos', async (req, res) => {
     );
 
     if (/<Ack>Failure<\/Ack>/.test(xml)) {
-      const msg = xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1]
-        || xml.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1]
-        || 'eBay error';
-      return res.status(400).json({ error: msg });
+      return res.status(400).json({ error: extractTradingErrorMessage(xml) });
     }
 
     console.log(`variation-photos: updated ${withImages.length} variants on listing ${cleanId} (dimension="${dimName}")`);
