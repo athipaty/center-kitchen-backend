@@ -528,6 +528,57 @@ function amazonImageId(url) {
   return String(url).match(/\/images\/I\/([^._/]+)/)?.[1] || null;
 }
 
+// Bridges the pre-flight hero pass to the real fetch-and-upload pass for the same product,
+// so a group scrape doesn't pay for ScraperAPI twice per sibling. Short TTL — only needs to
+// survive the few seconds between the two passes within one "Fix Photos" click.
+const scrapedPageCache = new Map(); // product id string -> { parsed, expiresAt }
+const SCRAPED_PAGE_TTL = 3 * 60 * 1000;
+
+async function getParsedPage(product) {
+  const key = product._id.toString();
+  const cached = scrapedPageCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    scrapedPageCache.delete(key);
+    return cached.parsed;
+  }
+  return scraperApiAutoparse(product.url);
+}
+
+// Registers every sibling's hero image BEFORE any of them go through the real
+// scrape-and-upload pass, so the cross-sibling filter has full knowledge from the start —
+// otherwise whichever sibling gets scraped first in a brand-new group has nothing to filter
+// against yet. Caches each sibling's parsed page so the real pass (getParsedPage) reuses it
+// instead of scraping again.
+async function preflightRegisterGroupHeroes(groupId) {
+  if (!groupId) return 0;
+  const siblings = await Product.find({ groupId }).select('_id url').lean();
+  let registered = 0;
+  for (const sib of siblings) {
+    const asin = sib.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1];
+    if (!asin) continue;
+    try {
+      const parsed = await scraperApiAutoparse(sib.url);
+      if (!parsed) continue;
+      const forceHiRes = u => String(u).replace(/\._AC_(?:US\d+|SX\d+|SY\d+|SS\d+)?_?(?=\.jpg)/i, '._AC_SL1500_');
+      const hiRes = (parsed.highResImages || [])
+        .map(img => forceHiRes(typeof img === 'string' ? img : (img.link || img.url || '')))
+        .filter(u => u.includes('media-amazon') || u.includes('ssl-images-amazon'));
+      const heroId = hiRes.length ? amazonImageId(hiRes[0]) : null;
+      if (heroId) {
+        heroImageRegistry.set(heroId, asin);
+        await Product.findByIdAndUpdate(sib._id, { heroImageId: heroId });
+        registered++;
+      }
+      scrapedPageCache.set(sib._id.toString(), { parsed, expiresAt: Date.now() + SCRAPED_PAGE_TTL });
+    } catch (e) {
+      console.warn(`preflightRegisterGroupHeroes: failed for ${sib._id}:`, e.message);
+    }
+    await new Promise(r => setTimeout(r, 800)); // stay gentle on Amazon, matches sequential-scrape convention elsewhere
+  }
+  console.log(`preflightRegisterGroupHeroes: registered ${registered}/${siblings.length} heroes for group ${groupId}`);
+  return registered;
+}
+
 async function fetchAndUploadImages(product, seedImages = [], { forceUpload = false, skipSiblings = false } = {}) {
   let amazonImages = [];
   const productAsin = product.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || null;
@@ -544,7 +595,9 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
 
   if (!amazonImages.length) {
     // ── Path A: ScraperAPI autoparse (structured JSON, not blocked by Amazon) ──
-    const parsed = await scraperApiAutoparse(product.url);
+    // Reuses a pre-flight scrape (see preflightRegisterGroupHeroes) if one was cached
+    // for this product, instead of hitting ScraperAPI a second time.
+    const parsed = await getParsedPage(product);
     if (parsed) {
       const forceHiRes = u => String(u).replace(/\._AC_(?:US\d+|SX\d+|SY\d+|SS\d+)?_?(?=\.jpg)/i, '._AC_SL1500_');
       let hiRes = (parsed.highResImages || [])
@@ -836,6 +889,19 @@ async function _drainImageQueue() {
   }
   _imageUploadRunning = false;
 }
+
+// POST pre-flight: register every sibling's hero image in a group BEFORE the real
+// per-variant refresh-images calls run, so the cross-sibling contamination filter has
+// full knowledge from the first click instead of only protecting siblings scraped later
+// in the batch. Call this once per group, before looping refresh-images over its variants.
+router.post("/group/:groupId/preflight-images", async (req, res) => {
+  try {
+    const registered = await preflightRegisterGroupHeroes(req.params.groupId);
+    res.json({ ok: true, registered });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
 
 // POST re-fetch images for a product — tries Keepa first, falls back to Amazon HTML scrape + Cloudinary upload
 router.post("/:id/refresh-images", async (req, res) => {
