@@ -1518,11 +1518,6 @@ ${(row.bullets||[]).length ? `<ul>${row.bullets.map(b=>`<li>${esc(b)}</li>`).joi
 </div></div>`;
     }).join('');
 
-    // ── Gallery: images not used in photo rows ────────────────────────
-    const galleryImgs = imageUrls.slice(pr.length + 1);
-    const galleryHtml = galleryImgs.length
-      ? `<div class="gal">${galleryImgs.map(u=>`<img src="${u}" alt="">`).join('')}</div>` : '';
-
     // ── Complete spec table — ALL specs + UPC + variant + condition ───
     const allSpecRows = [
       ...cleanSpecs.map(s => `<tr><td class="sk">${esc(s.label)}</td><td>${esc(s.value)}</td></tr>`),
@@ -1599,10 +1594,6 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#222;background
 .tc ul{padding-left:18px;margin-top:4px}
 .tc ul li{font-size:13px;color:#555;line-height:1.65;margin-bottom:6px}
 
-/* ── Gallery: uniform 3-col grid ── */
-.gal{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:16px;background:${t.light}}
-.gal img{width:100%;height:160px;object-fit:contain;background:#fff;border:1px solid ${t.border};border-radius:8px;display:block}
-
 /* ── Spec table: 2-col layout ── */
 .ss{padding:0 16px 32px}
 .st{width:100%;border-collapse:collapse;font-size:14px}
@@ -1644,8 +1635,6 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#222;background
   .tc h3{font-size:18px}
   .tc p{font-size:16px}
   .tc ul li{font-size:16px}
-  .gal{grid-template-columns:repeat(2,1fr);gap:6px;padding:10px}
-  .gal img{height:110px}
   .st{font-size:15px}
   .sk,.sv{padding:8px 10px;width:auto}
   .st tr{display:grid;grid-template-columns:1fr 1fr}
@@ -1669,7 +1658,6 @@ body{font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#222;background
 <div class="sh"><h2>Why Choose This Product?</h2><div class="div"></div></div>
 <div class="fg">${f.map(x=>`<div class="fc"><span class="fi">${emoji(x.icon)||'&#10003;'}</span><h3>${esc(x.title)}</h3><p>${esc(x.desc)}</p></div>`).join('')}</div>
 ${photoRowsHtml}
-${galleryHtml}
 ${specTableHtml2col}
 <div class="cta"><h2>${esc(content.ctaHeading||'Order Today')}</h2><p>${esc(content.ctaSub||'')}</p>
 <div class="cb">${tr.slice(0,4).map(x=>`<span class="cbb">&#10003; ${esc(x)}</span>`).join('')}</div></div>
