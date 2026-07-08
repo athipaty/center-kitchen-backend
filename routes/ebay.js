@@ -3825,19 +3825,25 @@ const WATCHERS_TTL = 60 * 60 * 1000; // 1 hour cache
 let watchersLastFetch = 0;
 const WATCHERS_MIN_INTERVAL = 2 * 60 * 1000; // throttle Trading API calls
 
+// QuantitySold rides along on the same GetMyeBaySelling call as watchers — no extra API cost.
+const soldCountCache = new Map(); // listingId → { count, expiresAt }
+
 // Batch endpoint: GET /api/ebay/listings/watchers?ids=id1,id2,id3
-// Returns { watchers: { id1: N, id2: N, ... } } — fetched via GetMyeBaySelling(IncludeWatchCount)
+// Returns { watchers: { id1: N, id2: N, ... }, sold: { id1: N, id2: N, ... } } — fetched via GetMyeBaySelling(IncludeWatchCount)
 router.get('/listings/watchers', async (req, res) => {
   const rawIds = String(req.query.ids || '');
   const ids = [...new Set(rawIds.split(',').map(s => s.replace(/\D/g, '')).filter(Boolean))];
   if (!ids.length) return res.status(400).json({ error: 'ids query param required' });
 
   const result = {};
+  const soldResult = {};
   const uncached = [];
   for (const id of ids) {
     const cached = watchersCache.get(id);
+    const cachedSold = soldCountCache.get(id);
     if (cached && cached.expiresAt > Date.now()) result[id] = cached.count;
     else uncached.push(id);
+    if (cachedSold && cachedSold.expiresAt > Date.now()) soldResult[id] = cachedSold.count;
   }
 
   if (uncached.length) {
@@ -3869,22 +3875,26 @@ router.get('/listings/watchers', async (req, res) => {
             if (!listingId) continue;
             const count = parseInt(get('WatchCount') || '0', 10) || 0;
             watchersCache.set(listingId, { count, expiresAt: Date.now() + WATCHERS_TTL });
+            const soldCount = parseInt(get('QuantitySold') || '0', 10) || 0;
+            soldCountCache.set(listingId, { count: soldCount, expiresAt: Date.now() + WATCHERS_TTL });
           }
           if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
         }
         for (const id of uncached) {
           const cached = watchersCache.get(id);
           result[id] = cached ? cached.count : 0;
+          const cachedSold = soldCountCache.get(id);
+          soldResult[id] = cachedSold ? cachedSold.count : 0;
         }
       } catch (apiErr) {
         console.error('[eBay watchers] Trading API error:', apiErr.response?.data || apiErr.message);
         for (const id of uncached) result[id] = 0;
-        return res.json({ watchers: result });
+        return res.json({ watchers: result, sold: soldResult });
       }
     }
   }
 
-  res.json({ watchers: result });
+  res.json({ watchers: result, sold: soldResult });
 });
 
 // Batch endpoint: GET /api/ebay/listings/photo-status?ids=id1,id2,id3
