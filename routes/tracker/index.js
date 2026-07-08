@@ -516,8 +516,21 @@ async function scraperApiAutoparse(amazonUrl) {
   }
 }
 
+// Amazon sometimes cross-links closely related listings (e.g. a single-pack and a multi-pack
+// of the same product), and ScraperAPI's scrape of one can non-deterministically fold in the
+// other's hero/first gallery photo. Track each ASIN's own hero image ID as we see it, so a
+// later scrape can strip out any image that's actually a DIFFERENT ASIN's registered hero —
+// the shared lifestyle/feature photos in the middle of the gallery are untouched since those
+// never occupy position 0 for any product.
+const heroImageRegistry = new Map(); // amazon image id -> asin it belongs to
+
+function amazonImageId(url) {
+  return String(url).match(/\/images\/I\/([^._/]+)/)?.[1] || null;
+}
+
 async function fetchAndUploadImages(product, seedImages = [], { forceUpload = false, skipSiblings = false } = {}) {
   let amazonImages = [];
+  const productAsin = product.url.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || null;
 
   // If seedImages are pre-extracted Amazon CDN image URLs (from colorImages sibling seeding),
   // skip the ScraperAPI page fetch entirely — saves 10 credits per sibling.
@@ -534,9 +547,24 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
     const parsed = await scraperApiAutoparse(product.url);
     if (parsed) {
       const forceHiRes = u => String(u).replace(/\._AC_(?:US\d+|SX\d+|SY\d+|SS\d+)?_?(?=\.jpg)/i, '._AC_SL1500_');
-      const hiRes = (parsed.highResImages || [])
+      let hiRes = (parsed.highResImages || [])
         .map(img => forceHiRes(typeof img === 'string' ? img : (img.link || img.url || '')))
         .filter(u => u.includes('media-amazon') || u.includes('ssl-images-amazon'));
+
+      if (hiRes.length && productAsin) {
+        const heroId = amazonImageId(hiRes[0]);
+        if (heroId && !heroImageRegistry.has(heroId)) heroImageRegistry.set(heroId, productAsin);
+        hiRes = hiRes.filter((u, i) => {
+          if (i === 0) return true; // never drop this product's own hero
+          const id = amazonImageId(u);
+          const owner = id ? heroImageRegistry.get(id) : null;
+          if (owner && owner !== productAsin) {
+            console.log(`fetchAndUploadImages: dropping cross-linked hero image (belongs to ${owner}) from ${productAsin}'s scrape`);
+            return false;
+          }
+          return true;
+        });
+      }
 
       const selectedVariant = (parsed.customization_options?.Color || []).find(c => c.is_selected);
       const swatch = selectedVariant?.image ? forceHiRes(selectedVariant.image) : null;
