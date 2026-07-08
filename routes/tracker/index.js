@@ -698,20 +698,26 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
     let existingUrls = [];
     try {
       existingUrls = await listB2Files(folder + '/');
-      if (existingUrls.length >= amazonImages.length && existingUrls.length > 0) {
-        console.log(`fetchAndUploadImages: B2 folder ${folder} already has ${existingUrls.length}/${amazonImages.length} images — skipping`);
+      if (existingUrls.length === amazonImages.length && existingUrls.length > 0) {
+        console.log(`fetchAndUploadImages: B2 folder ${folder} already has ${existingUrls.length} images matching the scrape count — skipping`);
         await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
         return existingUrls;
       }
-      if (existingUrls.length > 0) {
-        console.log(`fetchAndUploadImages: B2 folder ${folder} has ${existingUrls.length}/${amazonImages.length} — uploading ${amazonImages.length - existingUrls.length} new`);
-      }
     } catch {}
 
-    const startIndex = existingUrls.length;
-    const b2Urls = [...existingUrls];
+    // Counts don't match (stale/corrupted folder from a prior scrape, or first upload) —
+    // wipe and re-upload the full fresh set rather than resuming from existingUrls.length,
+    // which assumed the old files were always a valid prefix of the new list. That assumption
+    // breaks whenever the old folder over-scraped (e.g. duplicate images) and the fresh scrape
+    // finds fewer real photos than before — resuming would silently keep the stale extras forever.
+    if (existingUrls.length > 0) {
+      console.log(`fetchAndUploadImages: B2 folder ${folder} has ${existingUrls.length} images but scrape found ${amazonImages.length} — replacing`);
+      await deleteB2Prefix(folder + '/');
+    }
 
-    for (let i = startIndex; i < amazonImages.length; i++) {
+    const b2Urls = [];
+
+    for (let i = 0; i < amazonImages.length; i++) {
       try {
         const fullResUrl = amazonImages[i].replace(/\._[A-Z0-9_]+_(?=\.jpg)/i, '');
         let imgBuffer;
@@ -733,7 +739,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
       }
     }
 
-    if (b2Urls.length > existingUrls.length) {
+    if (b2Urls.length) {
       await Product.findByIdAndUpdate(product._id, { image: b2Urls[0], images: b2Urls, cloudinaryFolder: folder });
       console.log(`fetchAndUploadImages: saved ${b2Urls.length} B2 images for ${product._id}`);
     }
