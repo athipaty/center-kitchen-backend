@@ -512,7 +512,7 @@ async function runAutoEndZeroViews() {
 
     // A zero-view listing gets one retitle rescue attempt before it's ever ended — a bad
     // title is a more common cause of zero views than genuinely no demand. Only actually
-    // ends it if it's STILL at zero 7 days after that rescue attempt.
+    // ends it if it's STILL at zero 3 days after that rescue attempt.
     const rescueDocs = await Product.find(
       { ebayListingId: { $in: zeroViewIds } }, 'ebayListingId zeroViewRescueAt'
     ).lean();
@@ -521,14 +521,14 @@ async function runAutoEndZeroViews() {
       if (d.zeroViewRescueAt) rescuedAtByListing[d.ebayListingId] = d.zeroViewRescueAt;
     }
 
-    const RESCUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+    const RESCUE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
     const toRescue = [];
     const toEnd = [];
     for (const id of zeroViewIds) {
       const rescuedAt = rescuedAtByListing[id];
       if (!rescuedAt) toRescue.push(id);
       else if (Date.now() - new Date(rescuedAt).getTime() >= RESCUE_WINDOW_MS) toEnd.push(id);
-      // else: still inside its 7-day post-rescue observation window — leave it alone
+      // else: still inside its 3-day post-rescue observation window — leave it alone
     }
 
     if (toRescue.length) {
@@ -1004,7 +1004,7 @@ function start(socketIo) {
   // Variation sync: remove eBay variations not in tracker — Sunday 3:15am (after optimize)
   cron.schedule("15 3 * * 0", runWeeklyVariationSync);
   // Zero-view listings (4+ days old): retitle once as a rescue attempt, only end them if
-  // still zero-view a week after that — daily at 19:00 Singapore time
+  // still zero-view 3 days after that — daily at 19:00 Singapore time
   cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
   // Auto-restock sold listings back to qty 1 — runs every 30 minutes (was 15, halves GetOrders calls)
   cron.schedule("*/30 * * * *", () => runAutoRestock());
