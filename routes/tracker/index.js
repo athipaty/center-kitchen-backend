@@ -947,44 +947,84 @@ router.post("/:id/refresh-images", async (req, res) => {
   }
 });
 
+// Ends the eBay listing (or removes just this variation, if siblings remain) and then
+// hard-deletes the product — in that order, so a failed eBay call never leaves a listing
+// orphaned live on eBay with no tracker record pointing at it. Shared by the single-delete
+// route and the batched group-delete route below.
+async function deleteProductAndListing(product) {
+  if (product.ebayListingId) {
+    const remainingWithListing = await Product.countDocuments({ ebayListingId: product.ebayListingId, _id: { $ne: product._id } });
+    // eBay sometimes closes listings before we do (expiry, policy). Treat those as success.
+    const isAlreadyEnded = e => /already been closed|not allowed to revise ended|listing has ended|does not exist/i.test(e.message || '');
+    try {
+      if (remainingWithListing === 0) {
+        await endListing(product.ebayListingId);
+      } else if (product.variant) {
+        await removeVariation(product.ebayListingId, product.variant);
+      }
+    } catch (e) {
+      if (!isAlreadyEnded(e)) {
+        return { success: false, error: `Could not update eBay listing ${product.ebayListingId}: ${e.message}. Nothing was deleted — try again.` };
+      }
+    }
+  }
+
+  await Product.findByIdAndDelete(product._id);
+
+  // Delete stored images (both Cloudinary and B2 if migrated)
+  if (product.cloudinaryFolder) {
+    deleteCloudinaryFolder(product.cloudinaryFolder).catch(() => {});
+    deleteB2Prefix(product.cloudinaryFolder + '/').catch(() => {});
+  }
+  // Also delete tracker-images/ folder — separate from cloudinaryFolder which
+  // gets overwritten with the ebay-listings path after listing is created.
+  const asin = (product.url || '').match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
+  const trackerSlug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
+  const trackerFolder = `tracker-images/${trackerSlug}`;
+  if (trackerFolder !== product.cloudinaryFolder) {
+    deleteCloudinaryFolder(trackerFolder).catch(() => {});
+    deleteB2Prefix(trackerFolder + '/').catch(() => {});
+  }
+  return { success: true };
+}
+
 // DELETE remove a product — hard delete
 router.delete("/:id", async (req, res) => {
   try {
-    const product = await Product.findByIdAndDelete(req.params.id);
+    const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ error: "Product not found" });
 
-    // End the eBay listing only if no other tracked variants still use it.
-    // For multi-variation listings, deleting one variant should NOT end the whole listing.
-    if (product.ebayListingId) {
-      const remainingWithListing = await Product.countDocuments({ ebayListingId: product.ebayListingId });
-      // eBay sometimes closes listings before we do (expiry, policy). Treat those as success.
-      const isAlreadyEnded = e => /already been closed|not allowed to revise ended|listing has ended|does not exist/i.test(e.message || '');
-      if (remainingWithListing === 0) {
-        endListing(product.ebayListingId).catch(e => {
-          if (!isAlreadyEnded(e)) console.warn(`delete: failed to end eBay listing ${product.ebayListingId}:`, e.message);
-        });
-      } else if (product.variant) {
-        removeVariation(product.ebayListingId, product.variant).catch(e => {
-          if (!isAlreadyEnded(e)) console.warn(`delete: failed to remove variation "${product.variant}" from eBay listing ${product.ebayListingId}:`, e.message);
-        });
+    const result = await deleteProductAndListing(product);
+    if (!result.success) return res.status(502).json({ error: result.error });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST bulk-delete a whole group (all variants) in a single request — runs entirely
+// server-side so it completes even if the client navigates away, closes the tab, or
+// loses connection right after firing it. The old approach (N sequential client-driven
+// DELETE calls, one per variant) left every not-yet-called variant permanently stuck if
+// the browser was interrupted mid-loop — the bigger the variant group, the longer that
+// exposure window. A single request has no client-side loop left to interrupt.
+router.post("/group-delete", async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ error: "ids array is required" });
+
+    const results = [];
+    for (const id of ids) {
+      try {
+        const product = await Product.findById(id);
+        if (!product) { results.push({ id, success: false, error: "Product not found" }); continue; }
+        const result = await deleteProductAndListing(product);
+        results.push({ id, ...result });
+      } catch (e) {
+        results.push({ id, success: false, error: e.message });
       }
     }
-
-    // Delete stored images (both Cloudinary and B2 if migrated)
-    if (product.cloudinaryFolder) {
-      deleteCloudinaryFolder(product.cloudinaryFolder).catch(() => {});
-      deleteB2Prefix(product.cloudinaryFolder + '/').catch(() => {});
-    }
-    // Also delete tracker-images/ folder — separate from cloudinaryFolder which
-    // gets overwritten with the ebay-listings path after listing is created.
-    const asin = (product.url || '').match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || product._id.toString();
-    const trackerSlug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
-    const trackerFolder = `tracker-images/${trackerSlug}`;
-    if (trackerFolder !== product.cloudinaryFolder) {
-      deleteCloudinaryFolder(trackerFolder).catch(() => {});
-      deleteB2Prefix(trackerFolder + '/').catch(() => {});
-    }
-    res.json({ success: true });
+    res.json({ results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
