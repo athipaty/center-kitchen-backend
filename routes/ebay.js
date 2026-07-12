@@ -1841,22 +1841,33 @@ router.get('/sold', async (req, res) => {
       timeout: 8000,
     });
 
-    const prices = (data.itemSales || [])
-      .map(item => parseFloat(item.lastSoldPrice?.value || 0))
-      .filter(p => p > 0);
+    const withPrice = (data.itemSales || [])
+      .map(item => ({ item, price: parseFloat(item.lastSoldPrice?.value || 0) }))
+      .filter(({ price }) => price > 0)
+      .sort((a, b) => new Date(b.item.lastSoldDate || 0) - new Date(a.item.lastSoldDate || 0)); // most recent first
 
-    if (!prices.length) {
-      const empty = { count: 0, avg: null, min: null, max: null };
+    if (!withPrice.length) {
+      const empty = { count: 0, avg: null, min: null, max: null, items: [] };
       setCache(cacheKey, empty);
       return res.json(empty);
     }
 
+    const prices = withPrice.map(w => w.price);
     const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
     const result = {
       count: prices.length,
       avg: Math.round(avg * 100) / 100,
       min: Math.min(...prices),
       max: Math.max(...prices),
+      // 5 most recently sold, for a side-by-side comparison against your own planned price
+      items: withPrice.slice(0, 5).map(({ item, price }) => ({
+        title: item.title,
+        price,
+        url: item.itemWebUrl || item.itemHref || null,
+        image: item.image?.imageUrl || null,
+        condition: item.condition || null,
+        soldDate: item.lastSoldDate || null,
+      })),
     };
     setCache(cacheKey, result);
     res.json(result);
