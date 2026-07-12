@@ -4,7 +4,12 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const { createServer } = require("http");
 const { Server } = require("socket.io");
-require("dotenv").config();
+// override:true so this project's own .env always wins over any stray OS-level environment
+// variable of the same name (e.g. a stale ANTHROPIC_API_KEY set globally on a dev machine) —
+// dotenv's default behavior is to NOT overwrite an already-set process.env var, which silently
+// shadows .env with whatever else happens to be set outside this project. No effect in
+// production (Render injects env vars directly, there's no .env file to load there).
+require("dotenv").config({ override: true });
 
 const rateLimit = require('express-rate-limit');
 const app = express();
