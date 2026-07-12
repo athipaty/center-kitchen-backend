@@ -9,7 +9,6 @@ const DEAL_CACHE_TTL = 10 * 60 * 1000; // 10 min — conserves Keepa tokens (Dea
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
-const { deleteCloudinaryFolder } = require("../../utils/cloudinaryUtils");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
 const { endListing, removeVariation } = require("../../jobs/ebayPriceSync");
 
@@ -992,9 +991,10 @@ async function deleteProductAndListing(product) {
 
   await Product.findByIdAndDelete(product._id);
 
-  // Delete stored images (both Cloudinary and B2 if migrated)
+  // Delete stored images from B2 (the active storage since migrateCloudinaryToB2.js —
+  // Cloudinary itself is no longer called here since that account was disabled and every
+  // delete call started failing permanently with "disabled customer")
   if (product.cloudinaryFolder) {
-    deleteCloudinaryFolder(product.cloudinaryFolder).catch(() => {});
     deleteB2Prefix(product.cloudinaryFolder + '/').catch(() => {});
   }
   // Also delete tracker-images/ folder — separate from cloudinaryFolder which
@@ -1003,7 +1003,6 @@ async function deleteProductAndListing(product) {
   const trackerSlug = `${product._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
   const trackerFolder = `tracker-images/${trackerSlug}`;
   if (trackerFolder !== product.cloudinaryFolder) {
-    deleteCloudinaryFolder(trackerFolder).catch(() => {});
     deleteB2Prefix(trackerFolder + '/').catch(() => {});
   }
   return { success: true };
@@ -1051,7 +1050,8 @@ router.post("/group-delete", async (req, res) => {
   }
 });
 
-// POST manually trigger Cloudinary orphan cleanup now
+// POST manually trigger B2 orphan cleanup now (route path/export name kept as "cloudinary"
+// to avoid unrelated churn — the Cloudinary-specific cleanup logic itself was removed)
 router.post("/cloudinary-cleanup", async (req, res) => {
   try {
     await scheduler.cloudinaryCleanup();

@@ -4,7 +4,6 @@ const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
 const Order = require("../models/tracker/Order");
 const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice, bestVariantMatch } = require("./ebayPriceSync");
-const { deleteCloudinaryFolder } = require("../utils/cloudinaryUtils");
 const { b2Enabled, listB2Files, deleteB2Prefix } = require("../utils/b2Utils");
 const { ntfyPush } = require("../utils/ntfy");
 
@@ -936,79 +935,15 @@ async function runShippingDeadlineCheck() {
   }
 }
 
-// Delete Cloudinary folders that are no longer linked to any tracked product.
+// Delete B2 storage folders that are no longer linked to any tracked product.
 // Covers both tracker-images/ and ebay-listings/ prefixes.
+// (Formerly also cleaned up Cloudinary — removed once that account was disabled and every
+// deletion started failing permanently with "disabled customer"; B2 has been the actual
+// active storage since the migrateCloudinaryToB2.js migration, so nothing was lost by
+// dropping the dead Cloudinary pass, just the weekly log noise from calls that could never
+// succeed again.)
 async function runCloudinaryCleanup() {
-  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
-  if (!cloud || !apiKey || !apiSecret) return;
-
-  try {
-    console.log('cloudinaryCleanup: starting weekly orphan cleanup');
-
-    // 1. Collect all folder paths still in use by active products
-    const products = await Product.find({}, { _id: 1, url: 1, cloudinaryFolder: 1 }).lean();
-    const activeFolders = new Set();
-    for (const p of products) {
-      if (p.cloudinaryFolder) activeFolders.add(p.cloudinaryFolder);
-      // Only protect tracker-images/ if the product hasn't been listed yet.
-      // Once listed, cloudinaryFolder is updated to ebay-listings/ and the tracker-images/
-      // folder is redundant — let the cleanup reclaim it.
-      if (!p.cloudinaryFolder || p.cloudinaryFolder.startsWith('tracker-images/')) {
-        const asin = (p.url || '').match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || p._id.toString();
-        const slug = `${p._id}-${asin}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60);
-        activeFolders.add(`tracker-images/${slug}`);
-      }
-    }
-
-    // 2. List all images under both prefixes, extract unique folder names
-    const auth = { username: apiKey, password: apiSecret };
-    const orphans = new Set();
-    for (const prefix of ['tracker-images/', 'ebay-listings/']) {
-      let nextCursor = null;
-      do {
-        const params = new URLSearchParams({ prefix, max_results: '200', type: 'upload' });
-        if (nextCursor) params.set('next_cursor', nextCursor);
-        const { data } = await axios.get(
-          `https://api.cloudinary.com/v1_1/${cloud}/resources/image?${params}`,
-          { auth, timeout: 15000 }
-        );
-        for (const r of data.resources || []) {
-          const parts = r.public_id.split('/');
-          if (parts.length >= 2) {
-            const folder = parts[0] + '/' + parts[1];
-            if (!activeFolders.has(folder)) orphans.add(folder);
-          }
-        }
-        nextCursor = data.next_cursor || null;
-      } while (nextCursor);
-    }
-
-    if (!orphans.size) {
-      console.log('cloudinaryCleanup: no orphaned folders found');
-      return;
-    }
-    console.log(`cloudinaryCleanup: deleting ${orphans.size} orphaned folders`);
-
-    // 3. Delete orphans one at a time to avoid Cloudinary 420 rate limit
-    let deleted = 0, failed = 0;
-    for (const folder of orphans) {
-      try {
-        await deleteCloudinaryFolder(folder);
-        deleted++;
-      } catch (e) {
-        console.warn(`cloudinaryCleanup: failed to delete ${folder}:`, e.message);
-        failed++;
-      }
-      await new Promise(r => setTimeout(r, 1000)); // 1s gap between deletions
-    }
-    console.log(`cloudinaryCleanup: done — ${deleted} deleted, ${failed} failed`);
-  } catch (e) {
-    console.error('cloudinaryCleanup: error:', e.message);
-  }
-
-  // B2 orphan cleanup — mirrors the Cloudinary pass above
+  // B2 orphan cleanup
   if (!b2Enabled()) return;
   try {
     const products = await Product.find({}, { _id: 1, url: 1, cloudinaryFolder: 1 }).lean();
