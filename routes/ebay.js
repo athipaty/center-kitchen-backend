@@ -4016,6 +4016,42 @@ router.get('/listings/prices-batch', async (req, res) => {
   }
 });
 
+// ── Batch auction status (bid count + end time) — one GetItem call per listing ──
+// ?ids=123,456  Returns { "123": { bidCount, endTime }, ... }
+router.get('/listings/auction-status', async (req, res) => {
+  const rawIds = String(req.query.ids || '').split(',').map(s => s.replace(/\D/g, '')).filter(Boolean);
+  if (!rawIds.length) return res.status(400).json({ error: 'ids required' });
+  try {
+    const token = await getAccessToken();
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+    const headers = { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' };
+
+    const result = {};
+    await Promise.all(rawIds.map(async cleanId => {
+      try {
+        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+          `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`,
+          { headers: { ...headers, 'X-EBAY-API-CALL-NAME': 'GetItem' } }
+        );
+        if (/<Ack>Failure<\/Ack>/.test(xml)) {
+          const errCode = xml.match(/<ErrorCode>(\d+)<\/ErrorCode>/)?.[1];
+          const longMsg = (xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || '').toLowerCase();
+          const isGone = errCode === '17' || longMsg.includes('no such') || longMsg.includes('invalid item') || longMsg.includes('not found for itemid');
+          result[cleanId] = { error: isGone ? 'not_found' : 'api_error' };
+          return;
+        }
+        const bidCount = parseInt(xml.match(/<BidCount>(\d+)<\/BidCount>/)?.[1] || '0', 10) || 0;
+        const endTime = xml.match(/<EndTime>([^<]+)<\/EndTime>/)?.[1] || null;
+        result[cleanId] = { bidCount, endTime };
+      } catch { result[cleanId] = { error: 'failed' }; }
+    }));
+    res.json(result);
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Get eBay listing view counts (batch — one Analytics API call for all IDs) ──
 const VIEW_METRICS = ['LISTING_VIEWS_TOTAL'];
 const viewsCache = new Map(); // listingId → { count, expiresAt }
