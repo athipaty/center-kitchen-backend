@@ -102,7 +102,8 @@ function _keepaImages(p) {
   return p.imagesCSV.split(',').filter(Boolean).map(s => `https://images-na.ssl-images-amazon.com/images/I/${s.trim()}`);
 }
 
-// GET search for items under $15 with recent price drops using Keepa Deal API
+// GET search for items with recent price drops using Keepa Deal API, under an optional
+// maxPrice (defaults to $15, matches the Deals-tab search; Auction tab passes a lower ceiling).
 // Deal API returns up to 150 items per category; price/rating filters applied client-side
 // since API-side filters are unreliable. Ratings fetched via a second batch product call.
 router.get("/search-deals", async (req, res) => {
@@ -114,7 +115,8 @@ router.get("/search-deals", async (req, res) => {
     const categoryId = KEEPA_CATEGORY_IDS[category];
     if (!categoryId) return res.status(400).json({ error: `Unknown category "${category}". Must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
 
-    const cacheKey = category.toLowerCase();
+    const maxPrice = Number(req.query.maxPrice) > 0 ? Number(req.query.maxPrice) : 15;
+    const cacheKey = `${category.toLowerCase()}:${maxPrice}`;
     const cached = _dealSearchCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       console.log(`search-deals: cache hit for "${category}" — 0 tokens`);
@@ -158,14 +160,14 @@ router.get("/search-deals", async (req, res) => {
       try { return Buffer.from(b).toString("utf-8"); } catch { return null; }
     }
 
-    // Step 2: client-side filter — keep only items priced ≤ $15
+    // Step 2: client-side filter — keep only items priced ≤ maxPrice
     const candidates = drItems.filter(d => {
       const p = dealPrice(d.current);
-      return p !== null && p <= 15;
+      return p !== null && p <= maxPrice;
     }).slice(0, 50);
 
     if (!candidates.length) {
-      console.log(`search-deals "${category}": dr=${drItems.length} — no items under $15`);
+      console.log(`search-deals "${category}": dr=${drItems.length} — no items under $${maxPrice}`);
       return res.json({ category, deals: [] });
     }
 
@@ -214,7 +216,7 @@ router.get("/search-deals", async (req, res) => {
       })
       .sort((a, b) => (b.discountPercent || 0) - (a.discountPercent || 0));
 
-    console.log(`search-deals "${category}": dr=${drItems.length} under$15=${candidates.length} passed=${deals.length}`);
+    console.log(`search-deals "${category}": dr=${drItems.length} under$${maxPrice}=${candidates.length} passed=${deals.length}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ category, deals });
   } catch (err) {
