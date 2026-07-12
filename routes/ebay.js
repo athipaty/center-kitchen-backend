@@ -1761,31 +1761,60 @@ router.get('/competitors', async (req, res) => {
     // Confirmed live on a real case: GTIN search returned 3 listings (cheapest $17.99) while a
     // title search on the same product returned 20 (cheapest $11.32), including listings that
     // report that exact GTIN on their own item page but never surfaced in the GTIN search index.
-    const searches = [];
-    if (upc) {
-      searches.push(
-        axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
-          params: { gtin: upc, filter: 'conditions:{NEW},buyingOptions:{FIXED_PRICE}', sort: 'price', limit: 20 },
-          headers: h, timeout: 8000,
-        }).then(r => r.data.itemSummaries || []).catch(() => [])
-      );
+    async function searchListings(buyingOption) {
+      const searches = [];
+      if (upc) {
+        searches.push(
+          axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
+            params: { gtin: upc, filter: `conditions:{NEW},buyingOptions:{${buyingOption}}`, sort: 'price', limit: 20 },
+            headers: h, timeout: 8000,
+          }).then(r => r.data.itemSummaries || []).catch(() => [])
+        );
+      }
+      if (title) {
+        const q = title.split(' ').slice(0, 6).join(' ');
+        searches.push(
+          axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
+            params: { q, filter: `conditions:{NEW},buyingOptions:{${buyingOption}}`, sort: 'price', limit: 20 },
+            headers: h, timeout: 8000,
+          }).then(r => r.data.itemSummaries || []).catch(() => [])
+        );
+      }
+      const merged = (await Promise.all(searches)).flat();
+      const seen = new Set();
+      return merged.filter(item => {
+        if (seen.has(item.itemId)) return false;
+        seen.add(item.itemId);
+        return true;
+      });
     }
-    if (title) {
-      const q = title.split(' ').slice(0, 6).join(' ');
-      searches.push(
-        axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
-          params: { q, filter: 'conditions:{NEW},buyingOptions:{FIXED_PRICE}', sort: 'price', limit: 20 },
-          headers: h, timeout: 8000,
-        }).then(r => r.data.itemSummaries || []).catch(() => [])
-      );
-    }
-    const merged = (await Promise.all(searches)).flat();
-    const seen = new Set();
-    const items = merged.filter(item => {
-      if (seen.has(item.itemId)) return false;
-      seen.add(item.itemId);
-      return true;
-    });
+
+    const [items, auctionItems] = await Promise.all([
+      searchListings('FIXED_PRICE'),
+      searchListings('AUCTION'),
+    ]);
+
+    // Auctions kept separate from the fixed-price stats — a current bid isn't a sale price
+    // (it can still climb before the auction ends), so blending it into median/lowest would
+    // understate what buyers actually end up paying. $0.01 starting bids are normal for
+    // auctions, not noise, so unlike fixed-price listings these aren't filtered by a price floor.
+    const auctionsWithBid = auctionItems
+      .map(item => ({ item, bid: parseFloat(item.currentBidPrice?.value ?? item.price?.value ?? 0), bidCount: item.bidCount || 0 }))
+      .sort((a, b) => a.bid - b.bid);
+    const auctions = {
+      count: auctionsWithBid.length,
+      lowest: auctionsWithBid.length ? auctionsWithBid[0].bid : null,
+      items: auctionsWithBid.slice(0, 5).map(({ item, bid, bidCount }) => ({
+        title: item.title,
+        currentBid: bid,
+        bidCount,
+        url: item.itemWebUrl || null,
+        image: item.image?.imageUrl || null,
+        condition: item.condition || null,
+        seller: item.seller?.username || null,
+        endDate: item.itemEndDate || null,
+      })),
+    };
 
     const withPrice = items
       .map(item => ({ item, price: parseFloat(item.price?.value || 0) }))
@@ -1793,7 +1822,7 @@ router.get('/competitors', async (req, res) => {
       .sort((a, b) => a.price - b.price);
 
     if (!withPrice.length) {
-      const empty = { count: 0, lowest: null, median: null, avg: null, items: [] };
+      const empty = { count: 0, lowest: null, median: null, avg: null, items: [], auctions };
       setCache(cacheKey, empty);
       return res.json(empty);
     }
@@ -1818,6 +1847,7 @@ router.get('/competitors', async (req, res) => {
         condition: item.condition || null,
         seller: item.seller?.username || null,
       })),
+      auctions,
     };
     setCache(cacheKey, result);
     res.json(result);
