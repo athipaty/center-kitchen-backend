@@ -3615,7 +3615,31 @@ router.post('/trading-create-listing', async (req, res) => {
 
     if (!listingId) return res.status(500).json({ error: 'Listing created but could not extract ItemID', raw: xml.slice(0, 500) });
 
-    res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}`, isMultiVariation: !usedSingleItemFallback });
+    // Link the tracked product record(s) to this listing in the SAME request that created it —
+    // deliberately not left to a separate PATCH call from the frontend afterward. A real incident
+    // (2026-07-12) had the eBay listing created successfully but the client's follow-up PATCH
+    // never landed (a backend redeploy cut the connection), leaving a live, fully-paid-for eBay
+    // listing with no ebayListingId anywhere in the DB — invisible to price sync, Deals/Tracker,
+    // and at risk of the orphan-cleanup job ending it outright. Doing the link here means it can
+    // only be missing if the listing creation itself failed too, in which case there's nothing to
+    // link — not as a side effect of a network hiccup after the hard part already succeeded.
+    const linkFailures = [];
+    const productLinks = (variants || []).filter(v => v.productId);
+    for (const v of productLinks) {
+      try {
+        const updated = await Product.findByIdAndUpdate(v.productId, {
+          ebayListingId: listingId,
+          cloudinaryFolder: v.cloudinaryFolder || null,
+          listedAt: new Date(),
+        }, { new: true });
+        if (!updated) linkFailures.push(v.productId);
+      } catch (e) {
+        console.error(`trading-create-listing: failed to link product ${v.productId} to ${listingId}:`, e.message);
+        linkFailures.push(v.productId);
+      }
+    }
+
+    res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}`, isMultiVariation: !usedSingleItemFallback, ...(linkFailures.length ? { linkFailures } : {}) });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
@@ -3650,6 +3674,7 @@ router.post('/trading-create-auction-listing', async (req, res) => {
       returns = { accepted: true, days: 30, buyerPays: true },
       sellerCountry = 'TH',
       sellerLocation = 'Phayao',
+      productId, cloudinaryFolder,
     } = req.body;
 
     if (!title || !_price) return res.status(400).json({ error: 'title and price are required' });
@@ -3857,7 +3882,26 @@ router.post('/trading-create-auction-listing', async (req, res) => {
 
     if (!listingId) return res.status(500).json({ error: 'Listing created but could not extract ItemID', raw: xml.slice(0, 500) });
 
-    res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}` });
+    // Link the tracked product record in the SAME request that created the listing — see the
+    // matching comment in trading-create-listing for why this can't be a separate follow-up call.
+    let linkFailed = false;
+    if (productId) {
+      try {
+        const updated = await Product.findByIdAndUpdate(productId, {
+          ebayListingId: listingId,
+          cloudinaryFolder: cloudinaryFolder || null,
+          ebayPrice: Number(_price),
+          listingType: 'AUCTION',
+          listedAt: new Date(),
+        }, { new: true });
+        if (!updated) linkFailed = true;
+      } catch (e) {
+        console.error(`trading-create-auction-listing: failed to link product ${productId} to ${listingId}:`, e.message);
+        linkFailed = true;
+      }
+    }
+
+    res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}`, ...(linkFailed ? { linkFailed: true } : {}) });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });

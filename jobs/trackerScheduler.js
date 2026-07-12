@@ -369,6 +369,7 @@ async function runOrphanCleanup() {
     // is HasMoreItems below. At 200 entries/page this covers 40,000 listings.
     const allEbayIds = [];
     const watchCountMap = {}; // listingId → watchCount
+    const startTimeMap = {};  // listingId → Date
     for (let page = 1; page <= 200; page++) {
       const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
       const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling' } });
@@ -381,6 +382,8 @@ async function runOrphanCleanup() {
         if (!itemId) continue;
         allEbayIds.push(itemId);
         watchCountMap[itemId] = parseInt(block.match(/<WatchCount>(\d+)<\/WatchCount>/)?.[1] || '0', 10);
+        const startTime = block.match(/<StartTime>([^<]+)<\/StartTime>/)?.[1];
+        if (startTime) startTimeMap[itemId] = new Date(startTime);
       }
       if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
     }
@@ -420,14 +423,35 @@ async function runOrphanCleanup() {
       console.warn('orphan-cleanup: could not fetch view counts:', e.message);
     }
 
-    const toEnd = orphanIds.filter(id => (viewCounts[id] || 0) === 0 && (watchCountMap[id] || 0) === 0);
-    const skipped = orphanIds.filter(id => (viewCounts[id] || 0) > 0 || (watchCountMap[id] || 0) > 0);
+    // Grace period: a listing younger than this might just not have finished linking to its
+    // tracker record yet (e.g. an in-flight auto-list request cut short by a deploy or network
+    // blip — a real incident on 2026-07-12 left a live, zero-view listing looking exactly like an
+    // orphan within minutes of creation). Ending it here would be destroying a legitimate listing,
+    // not cleaning up an abandoned one, so anything under 24h old is held back and alerted on
+    // instead of ended outright.
+    const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const isNew = id => startTimeMap[id] && (now - startTimeMap[id].getTime()) < ORPHAN_GRACE_MS;
+
+    const tooNew = orphanIds.filter(isNew);
+    const eligible = orphanIds.filter(id => !isNew(id));
+    if (tooNew.length) {
+      console.log(`orphan-cleanup: holding ${tooNew.length} orphan(s) under 24h old (grace period): ${tooNew.join(', ')}`);
+      await ntfyPush(
+        '🔗 Untracked eBay listing found',
+        `${tooNew.length} listing(s) are live on eBay with no tracker record, but are under 24h old so weren't ended: ${tooNew.map(id => `https://www.ebay.com/itm/${id}`).join(', ')}. If this isn't expected, link it manually before tomorrow's cleanup.`,
+        { priority: 'high', tags: ['link'] }
+      ).catch(() => {});
+    }
+
+    const toEnd = eligible.filter(id => (viewCounts[id] || 0) === 0 && (watchCountMap[id] || 0) === 0);
+    const skipped = eligible.filter(id => (viewCounts[id] || 0) > 0 || (watchCountMap[id] || 0) > 0);
     if (skipped.length) {
       console.log(`orphan-cleanup: keeping ${skipped.length} orphan(s) with views/watches: ${skipped.map(id => `${id}(v:${viewCounts[id]||0},w:${watchCountMap[id]||0})`).join(', ')}`);
     }
 
     if (!toEnd.length) {
-      console.log('orphan-cleanup: no orphans to end (all have views or watches)');
+      console.log('orphan-cleanup: no orphans to end (all have views/watches, or are within the 24h grace period)');
       return;
     }
 
