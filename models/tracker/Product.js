@@ -26,6 +26,9 @@ const productSchema = new mongoose.Schema(
     specs: { type: mongoose.Schema.Types.Mixed, default: {} },
     bullets: { type: [String], default: [] },
     ebayListingId: { type: String, default: null },
+    // Set when listed via the Auction tab — lets the UI keep auction listings out of the
+    // normal fixed-price Deals/Tracker views instead of mixing the two together.
+    listingType: { type: String, enum: ['FIXED_PRICE', 'AUCTION', null], default: null },
     ebayPrice: { type: Number, default: null }, // last price successfully synced to eBay — used by frontend instead of GetItem
     listedAt: { type: Date, default: null },
     cloudinaryFolder: { type: String, default: null },

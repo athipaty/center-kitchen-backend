@@ -301,10 +301,11 @@ router.patch("/:id", async (req, res) => {
 // PATCH update eBay listing ID for a product
 router.patch("/:id/ebay", async (req, res) => {
   try {
-    const { ebayListingId, cloudinaryFolder, ebayPrice } = req.body;
+    const { ebayListingId, cloudinaryFolder, ebayPrice, listingType } = req.body;
     const update = { ebayListingId: ebayListingId || null, listedAt: ebayListingId ? new Date() : null };
     if (cloudinaryFolder !== undefined) update.cloudinaryFolder = cloudinaryFolder || null;
     if (ebayPrice !== undefined) update.ebayPrice = ebayPrice != null ? Number(ebayPrice) : null;
+    if (listingType !== undefined) update.listingType = listingType || null;
     const product = await Product.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!product) return res.status(404).json({ error: "Product not found" });
     res.json(product);
