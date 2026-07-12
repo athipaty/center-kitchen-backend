@@ -58,7 +58,12 @@ router.post("/preview", async (req, res) => {
       url: `${baseDomain}/dp/${v.asin}`,
     }));
     const groupId = extractAsin(cleanedUrl);
-    res.json({ title: info.title, price: info.price, currency: info.currency, image: info.image, isPrime: info.isPrime || false, upc: info.upc || null, variants, groupId });
+    res.json({
+      title: info.title, price: info.price, currency: info.currency, image: info.image,
+      isPrime: info.isPrime || false, upc: info.upc || null, variants, groupId,
+      specs: info.specs || {}, bullets: info.bullets || [], images: info.images || [],
+      listPrice: info.listPrice ?? null, rating: info.rating ?? null, reviewCount: info.reviewCount ?? 0,
+    });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
