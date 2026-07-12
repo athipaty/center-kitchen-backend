@@ -116,7 +116,8 @@ router.get("/search-deals", async (req, res) => {
     if (!categoryId) return res.status(400).json({ error: `Unknown category "${category}". Must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
 
     const maxPrice = Number(req.query.maxPrice) > 0 ? Number(req.query.maxPrice) : 15;
-    const cacheKey = `${category.toLowerCase()}:${maxPrice}`;
+    const singleOnly = req.query.singleOnly === 'true';
+    const cacheKey = `${category.toLowerCase()}:${maxPrice}:${singleOnly}`;
     const cached = _dealSearchCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       console.log(`search-deals: cache hit for "${category}" — 0 tokens`);
@@ -179,17 +180,23 @@ router.get("/search-deals", async (req, res) => {
     });
     if (pData.tokensLeft != null) console.log(`search-deals: tokensLeft=${pData.tokensLeft}`);
 
-    const ratingMap = {}, reviewMap = {}, soldMap = {};
+    const ratingMap = {}, reviewMap = {}, soldMap = {}, hasVariantsMap = {};
     for (const p of (pData.products || [])) {
       ratingMap[p.asin] = p.rating > 0 ? p.rating / 10 : null;
       reviewMap[p.asin] = p.countReviews || 0;
       soldMap[p.asin]   = p.monthlySold > 0 ? p.monthlySold : null;
+      // Keepa sets parentAsin on any ASIN that's a child of a variation family (color/size/etc.
+      // siblings) — null means this exact ASIN is a standalone, single-variant listing.
+      hasVariantsMap[p.asin] = !!p.parentAsin;
     }
 
-    // Step 4: apply 4+ star filter and build the response shape the frontend expects
+    // Step 4: apply 4+ star filter (and, if requested, drop anything with sibling variants —
+    // the Auction tab wants single-item listings only, since eBay auctions can't be
+    // multi-variation) and build the response shape the frontend expects
     const CDN = "https://images-na.ssl-images-amazon.com/images/I/";
     const deals = candidates
       .filter(d => ratingMap[d.asin] == null || ratingMap[d.asin] >= 4.0)
+      .filter(d => !singleOnly || !hasVariantsMap[d.asin])
       .map(d => {
         const cur = d.current || [];
         const price = dealPrice(cur);
