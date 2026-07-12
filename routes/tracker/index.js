@@ -247,7 +247,7 @@ router.post("/", async (req, res) => {
     const cleanedUrl = cleanUrl(url);
 
     const existing = await Product.findOne({ url: cleanedUrl });
-    if (existing) return res.status(409).json({ error: "Already tracking this product." });
+    if (existing) return res.status(409).json({ error: "Already tracking this product.", product: existing });
 
     const info = await fetchProduct(cleanedUrl);
 
