@@ -3632,7 +3632,11 @@ function escXml(str) {
 // AddFixedPriceItem-only feature), so unlike trading-create-listing there's no isMultiVariation
 // branch here. Mirrors that route's single-item body (buildBody's `else` branch) with the
 // ListingType/ListingDuration/StartPrice swapped for auction semantics, and no BuyItNow/reserve.
-const AUCTION_DURATION_MAP = { 1: 'Days_1', 3: 'Days_3', 5: 'Days_5', 7: 'Days_7', 10: 'Days_10' };
+// Confirmed live via GetCategoryFeatures against two real categories (36870, 177765) — both
+// share the exact same auction duration set (durationSetID=1): 3/5/7/10 days, no 1-day option.
+// Real failure seen in production: "[83] The duration '1' day(s) is not available for this
+// listing type" — eBay simply doesn't offer 1-day auctions, not a category-specific quirk.
+const AUCTION_DURATION_MAP = { 3: 'Days_3', 5: 'Days_5', 7: 'Days_7', 10: 'Days_10' };
 
 router.post('/trading-create-auction-listing', async (req, res) => {
   try {
