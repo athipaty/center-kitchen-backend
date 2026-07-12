@@ -3813,6 +3813,13 @@ router.post('/trading-create-auction-listing', async (req, res) => {
       if (allMsgs.some(m => m.startsWith('[240]'))) {
         return res.status(429).json({ error: 'selling_limit_reached', message: msg });
       }
+      // 21917141 with a FIXED_PRICE parameter value = eBay category restriction, not a bug —
+      // this category doesn't support auction-format listings at all, only Fixed Price. No
+      // sensible automatic fallback exists here (silently switching to fixed-price would change
+      // what the user actually asked for), so surface a clear reason instead of the raw code.
+      if (allCodes.includes('21917141')) {
+        return res.status(400).json({ error: "eBay doesn't allow auction-format listings in this product's category — only Fixed Price is supported there. Track it normally and use the regular listing flow instead, or try a different product." });
+      }
       return res.status(400).json({ error: msg });
     }
 
