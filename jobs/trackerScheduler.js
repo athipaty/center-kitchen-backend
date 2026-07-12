@@ -105,7 +105,10 @@ async function checkProduct(p, syncedListings = null) {
       if (newEbayPrice != null) p.ebayPrice = newEbayPrice;
       console.log(`eBay sync skipped (already synced this batch): listing ${p.ebayListingId}`);
     }
-    if (p.ebayListingId && (ebayPriceChanged || justRestocked) && !isEbayRateLimited() && !alreadySynced) {
+    // Auction listings don't have a revisable "current price" or a restock-to-1 concept the
+    // way fixed-price items do (ReviseFixedPriceItem/ReviseInventoryStatus are the wrong call
+    // types for an auction item) — skip the eBay push entirely for them.
+    if (p.ebayListingId && p.listingType !== 'AUCTION' && (ebayPriceChanged || justRestocked) && !isEbayRateLimited() && !alreadySynced) {
       let syncErr = null;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
@@ -220,8 +223,10 @@ const DEAD_LISTING_DAYS = 7;
 async function checkDeadListings() {
   const cutoff = new Date(Date.now() - DEAD_LISTING_DAYS * 24 * 3600 * 1000);
 
-  // Get all products with an eBay listing, check which are fully dead
-  const listed = await Product.find({ ebayListingId: { $exists: true, $ne: null } }, 'ebayListingId status unavailableSince').lean();
+  // Get all products with an eBay listing, check which are fully dead. Excludes auctions —
+  // force-ending an active auction early (which may have live bids) is far more consequential
+  // than ending an unsold fixed-price listing, and endListing() uses EndFixedPriceItem anyway.
+  const listed = await Product.find({ ebayListingId: { $exists: true, $ne: null }, listingType: { $ne: 'AUCTION' } }, 'ebayListingId status unavailableSince').lean();
   if (!listed.length) return;
 
   // Group by listingId — only end if ALL variants are unavailable for 7+ days
@@ -300,7 +305,10 @@ async function runWeeklyVariationSync() {
   const PORT = process.env.PORT || 5000;
   try {
     const token = await getAccessToken();
-    const products = await Product.find({ ebayListingId: { $exists: true, $ne: null } }).lean();
+    // Excludes auctions — they're single-item, not multi-variation, so there's nothing for
+    // this job to sync, and ReviseFixedPriceItem (used by removeVariation) is the wrong call
+    // type for an auction listing anyway.
+    const products = await Product.find({ ebayListingId: { $exists: true, $ne: null }, listingType: { $ne: 'AUCTION' } }).lean();
 
     // Group by listing ID
     const byListing = {};
@@ -462,6 +470,16 @@ async function runAutoEndZeroViews() {
       { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
     );
 
+    // This job's candidate set comes straight from eBay (ActiveList covers every listing type),
+    // so auctions have to be excluded by cross-referencing the tracker DB — unlike the queries
+    // above there's no Mongo filter that reaches this data on its own. Force-ending an active
+    // auction early (possibly with live bids) is far more consequential than ending an unsold
+    // fixed-price listing, so these never even enter the candidate lists below.
+    const auctionListingIds = new Set(
+      (await Product.find({ listingType: 'AUCTION', ebayListingId: { $ne: null } }, 'ebayListingId').lean())
+        .map(p => String(p.ebayListingId))
+    );
+
     const fourDaysAgo = Date.now() - 4 * 24 * 60 * 60 * 1000;
     const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
     const oldListings = [];
@@ -474,7 +492,7 @@ async function runAutoEndZeroViews() {
       const block = m[1];
       const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
       const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
-      if (!itemId || !startTime) continue;
+      if (!itemId || !startTime || auctionListingIds.has(itemId)) continue;
       watchCounts[itemId] = parseInt(block.match(/<WatchCount>(\d+)<\/WatchCount>/)?.[1] || '0', 10);
       // QuantitySold rides along on this same call — no extra API cost.
       soldCounts[itemId] = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
@@ -658,8 +676,10 @@ async function runRelistUnsoldWithEngagement() {
     }
 
     // Only relist listings the tracker actually owns — otherwise old/manual eBay
-    // listings with leftover views or watchers get swept up and relisted forever.
-    const trackedProducts = await Product.find({ ebayListingId: { $in: unsoldIds } }, 'ebayListingId').lean();
+    // listings with leftover views or watchers get swept up and relisted forever. Also
+    // excludes auctions: RelistFixedPriceItem is the wrong call for an ended auction
+    // (needs RelistItem), and relisting-at-the-same-price only makes sense for fixed-price.
+    const trackedProducts = await Product.find({ ebayListingId: { $in: unsoldIds }, listingType: { $ne: 'AUCTION' } }, 'ebayListingId').lean();
     const trackedIds = new Set(trackedProducts.map(p => String(p.ebayListingId)));
 
     const toRelist = unsoldIds.filter(id => trackedIds.has(id) && ((viewCounts[id] || 0) > 0 || watchCounts[id] > 0));
@@ -785,6 +805,14 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
 
     for (const { itemId, varSpecs } of toRestock) {
       try {
+        // Auctions aren't "restocked" to qty 1 after a sale — an auction ends when it's won,
+        // there's no quantity-based relist-to-1 semantic, and ReviseFixedPriceItem/
+        // ReviseInventoryStatus (used below) are the wrong call types for an auction item.
+        const soldProduct = await Product.findOne({ ebayListingId: itemId }, 'listingType').lean();
+        if (soldProduct?.listingType === 'AUCTION') {
+          console.log(`auto-restock: skipping ${itemId} — auction listing, not restocked`);
+          continue;
+        }
         if (varSpecs) {
           // Multi-variation: read all variations and set sold one back to 1
           const { data: getXml } = await tradingPost('GetItem',

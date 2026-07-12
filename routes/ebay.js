@@ -4558,7 +4558,9 @@ router.post('/promoted-listings/end-all', async (req, res) => {
 router.post('/batch-optimize', async (req, res) => {
   const BASE = `http://localhost:${process.env.PORT || 5000}`;
 
-  const products = await Product.find({ ebayListingId: { $exists: true, $ne: null } }).lean();
+  // Excludes auctions — this route revises title/description/specifics via
+  // ReviseFixedPriceItem, the wrong call type for an auction-format listing.
+  const products = await Product.find({ ebayListingId: { $exists: true, $ne: null }, listingType: { $ne: 'AUCTION' } }).lean();
   // Group by listingId, pick most-data variant as primary
   const groups = {};
   for (const p of products) {
