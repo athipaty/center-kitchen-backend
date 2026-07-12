@@ -1755,28 +1755,37 @@ router.get('/competitors', async (req, res) => {
     );
     const h = { Authorization: `Bearer ${appToken.access_token}` };
 
-    let items = [];
-
-    // Try GTIN/UPC first (exact match)
+    // Run GTIN and keyword search together and merge — GTIN search only matches eBay's own
+    // product-catalog linkage, not "every listing tagged with this GTIN": plenty of sellers
+    // (especially smaller ones) never get catalog-matched, so GTIN alone silently under-returns.
+    // Confirmed live on a real case: GTIN search returned 3 listings (cheapest $17.99) while a
+    // title search on the same product returned 20 (cheapest $11.32), including listings that
+    // report that exact GTIN on their own item page but never surfaced in the GTIN search index.
+    const searches = [];
     if (upc) {
-      try {
-        const { data } = await axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
+      searches.push(
+        axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
           params: { gtin: upc, filter: 'conditions:{NEW},buyingOptions:{FIXED_PRICE}', sort: 'price', limit: 20 },
           headers: h, timeout: 8000,
-        });
-        items = data.itemSummaries || [];
-      } catch {}
+        }).then(r => r.data.itemSummaries || []).catch(() => [])
+      );
     }
-
-    // Fall back to keyword search
-    if (!items.length && title) {
+    if (title) {
       const q = title.split(' ').slice(0, 6).join(' ');
-      const { data } = await axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
-        params: { q, filter: 'conditions:{NEW},buyingOptions:{FIXED_PRICE}', sort: 'price', limit: 20 },
-        headers: h, timeout: 8000,
-      });
-      items = data.itemSummaries || [];
+      searches.push(
+        axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
+          params: { q, filter: 'conditions:{NEW},buyingOptions:{FIXED_PRICE}', sort: 'price', limit: 20 },
+          headers: h, timeout: 8000,
+        }).then(r => r.data.itemSummaries || []).catch(() => [])
+      );
     }
+    const merged = (await Promise.all(searches)).flat();
+    const seen = new Set();
+    const items = merged.filter(item => {
+      if (seen.has(item.itemId)) return false;
+      seen.add(item.itemId);
+      return true;
+    });
 
     const withPrice = items
       .map(item => ({ item, price: parseFloat(item.price?.value || 0) }))
