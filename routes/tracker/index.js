@@ -190,13 +190,14 @@ router.get("/search-deals", async (req, res) => {
       hasVariantsMap[p.asin] = !!p.parentAsin;
     }
 
-    // Step 4: apply 4+ star filter (and, if requested, drop anything with sibling variants —
-    // the Auction tab wants single-item listings only, since eBay auctions can't be
-    // multi-variation) and build the response shape the frontend expects
+    // Step 4: apply 4+ star filter and build the response shape the frontend expects. singleOnly
+    // sorts single-item listings first rather than excluding variation-family items outright —
+    // a hard exclude compounds too badly with a low maxPrice (cheap price-drop deals are already
+    // rare, and most cheap products *do* have color/size variants), leaving many categories with
+    // zero results. hasVariants is exposed either way so the frontend can show a badge.
     const CDN = "https://images-na.ssl-images-amazon.com/images/I/";
     const deals = candidates
       .filter(d => ratingMap[d.asin] == null || ratingMap[d.asin] >= 4.0)
-      .filter(d => !singleOnly || !hasVariantsMap[d.asin])
       .map(d => {
         const cur = d.current || [];
         const price = dealPrice(cur);
@@ -219,9 +220,13 @@ router.get("/search-deals", async (req, res) => {
           monthlySold:     soldMap[d.asin] || null,
           isPrime:         cur[0] > 0,  // sold by Amazon = definitely Prime
           isLimitedDeal:   !!(d.lightningStart && d.lightningEnd),
+          hasVariants:     hasVariantsMap[d.asin] || false,
         };
       })
-      .sort((a, b) => (b.discountPercent || 0) - (a.discountPercent || 0));
+      .sort((a, b) => {
+        if (singleOnly && a.hasVariants !== b.hasVariants) return a.hasVariants ? 1 : -1;
+        return (b.discountPercent || 0) - (a.discountPercent || 0);
+      });
 
     console.log(`search-deals "${category}": dr=${drItems.length} under$${maxPrice}=${candidates.length} passed=${deals.length}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
