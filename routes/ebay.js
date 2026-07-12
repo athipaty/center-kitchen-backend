@@ -1916,6 +1916,26 @@ router.get('/sold', async (req, res) => {
 });
 
 // ── Debug: raw GetMyeBaySelling section lengths + samples ──────────
+// GET this seller's payment policies, with immediatePay flagged — used to diagnose eBay error
+// 21917141 ("To require immediate payment, you must specify a Buy It Now price"), which fires
+// on auction listings when the payment policy picked by trading-create-auction-listing has
+// immediate payment required (a fixed-price-oriented setting that doesn't make sense pre-sale
+// on a bid-based item). Read-only, no side effects.
+router.get('/payment-policies/debug', async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { data } = await axios.get('https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const policies = (data.paymentPolicies || []).map(p => ({
+      name: p.name, paymentPolicyId: p.paymentPolicyId, immediatePay: p.immediatePay,
+    }));
+    res.json({ policies });
+  } catch (err) {
+    res.status(500).json({ error: err.response?.data || err.message });
+  }
+});
+
 router.get('/selling-limits/debug', async (req, res) => {
   try {
     const token = await getAccessToken();
@@ -3678,8 +3698,14 @@ router.post('/trading-create-auction-listing', async (req, res) => {
       const returnsAccepted = rets.find(p => /return.*accept|30d/i.test(p.name));
       returnPolicyId = (returnsAccepted || rets[0])?.returnPolicyId || null;
 
+      // Auctions can't satisfy "require immediate payment" without a Buy It Now price (eBay
+      // error 21917141) — we deliberately don't set one, so prefer a payment policy that
+      // doesn't require immediate payment. Confirmed live via /payment-policies/debug: this
+      // seller has both kinds, and the immediate-pay one was being picked first, which is
+      // exactly what broke every auction attempt.
       const pays = payRes.data.paymentPolicies || [];
-      paymentPolicyId = pays[0]?.paymentPolicyId || null;
+      const nonImmediatePay = pays.find(p => p.immediatePay !== true);
+      paymentPolicyId = (nonImmediatePay || pays[0])?.paymentPolicyId || null;
     } catch { /* proceed without business policies — eBay may accept inline */ }
 
     const sellerProfilesXml = fulfillmentPolicyId
@@ -3813,12 +3839,14 @@ router.post('/trading-create-auction-listing', async (req, res) => {
       if (allMsgs.some(m => m.startsWith('[240]'))) {
         return res.status(429).json({ error: 'selling_limit_reached', message: msg });
       }
-      // 21917141 with a FIXED_PRICE parameter value = eBay category restriction, not a bug —
-      // this category doesn't support auction-format listings at all, only Fixed Price. No
-      // sensible automatic fallback exists here (silently switching to fixed-price would change
-      // what the user actually asked for), so surface a clear reason instead of the raw code.
+      // 21917141's real LongMessage is "To require immediate payment, you must specify a Buy It
+      // Now price" — a payment-policy conflict (immediate payment doesn't make sense pre-sale on
+      // a bid-based item with no BIN price), not a category restriction as it first appeared
+      // (the ErrorParameters value surfaced here was misleadingly "FIXED_PRICE"). Already fixed
+      // at the source above by preferring a non-immediate-pay payment policy — this only still
+      // fires if the seller has no such policy available.
       if (allCodes.includes('21917141')) {
-        return res.status(400).json({ error: "eBay doesn't allow auction-format listings in this product's category — only Fixed Price is supported there. Track it normally and use the regular listing flow instead, or try a different product." });
+        return res.status(400).json({ error: "This eBay account's payment policy requires immediate payment, which isn't allowed on an auction with no Buy It Now price. Add a non-immediate-payment policy in eBay's Business Policies, or add a Buy It Now price." });
       }
       return res.status(400).json({ error: msg });
     }
