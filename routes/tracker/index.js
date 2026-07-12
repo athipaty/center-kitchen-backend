@@ -43,6 +43,7 @@ router.get("/", async (req, res) => {
   }
 });
 
+
 // POST preview a URL — returns scraped info + variants without saving anything
 router.post("/preview", async (req, res) => {
   try {
@@ -1226,6 +1227,21 @@ router.get("/profit-summary", async (req, res) => {
         needsAttention:      listings.filter(l => l.avgMargin < 15),
       },
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET a single tracked product — used to poll for the background image-upload queue (see
+// queueImageUpload) finishing after POST / returns, without triggering a second concurrent
+// scrape. Registered after every other literal-path GET route in this file (/search-deals,
+// /status, /profit-summary, etc.) — Express matches routes top-down, and :id would otherwise
+// swallow any of those as an id value.
+router.get("/:id", async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: "Product not found" });
+    res.json(product);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
