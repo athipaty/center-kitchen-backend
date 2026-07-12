@@ -1807,37 +1807,37 @@ router.get('/competitors', async (req, res) => {
   }
 });
 
+// eBay retired the legacy Finding API (findCompletedItems) in Feb 2025 — this now uses the
+// Buy Marketplace Insights API instead. That API is limited-release: it 403s with a scope
+// error unless eBay has explicitly approved this app for buy.marketplace.insights.
 router.get('/sold', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q is required' });
-  if (!process.env.EBAY_APP_ID) return res.status(500).json({ error: 'EBAY_APP_ID not set' });
 
-  const cached = getCached(q);
+  const cacheKey = `sold:${q}`;
+  const cached = getCached(cacheKey);
   if (cached) return res.json(cached);
 
   try {
-    const { data } = await axios.get('https://svcs.ebay.com/services/search/FindingService/v1', {
-      params: {
-        'OPERATION-NAME': 'findCompletedItems',
-        'SERVICE-VERSION': '1.0.0',
-        'SECURITY-APPNAME': process.env.EBAY_APP_ID,
-        'RESPONSE-DATA-FORMAT': 'JSON',
-        keywords: q,
-        'paginationInput.entriesPerPage': 20,
-        'itemFilter(0).name': 'SoldItemsOnly',
-        'itemFilter(0).value': 'true',
-        sortOrder: 'EndTimeSoonest',
-      },
+    const { data: appToken } = await axios.post(
+      'https://api.ebay.com/identity/v1/oauth2/token',
+      new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope/buy.marketplace.insights' }),
+      { headers: { Authorization: `Basic ${basicAuth()}`, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 8000 }
+    );
+
+    const { data } = await axios.get('https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search', {
+      params: { q, limit: 20 },
+      headers: { Authorization: `Bearer ${appToken.access_token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US' },
+      timeout: 8000,
     });
 
-    const items = data.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
-    const prices = items
-      .map(item => parseFloat(item.sellingStatus?.[0]?.convertedCurrentPrice?.[0]?.__value__ || 0))
+    const prices = (data.itemSales || [])
+      .map(item => parseFloat(item.lastSoldPrice?.value || 0))
       .filter(p => p > 0);
 
     if (!prices.length) {
-      const empty = { count: 0, avg: null };
-      setCache(q, empty);
+      const empty = { count: 0, avg: null, min: null, max: null };
+      setCache(cacheKey, empty);
       return res.json(empty);
     }
 
@@ -1848,10 +1848,10 @@ router.get('/sold', async (req, res) => {
       min: Math.min(...prices),
       max: Math.max(...prices),
     };
-    setCache(q, result);
+    setCache(cacheKey, result);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: ebayError(err) });
+    res.status(err.response?.status === 403 ? 403 : 500).json({ error: ebayError(err) });
   }
 });
 
