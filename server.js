@@ -47,7 +47,8 @@ app.use(
       "https://tong-alpha.vercel.app",
       "https://amazon-theta-liard.vercel.app",
       "https://puthailand.vercel.app",
-      "https://egp-steel.vercel.app"
+      "https://egp-steel.vercel.app",
+      "https://youtube-tan-sigma.vercel.app",
     ],
     credentials: true,
   }),
@@ -113,6 +114,9 @@ const ebayRouter = require('./routes/ebay');
 app.use('/api/ebay', ebayRouter);
 mongoose.connection.once('open', () => ebayRouter.setIo(io));
 
+// --- Youtube (motion-comic series generator) ---
+app.use('/api/youtube', require('./routes/youtube'));
+
 /* =====================
    DATABASE
 ===================== */
@@ -121,6 +125,7 @@ mongoose
   .then(() => {
     console.log("✅ Connected to MongoDB");
     require("./jobs/trackerScheduler").start(io);
+    require("./jobs/youtubeEpisodeScheduler").start(io);
     require("./jobs/egpCacheRefresh").start();
     // egpPhayaoRefresh disabled — the nationwide RSS it scans is too sparse for the
     // keyword-match approach to ever reliably find Phayao items (0 hits after 24+
