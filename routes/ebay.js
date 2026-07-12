@@ -1778,17 +1778,18 @@ router.get('/competitors', async (req, res) => {
       items = data.itemSummaries || [];
     }
 
-    const prices = items
-      .map(item => parseFloat(item.price?.value || 0))
-      .filter(p => p >= 3)  // exclude obvious noise (broken listings, unrelated items)
-      .sort((a, b) => a - b);
+    const withPrice = items
+      .map(item => ({ item, price: parseFloat(item.price?.value || 0) }))
+      .filter(({ price }) => price >= 3)  // exclude obvious noise (broken listings, unrelated items)
+      .sort((a, b) => a.price - b.price);
 
-    if (!prices.length) {
-      const empty = { count: 0, lowest: null, median: null, avg: null };
+    if (!withPrice.length) {
+      const empty = { count: 0, lowest: null, median: null, avg: null, items: [] };
       setCache(cacheKey, empty);
       return res.json(empty);
     }
 
+    const prices = withPrice.map(w => w.price);
     const mid = Math.floor(prices.length / 2);
     const median = prices.length % 2 !== 0
       ? prices[mid]
@@ -1799,6 +1800,15 @@ router.get('/competitors', async (req, res) => {
       lowest: prices[0],
       median,
       avg: Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100,
+      // Cheapest 5 listings, for a side-by-side comparison against your own planned price
+      items: withPrice.slice(0, 5).map(({ item, price }) => ({
+        title: item.title,
+        price,
+        url: item.itemWebUrl || null,
+        image: item.image?.imageUrl || null,
+        condition: item.condition || null,
+        seller: item.seller?.username || null,
+      })),
     };
     setCache(cacheKey, result);
     res.json(result);
