@@ -14,6 +14,16 @@ function parseJsonResponse(msg) {
 const EXPRESSIONS = ["neutral", "happy", "sad", "surprised", "action"];
 const CAMERA_MOVES = ["pan-left", "pan-right", "zoom-in", "zoom-out", "static"];
 
+// Output language is pinned to the series' narration voice, independent of whatever language
+// the premise/title were typed in — the TTS voice (see NARRATOR_VOICE_BY_LOCALE in
+// youtubeEpisodeScheduler.js) can only read the language it's built for, so a Thai premise with
+// an English-voiced series still needs an English script, and vice versa.
+const SCRIPT_LANGUAGE_BY_LOCALE = {
+  "en-US": "English",
+  "th-TH": "Thai",
+};
+const DEFAULT_SCRIPT_LANGUAGE = "English";
+
 // Writes the next episode's scene-by-scene script. Fed the series' continuity log so the plot
 // doesn't drift or contradict itself — this is the entire mechanism that makes it feel like a
 // continuing series instead of one-off unrelated clips.
@@ -26,6 +36,7 @@ async function generateScript(series, characters, premise) {
   const continuityText = (series.continuityLog || [])
     .map((e) => `Episode ${e.episodeNumber}: ${e.summary}`)
     .join("\n") || "(this is the first episode — no prior history)";
+  const scriptLanguage = SCRIPT_LANGUAGE_BY_LOCALE[series.voiceLocale] || DEFAULT_SCRIPT_LANGUAGE;
 
   const prompt = `You are writing one episode of an ongoing narrated "motion comic" style story series.
 
@@ -46,6 +57,11 @@ Write a short episode as 3-5 scenes. Each scene has a background description, wh
 are on screen, and a short sequence of dialogue/narration lines. Keep total dialogue brief enough
 for a short video (roughly 4-8 lines total across all scenes). A line with no character speaking
 (pure narration) is allowed — use character "Narrator" for those.
+
+Write the title and every dialogue/narration line in ${scriptLanguage}, regardless of what
+language the premise above happens to be written in — the narrator voice can only read
+${scriptLanguage}. backgroundPrompt (image generation prompts) should stay in English regardless,
+since the image model doesn't need to match the narration language.
 
 Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
 {
