@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "postinstall": "npm install --prefix remotion || true"
+    "postinstall": "npm install --prefix remotion && (cd remotion && npx remotion browser ensure || true) || true"
   },
   "keywords": [],
   "author": "",
