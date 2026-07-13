@@ -10,12 +10,25 @@ const { getAccessToken, bestVariantMatch } = require("../../jobs/ebayPriceSync")
 // past this, the order counts as a late shipment against seller performance metrics.
 const SHIP_DEADLINE_HOURS = 24;
 
+// Delivered/notified orders drop off the page this long after delivery — the DB record
+// stays (Remove is still manual/explicit), this just keeps the list from filling up with
+// fully-handled orders. Falls back to updatedAt for orders delivered before deliveredAt existed.
+const DELIVERED_RETENTION_DAYS = 3;
+
 // GET all orders — orders still needing tracking sort by closest-to-deadline first
 // (overdue ones on top), so what needs action is always at the top of the list.
-// Already-shipped orders follow, newest sale first.
+// Already-shipped orders follow, newest sale first. Delivered/notified orders older
+// than DELIVERED_RETENTION_DAYS are excluded entirely.
 router.get("/", async (req, res) => {
   try {
-    const orders = await Order.find().sort({ createTimeEbay: -1, createdAt: -1 });
+    const cutoff = new Date(Date.now() - DELIVERED_RETENTION_DAYS * 86400000);
+    const orders = await Order.find({
+      $or: [
+        { status: { $nin: ['delivered', 'notified'] } },
+        { deliveredAt: { $gt: cutoff } },
+        { deliveredAt: null, updatedAt: { $gt: cutoff } },
+      ],
+    }).sort({ createTimeEbay: -1, createdAt: -1 });
 
     // Attach the matching Amazon product URL for each order's item/variant, same
     // matching logic used to restock the right variant after a sale.
@@ -135,7 +148,7 @@ router.patch("/:id/delivered", async (req, res) => {
   try {
     const order = await Order.findByIdAndUpdate(
       req.params.id,
-      { status: 'delivered' },
+      { status: 'delivered', deliveredAt: new Date() },
       { new: true }
     );
     if (!order) return res.status(404).json({ error: "order not found" });

@@ -28,6 +28,7 @@ const orderSchema = new mongoose.Schema(
     buyerName: { type: String, default: null },
     shippingAddress: { type: shippingAddressSchema, default: () => ({}) },
     status: { type: String, enum: ['needs_purchase', 'purchased', 'shipped', 'delivered', 'notified'], default: 'needs_purchase', index: true },
+    deliveredAt: { type: Date, default: null },
     amazonOrderId: { type: String, default: null },
     trackingNumber: { type: String, default: null },
     carrier: { type: String, default: null },
