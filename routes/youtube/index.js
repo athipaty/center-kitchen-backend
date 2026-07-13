@@ -37,6 +37,37 @@ router.get("/series/:id", async (req, res) => {
   }
 });
 
+// DELETE a whole series — cascades to every character and episode still under it (same
+// mid-pipeline guard as the single-episode delete below: refuses if any episode isn't
+// done/error yet), cleaning up each one's B2 folder along the way.
+router.delete("/series/:id", async (req, res) => {
+  try {
+    const series = await Series.findById(req.params.id);
+    if (!series) return res.status(404).json({ error: "Series not found" });
+
+    const inFlight = await Episode.exists({ series: series._id, status: { $nin: ["done", "error"] } });
+    if (inFlight) {
+      return res.status(409).json({ error: "An episode in this series is still being generated — wait for it to finish or error out first." });
+    }
+
+    const [characters, episodes] = await Promise.all([
+      Character.find({ series: series._id }, "_id").lean(),
+      Episode.find({ series: series._id }, "_id").lean(),
+    ]);
+    await Promise.all([
+      ...characters.map((c) => deleteB2Prefix(`youtube/characters/${c._id}/`).catch(() => {})),
+      ...episodes.map((e) => deleteB2Prefix(`youtube/episodes/${e._id}/`).catch(() => {})),
+    ]);
+    await Character.deleteMany({ series: series._id });
+    await Episode.deleteMany({ series: series._id });
+    await Series.findByIdAndDelete(series._id);
+
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Characters ──────────────────────────────────────────────────────
 router.post("/characters", async (req, res) => {
   try {
