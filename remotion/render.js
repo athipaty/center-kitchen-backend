@@ -5,7 +5,7 @@
 // Usage: node render.js <propsJsonPath> <outMp4Path>
 const path = require("path");
 const { bundle } = require("@remotion/bundler");
-const { renderMedia, selectComposition } = require("@remotion/renderer");
+const { renderMedia, selectComposition, openBrowser } = require("@remotion/renderer");
 
 async function main() {
   const [, , propsPath, outPath] = process.argv;
@@ -21,17 +21,31 @@ async function main() {
     publicDir: path.resolve(__dirname, "public"), // not auto-detected when calling bundle() programmatically
   });
 
-  console.log("render.js: selecting composition...");
-  const composition = await selectComposition({ serveUrl, id: "Episode", inputProps });
+  // Reused across selectComposition + renderMedia so only one Chrome process is ever
+  // launched per render (each launch has its own baseline memory cost, and on Render's
+  // small instances two overlapping browsers was a real contributor to OOM crashes).
+  // concurrency: 1 is explicit rather than left to Remotion's CPU-based auto-detection,
+  // which reads the host's core count and can over-provision parallel render tabs on
+  // containers with a fractional CPU quota — each extra tab is its own memory cost with
+  // no real speedup on a 1-CPU instance.
+  const browserInstance = await openBrowser("chrome");
+  try {
+    console.log("render.js: selecting composition...");
+    const composition = await selectComposition({ serveUrl, id: "Episode", inputProps, puppeteerInstance: browserInstance });
 
-  console.log(`render.js: rendering ${composition.durationInFrames} frames...`);
-  await renderMedia({
-    composition,
-    serveUrl,
-    codec: "h264",
-    outputLocation: path.resolve(outPath),
-    inputProps,
-  });
+    console.log(`render.js: rendering ${composition.durationInFrames} frames...`);
+    await renderMedia({
+      composition,
+      serveUrl,
+      codec: "h264",
+      outputLocation: path.resolve(outPath),
+      inputProps,
+      puppeteerInstance: browserInstance,
+      concurrency: 1,
+    });
+  } finally {
+    await browserInstance.close({ silent: true });
+  }
 
   console.log("render.js: done ->", outPath);
 }
