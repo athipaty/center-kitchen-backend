@@ -6,7 +6,7 @@ const Product = require('../models/tracker/Product');
 const EBAY_FEE_RATE  = 0.1325;
 const EBAY_FEE_FIXED = 0.30;
 const PROMO_RATE     = 0.05;
-const MARGIN         = 0.07;
+const MARGIN         = 0.09;
 const AMAZON_TAX     = 0.085;
 
 function calcEbayPrice(amazonPrice) {

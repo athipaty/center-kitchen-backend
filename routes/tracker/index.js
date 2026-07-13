@@ -1181,7 +1181,7 @@ router.get("/profit-summary", async (req, res) => {
 
     function calcEbayPrice(ap) {
       const c = ap * 1.085;
-      return Math.floor((c + 0.30) / (1 - 0.1325 - 0.05 - 0.07)) + 0.99;
+      return Math.floor((c + 0.30) / (1 - 0.1325 - 0.05 - 0.09)) + 0.99;
     }
     function calcFee(ep) { return +(ep * 0.1325 + 0.30).toFixed(2); }
 

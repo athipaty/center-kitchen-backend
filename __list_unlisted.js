@@ -6,7 +6,7 @@ const BASE = `http://localhost:${process.env.PORT || 5000}`;
 const EBAY_FEE  = 0.1325;
 const FIXED_FEE = 0.30;
 const PROMO     = 0.05;
-const MARGIN    = 0.07;
+const MARGIN    = 0.09;
 const AMAZON_TAX = 0.085;
 
 function calcEbayPrice(cost) {
