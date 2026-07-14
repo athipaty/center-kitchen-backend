@@ -1,4 +1,5 @@
 const cron = require("node-cron");
+const sharp = require("sharp");
 const Series = require("../models/youtube/Series");
 const Character = require("../models/youtube/Character");
 const Episode = require("../models/youtube/Episode");
@@ -58,12 +59,15 @@ async function stepScript(episode) {
 // The bare expression word ("happy expression") was too weak a signal — diffusion models render
 // it as a subtle, easy-to-miss facial tweak. These need to read at a glance, so each one spells
 // out exaggerated face + pose cues instead of leaving the model to infer them.
+// Upper-body framing (see buildSpritePrompt) means action can't rely on legs/kicking like a
+// full-body pose would — reworked to cues visible from the chest up: torso lean, arm swing, hair
+// and clothing caught in motion.
 const EXPRESSION_DETAILS = {
-  neutral: "calm relaxed neutral face, soft gentle closed-mouth expression, relaxed shoulders, standing naturally",
+  neutral: "calm relaxed neutral face, soft gentle closed-mouth expression, relaxed shoulders",
   happy: "huge joyful open-mouth smile, eyes crinkled shut with happiness, rosy cheeks, both arms raised in excitement, bouncy cheerful body language",
   sad: "big exaggerated frown, downturned mouth, glassy teary eyes, eyebrows angled up in sorrow, shoulders slumped and drooping, head hung low",
   surprised: "eyes wide open like saucers, eyebrows shot up high, mouth open in a shocked round gasp, hands jumped up near face, body leaning back in surprise",
-  action: "dynamic mid-action running or jumping pose, determined focused face, one leg kicked forward, arms swinging with motion, sense of speed and energy",
+  action: "intense determined expression, torso leaning forward with energy, arms pumping and swinging with motion, hair and clothing blown back, sense of speed and momentum",
 };
 //
 // Pollinations' documented GET endpoint (image.pollinations.ai/prompt/...) has no negative-prompt
@@ -75,15 +79,29 @@ const EXPRESSION_DETAILS = {
 // consistently single-character, a clear improvement over a single "solo" mention.
 function buildSpritePrompt(character, expression) {
   const expressionDetail = EXPRESSION_DETAILS[expression] || `${expression} expression`;
-  return `single character portrait, exactly one (1) person only, ${character.description}, ${expressionDetail}, exaggerated clearly readable emotion, full body, solo, alone, no other people, no second character, no crowd, no background figures, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
+  return `single character portrait, exactly one (1) person only, ${character.description}, ${expressionDetail}, exaggerated clearly readable emotion, upper body portrait, head shoulders and chest only, cropped at the waist, close-up bust shot, solo, alone, no other people, no second character, no crowd, no background figures, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
 }
+
+// Fraction of the generated square image's height to keep, top-down. The "upper body only" prompt
+// wording in buildSpritePrompt is unreliable on its own — spot-checked several generations and the
+// model happily drew full legs and feet for any expressive pose (raised arms, running), negation
+// phrasing included, which is a known limitation of prompt-only control. Cropping the output is
+// the only way to *guarantee* upper-body framing regardless of what the model actually drew.
+const UPPER_BODY_CROP_FRACTION = 0.6;
 
 // The seed is baked into the filename so a regenerated sprite gets a brand-new URL — sprite
 // URLs sit behind a CDN (cdn.bidhubthai.com) caching for hours, and reusing the same key would
 // mean the new image never actually reaches viewers regardless of how hard they refresh.
 async function generateSpriteImage(character, expression, seed) {
   const prompt = buildSpritePrompt(character, expression);
-  const buffer = await generateImage(prompt, { width: 768, height: 768, seed });
+  const rawBuffer = await generateImage(prompt, { width: 768, height: 768, seed });
+  const meta = await sharp(rawBuffer).metadata();
+  const width = meta.width || 768;
+  const height = meta.height || 768;
+  const buffer = await sharp(rawBuffer)
+    .extract({ left: 0, top: 0, width, height: Math.round(height * UPPER_BODY_CROP_FRACTION) })
+    .jpeg()
+    .toBuffer();
   return uploadToB2(buffer, `youtube/characters/${character._id}/${expression}-${seed}.jpg`, "image/jpeg");
 }
 

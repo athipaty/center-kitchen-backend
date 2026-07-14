@@ -25,10 +25,14 @@ export const Scene: React.FC<SceneProps & { durationInFrames: number }> = ({
           <Sequence key={i} from={from} durationInFrames={lineFrames} layout="none">
             <Audio src={line.audioUrl} />
             {line.spriteUrl && (
+              // Sprites are upper-body busts (head/shoulders/chest, cropped at the waist), not
+              // full-body standing figures — sized down from the old 70%/18% (tuned for legs
+              // reaching near the frame bottom) and anchored flush with the bottom edge, like the
+              // character's torso continues past the visible frame.
               <AbsoluteFill style={{ alignItems: "center", justifyContent: "flex-end" }}>
                 <Img
                   src={line.spriteUrl}
-                  style={{ height: "70%", objectFit: "contain", marginBottom: "18%" }}
+                  style={{ height: "50%", objectFit: "contain", marginBottom: "0%" }}
                 />
               </AbsoluteFill>
             )}
