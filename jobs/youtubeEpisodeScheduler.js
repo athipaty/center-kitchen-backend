@@ -63,10 +63,13 @@ function buildSpritePrompt(character, expression) {
   return `solo single character, ${character.description}, ${expression} expression, full body, one subject only, no other people, no extra characters in background, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
 }
 
+// The seed is baked into the filename so a regenerated sprite gets a brand-new URL — sprite
+// URLs sit behind a CDN (cdn.bidhubthai.com) caching for hours, and reusing the same key would
+// mean the new image never actually reaches viewers regardless of how hard they refresh.
 async function generateSpriteImage(character, expression, seed) {
   const prompt = buildSpritePrompt(character, expression);
   const buffer = await generateImage(prompt, { width: 768, height: 768, seed });
-  return uploadToB2(buffer, `youtube/characters/${character._id}/${expression}.jpg`, "image/jpeg");
+  return uploadToB2(buffer, `youtube/characters/${character._id}/${expression}-${seed}.jpg`, "image/jpeg");
 }
 
 async function generateCharacterSprites(character, onProgress) {
