@@ -93,18 +93,30 @@ router.get("/characters", async (req, res) => {
   }
 });
 
-// Kicks off sprite generation immediately (not queued) — a single character's ~5 sprites take
-// well under a minute even at Pollinations' rate limit, short enough to just await inline rather
-// than routing through the episode job pipeline's status machinery.
+// Kicks off sprite generation in the background instead of awaiting it inline — a full 5-sprite
+// batch takes 80-150s+ (Pollinations' ~16s sequential rate limit), too long to hold open as a
+// single HTTP request without it being fragile to any connection blip (a dev-server restart, a
+// phone sleeping, a redeploy) killing an otherwise-successful generation with a bare client-side
+// "Network Error". The client gets an immediate ack and follows progress/completion over the
+// socket — generateCharacterSprites already emits per-expression progress and always resolves
+// (it catches its own errors and persists character.status/spriteError before rethrowing), so the
+// .catch() below only needs to cover truly unexpected failures.
 router.post("/characters/:id/generate-sprites", async (req, res) => {
   try {
     const character = await Character.findById(req.params.id);
     if (!character) return res.status(404).json({ error: "Character not found" });
     const io = req.app.get("io");
-    await scheduler.generateCharacterSprites(character, async (expression) => {
-      io?.emit("character:progress", { characterId: String(character._id), expression });
+    const characterId = String(character._id);
+
+    scheduler.generateCharacterSprites(character, async (expression) => {
+      io?.emit("character:progress", { characterId, expression });
+    }).then(() => {
+      io?.emit("character:sprites:done", { characterId, character: character.toJSON() });
+    }).catch((err) => {
+      io?.emit("character:sprites:done", { characterId, error: err.message });
     });
-    res.json(character);
+
+    res.status(202).json({ started: true, character });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
