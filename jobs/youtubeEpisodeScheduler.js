@@ -61,7 +61,11 @@ async function generateCharacterSprites(character, onProgress) {
   for (const expression of EXPRESSIONS) {
     if (onProgress) await onProgress(expression);
     try {
-      const prompt = `${character.description}, ${expression} expression, full body, simple flat vector cartoon character illustration, plain white background, character reference sheet`;
+      // "solo" up front and "no other people/characters" reinforced near the end — Pollinations'
+      // free tier has no negative-prompt param, so the only lever against the model's tendency to
+      // populate a scene with extra background figures is repeating the single-subject constraint
+      // in plain positive language at both ends of the prompt.
+      const prompt = `solo single character, ${character.description}, ${expression} expression, full body, one subject only, no other people, no extra characters in background, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
       const buffer = await generateImage(prompt, { width: 768, height: 768, seed: 1 });
       const url = await uploadToB2(
         buffer,
