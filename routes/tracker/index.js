@@ -625,9 +625,6 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
         .filter(u => u.includes('media-amazon') || u.includes('ssl-images-amazon'));
 
       if (hiRes.length && productAsin) {
-        const heroId = amazonImageId(hiRes[0]);
-        if (heroId) heroImageRegistry.set(heroId, productAsin);
-
         // Pull in sibling group members' persisted hero IDs too — the in-memory registry
         // alone only protects whichever sibling gets scraped SECOND in a given process
         // lifetime. Checking the DB makes the filter symmetric and restart-proof: as long
@@ -645,18 +642,28 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
           } catch {}
         }
 
-        hiRes = hiRes.filter((u, i) => {
-          if (i === 0) return true; // never drop this product's own hero
+        // Position 0 (the "hero") used to be exempt from this check on the theory that a
+        // product's own first image is always trustworthy — but confirmed live that ScraperAPI's
+        // scrape of one ASIN can non-deterministically return a *different* ASIN's hero at
+        // position 0 too (same call, no sibling-order race involved), so it gets no special
+        // treatment now. If filtering would leave nothing at all (every image cross-linked to a
+        // known sibling — very unlikely), fall back to the unfiltered list rather than uploading
+        // zero images; a possibly-wrong photo beats none.
+        const beforeFilter = hiRes;
+        const afterFilter = hiRes.filter((u) => {
           const id = amazonImageId(u);
           const owner = id ? heroImageRegistry.get(id) : null;
           if (owner && owner !== productAsin) {
-            console.log(`fetchAndUploadImages: dropping cross-linked hero image (belongs to ${owner}) from ${productAsin}'s scrape`);
+            console.log(`fetchAndUploadImages: dropping cross-linked image (belongs to ${owner}) from ${productAsin}'s scrape`);
             return false;
           }
           return true;
         });
+        hiRes = afterFilter.length ? afterFilter : beforeFilter;
 
+        const heroId = amazonImageId(hiRes[0]);
         if (heroId) {
+          heroImageRegistry.set(heroId, productAsin);
           Product.findByIdAndUpdate(product._id, { heroImageId: heroId }).catch(() => {});
         }
       }
@@ -821,7 +828,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
     let existingUrls = [];
     try {
       existingUrls = await listB2Files(folder + '/');
-      if (existingUrls.length === amazonImages.length && existingUrls.length > 0) {
+      if (!forceUpload && existingUrls.length === amazonImages.length && existingUrls.length > 0) {
         console.log(`fetchAndUploadImages: B2 folder ${folder} already has ${existingUrls.length} images matching the scrape count — skipping`);
         await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
         return existingUrls;
