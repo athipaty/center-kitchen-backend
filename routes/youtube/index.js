@@ -110,6 +110,22 @@ router.post("/characters/:id/generate-sprites", async (req, res) => {
   }
 });
 
+// Redo a single expression (e.g. only the "sad" sprite came out wrong) without regenerating the
+// other four — much faster than the full generate-sprites pass and doesn't disturb sprites
+// already approved.
+router.post("/characters/:id/regenerate-sprite", async (req, res) => {
+  try {
+    const { expression } = req.body;
+    if (!expression) return res.status(400).json({ error: "expression is required" });
+    const character = await Character.findById(req.params.id);
+    if (!character) return res.status(404).json({ error: "Character not found" });
+    await scheduler.regenerateCharacterSprite(character, expression);
+    res.json(character);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE a character. Blocked while it's on-screen in an episode that's still mid-pipeline
 // (not done/error) — deleting mid-render would leave that render looking up a sprite that no
 // longer exists. Already-finished episodes keep referencing the character's _id harmlessly

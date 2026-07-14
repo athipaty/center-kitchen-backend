@@ -54,6 +54,21 @@ async function stepScript(episode) {
 // since a character can get its sprites generated either up front on the Series page or lazily
 // the first time an episode references it. `onProgress(expression)` is optional, used to keep an
 // Episode's statusDetail live while this runs as part of that pipeline.
+//
+// "solo" up front and "no other people/characters" reinforced near the end — Pollinations' free
+// tier has no negative-prompt param, so the only lever against the model's tendency to populate a
+// scene with extra background figures is repeating the single-subject constraint in plain
+// positive language at both ends of the prompt.
+function buildSpritePrompt(character, expression) {
+  return `solo single character, ${character.description}, ${expression} expression, full body, one subject only, no other people, no extra characters in background, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
+}
+
+async function generateSpriteImage(character, expression, seed) {
+  const prompt = buildSpritePrompt(character, expression);
+  const buffer = await generateImage(prompt, { width: 768, height: 768, seed });
+  return uploadToB2(buffer, `youtube/characters/${character._id}/${expression}.jpg`, "image/jpeg");
+}
+
 async function generateCharacterSprites(character, onProgress) {
   character.status = "generating_sprites";
   character.sprites = [];
@@ -61,17 +76,7 @@ async function generateCharacterSprites(character, onProgress) {
   for (const expression of EXPRESSIONS) {
     if (onProgress) await onProgress(expression);
     try {
-      // "solo" up front and "no other people/characters" reinforced near the end — Pollinations'
-      // free tier has no negative-prompt param, so the only lever against the model's tendency to
-      // populate a scene with extra background figures is repeating the single-subject constraint
-      // in plain positive language at both ends of the prompt.
-      const prompt = `solo single character, ${character.description}, ${expression} expression, full body, one subject only, no other people, no extra characters in background, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
-      const buffer = await generateImage(prompt, { width: 768, height: 768, seed: 1 });
-      const url = await uploadToB2(
-        buffer,
-        `youtube/characters/${character._id}/${expression}.jpg`,
-        "image/jpeg"
-      );
+      const url = await generateSpriteImage(character, expression, 1);
       character.sprites.push({ expression, imageUrl: url, seed: 1 });
     } catch (e) {
       character.status = "error";
@@ -82,6 +87,29 @@ async function generateCharacterSprites(character, onProgress) {
     await sleep(POLLINATIONS_DELAY_MS);
   }
   character.status = "ready";
+  await character.save();
+}
+
+// Redo a single expression without touching the other already-approved sprites — the common
+// case is "4 of 5 are fine, just the sad one came out wrong". Uses a fresh random seed (not the
+// batch's fixed seed=1) since re-running the exact same prompt+seed would just reproduce the
+// same unwanted image.
+async function regenerateCharacterSprite(character, expression) {
+  if (!EXPRESSIONS.includes(expression)) {
+    throw new Error(`Unknown expression: ${expression}`);
+  }
+  const seed = Math.floor(Math.random() * 1e9);
+  const url = await generateSpriteImage(character, expression, seed);
+  const sprite = { expression, imageUrl: url, seed };
+  const idx = character.sprites.findIndex((s) => s.expression === expression);
+  if (idx >= 0) character.sprites[idx] = sprite;
+  else character.sprites.push(sprite);
+  character.markModified("sprites"); // direct index assignment above isn't always tracked otherwise
+
+  if (character.status !== "ready" && EXPRESSIONS.every((e) => character.sprites.some((s) => s.expression === e))) {
+    character.status = "ready";
+    character.spriteError = null;
+  }
   await character.save();
 }
 
@@ -269,4 +297,4 @@ async function triggerNow(episodeId) {
   if (episode) await processOne(episode);
 }
 
-module.exports = { start, triggerNow, generateCharacterSprites };
+module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite };
