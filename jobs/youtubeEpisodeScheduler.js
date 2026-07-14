@@ -7,7 +7,7 @@ const { generateImage } = require("../utils/youtube/pollinations");
 const { synthesize } = require("../utils/youtube/edgeTts");
 const { generateScript, summarizeEpisode, EXPRESSIONS } = require("../utils/youtube/claudeScript");
 const { renderEpisodeToBuffer } = require("../utils/youtube/remotionRender");
-const { uploadToB2 } = require("../utils/b2Utils");
+const { uploadToB2, deleteB2File, b2KeyFromUrl } = require("../utils/b2Utils");
 
 let io = null;
 
@@ -106,6 +106,7 @@ async function generateSpriteImage(character, expression, seed) {
 }
 
 async function generateCharacterSprites(character, onProgress) {
+  const oldSprites = character.sprites; // deleted from B2 below once the new batch is safely saved
   character.status = "generating_sprites";
   character.sprites = [];
   await character.save();
@@ -124,6 +125,12 @@ async function generateCharacterSprites(character, onProgress) {
   }
   character.status = "ready";
   await character.save();
+
+  // Best-effort — an old file surviving as an orphan is harmless, so a delete failure here
+  // shouldn't affect the (already-successful) generation result.
+  for (const old of oldSprites) {
+    await deleteB2File(b2KeyFromUrl(old.imageUrl)).catch(() => {});
+  }
 }
 
 // Redo a single expression without touching the other already-approved sprites — the common
@@ -138,6 +145,7 @@ async function regenerateCharacterSprite(character, expression) {
   const url = await generateSpriteImage(character, expression, seed);
   const sprite = { expression, imageUrl: url, seed };
   const idx = character.sprites.findIndex((s) => s.expression === expression);
+  const oldSprite = idx >= 0 ? character.sprites[idx] : null;
   if (idx >= 0) character.sprites[idx] = sprite;
   else character.sprites.push(sprite);
   character.markModified("sprites"); // direct index assignment above isn't always tracked otherwise
@@ -147,6 +155,10 @@ async function regenerateCharacterSprite(character, expression) {
     character.spriteError = null;
   }
   await character.save();
+
+  // Best-effort — an old file surviving as an orphan is harmless, so a delete failure here
+  // shouldn't affect the (already-successful) regeneration result.
+  if (oldSprite) await deleteB2File(b2KeyFromUrl(oldSprite.imageUrl)).catch(() => {});
 }
 
 // script -> sprites: generates sprite sets for any NEW character this episode references (skips

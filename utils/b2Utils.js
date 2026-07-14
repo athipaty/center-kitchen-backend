@@ -125,6 +125,34 @@ async function deleteB2Prefix(prefix) {
   }
 }
 
+// Delete exactly one file by its full key (not a prefix — deleteB2Prefix would also catch any
+// other file whose name happens to start with the same string, which matters for something like
+// sprite regeneration where only one specific version should go).
+async function deleteB2File(fileKey) {
+  if (!fileKey || !process.env.B2_KEY_ID) return;
+  try {
+    const b2 = await getAuth();
+    const { data } = await axios.post(`${b2.apiUrl}/b2api/v3/b2_list_file_names`,
+      { bucketId: b2.bucketId, prefix: fileKey, maxFileCount: 1 },
+      { headers: { Authorization: b2.authToken }, timeout: 10000 }
+    );
+    const file = data.files?.[0];
+    if (!file || file.fileName !== fileKey) return; // nothing exactly matching — nothing to do
+    await axios.post(`${b2.apiUrl}/b2api/v3/b2_delete_file_version`,
+      { fileId: file.fileId, fileName: file.fileName },
+      { headers: { Authorization: b2.authToken }, timeout: 10000 }
+    );
+  } catch (e) {
+    console.warn(`b2: failed to delete file ${fileKey}:`, e.message);
+  }
+}
+
+// Converts a public B2/CDN URL (either the CDN host or the raw f0xx.backblazeb2.com host) back to
+// the bucket-relative file key uploadToB2/deleteB2File expect.
+function b2KeyFromUrl(url) {
+  return String(url || '').replace(/^https?:\/\/[^/]+\/file\/[^/]+\//, '');
+}
+
 // List public URLs for all files under a prefix (for checking existing uploads)
 async function listB2Files(prefix) {
   const b2 = await getAuth();
@@ -140,4 +168,4 @@ function b2Enabled() {
   return !!(process.env.B2_KEY_ID && process.env.B2_APP_KEY && process.env.B2_BUCKET && process.env.B2_IMAGES_ENABLED === 'true');
 }
 
-module.exports = { uploadToB2, copyB2File, deleteB2Prefix, listB2Files, b2PublicUrl, b2Enabled };
+module.exports = { uploadToB2, copyB2File, deleteB2Prefix, deleteB2File, b2KeyFromUrl, listB2Files, b2PublicUrl, b2Enabled };
