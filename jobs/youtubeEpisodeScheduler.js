@@ -55,6 +55,17 @@ async function stepScript(episode) {
 // the first time an episode references it. `onProgress(expression)` is optional, used to keep an
 // Episode's statusDetail live while this runs as part of that pipeline.
 //
+// The bare expression word ("happy expression") was too weak a signal — diffusion models render
+// it as a subtle, easy-to-miss facial tweak. These need to read at a glance, so each one spells
+// out exaggerated face + pose cues instead of leaving the model to infer them.
+const EXPRESSION_DETAILS = {
+  neutral: "calm relaxed neutral face, soft gentle closed-mouth expression, relaxed shoulders, standing naturally",
+  happy: "huge joyful open-mouth smile, eyes crinkled shut with happiness, rosy cheeks, both arms raised in excitement, bouncy cheerful body language",
+  sad: "big exaggerated frown, downturned mouth, glassy teary eyes, eyebrows angled up in sorrow, shoulders slumped and drooping, head hung low",
+  surprised: "eyes wide open like saucers, eyebrows shot up high, mouth open in a shocked round gasp, hands jumped up near face, body leaning back in surprise",
+  action: "dynamic mid-action running or jumping pose, determined focused face, one leg kicked forward, arms swinging with motion, sense of speed and energy",
+};
+//
 // Pollinations' documented GET endpoint (image.pollinations.ai/prompt/...) has no negative-prompt
 // param despite some third-party docs claiming otherwise — confirmed against the official
 // APIDOCS.md, which only lists prompt/model/width/height/seed/nologo/enhance/private. So the only
@@ -63,7 +74,8 @@ async function stepScript(episode) {
 // words, front and back of the prompt. Spot-checked several generations with this phrasing —
 // consistently single-character, a clear improvement over a single "solo" mention.
 function buildSpritePrompt(character, expression) {
-  return `single character portrait, exactly one (1) person only, ${character.description}, ${expression} expression, full body, solo, alone, no other people, no second character, no crowd, no background figures, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
+  const expressionDetail = EXPRESSION_DETAILS[expression] || `${expression} expression`;
+  return `single character portrait, exactly one (1) person only, ${character.description}, ${expressionDetail}, exaggerated clearly readable emotion, full body, solo, alone, no other people, no second character, no crowd, no background figures, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
 }
 
 // The seed is baked into the filename so a regenerated sprite gets a brand-new URL — sprite
