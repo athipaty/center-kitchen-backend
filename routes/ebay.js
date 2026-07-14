@@ -1996,11 +1996,13 @@ function cycleStartFor(day, ref = new Date()) {
   return start;
 }
 
-// Counts used listing slots and revenue from a GetMyeBaySelling response.
-// Matches eBay's "listed and sold" cycle count: active listings + ended listings
-// (sold or unsold) whose StartTime falls within the current billing cycle.
-// De-duplicates by ItemID so a listing that appears in both ActiveList and SoldList
-// (e.g. partially sold multi-variation) is only counted once.
+// Counts used quantity/units and revenue from a GetMyeBaySelling response.
+// Matches eBay's "listed and sold" cycle count: it's a QUANTITY count (Quantity + QuantitySold
+// per SKU/variation, or per top-level item when there are no variations) — NOT a count of
+// listings or distinct variation slots. A listing with 5 variations at qty 2 each uses 10 slots,
+// not 5 or 1. Ended listings (sold or unsold) whose StartTime falls within the current billing
+// cycle also count. De-duplicates by ItemID so a listing appearing in both ActiveList and
+// SoldList (e.g. partially sold multi-variation) is only counted once.
 function countUsedItems(xmlResp, monthStart) {
   let totalQtyListed = 0;
   let soldRevenueUsd = 0;
@@ -2019,19 +2021,21 @@ function countUsedItems(xmlResp, monthStart) {
 
       countedIds.add(itemId);
       const varBlocks = [...block.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)];
-      totalQtyListed += varBlocks.length || 1;
 
-      // Revenue from sold quantities
       if (varBlocks.length) {
         for (const [, vb] of varBlocks) {
+          const qty = parseInt(vb.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
           const sold = parseInt(vb.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+          totalQtyListed += qty + sold;
           if (sold) {
             const price = parseFloat(vb.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
             soldRevenueUsd += price * sold;
           }
         }
       } else {
+        const qty = parseInt(block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0');
         const sold = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0');
+        totalQtyListed += qty + sold;
         if (sold) {
           const price = parseFloat(block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0');
           soldRevenueUsd += price * sold;
