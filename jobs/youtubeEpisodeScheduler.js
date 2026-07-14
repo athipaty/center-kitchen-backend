@@ -59,15 +59,14 @@ async function stepScript(episode) {
 // The bare expression word ("happy expression") was too weak a signal — diffusion models render
 // it as a subtle, easy-to-miss facial tweak. These need to read at a glance, so each one spells
 // out exaggerated face + pose cues instead of leaving the model to infer them.
-// Upper-body framing (see buildSpritePrompt) means action can't rely on legs/kicking like a
-// full-body pose would — reworked to cues visible from the chest up: torso lean, arm swing, hair
-// and clothing caught in motion.
+// "action" (a pose, not an emotion) was replaced with "angry" — an actual emotion, and a more
+// useful complement to happy/sad/surprised for dialogue-driven scenes.
 const EXPRESSION_DETAILS = {
   neutral: "calm relaxed neutral face, soft gentle closed-mouth expression, relaxed shoulders",
   happy: "huge joyful open-mouth smile, eyes crinkled shut with happiness, rosy cheeks, both arms raised in excitement, bouncy cheerful body language",
   sad: "big exaggerated frown, downturned mouth, glassy teary eyes, eyebrows angled up in sorrow, shoulders slumped and drooping, head hung low",
   surprised: "eyes wide open like saucers, eyebrows shot up high, mouth open in a shocked round gasp, hands jumped up near face, body leaning back in surprise",
-  action: "intense determined expression, torso leaning forward with energy, arms pumping and swinging with motion, hair and clothing blown back, sense of speed and momentum",
+  angry: "furious scowl, furrowed angry eyebrows pressed down, gritted clenched teeth, clenched fists raised, red angry cheeks, aggressive leaning-forward posture",
 };
 //
 // Pollinations' documented GET endpoint (image.pollinations.ai/prompt/...) has no negative-prompt

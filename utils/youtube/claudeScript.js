@@ -11,7 +11,7 @@ function parseJsonResponse(msg) {
   return JSON.parse(raw);
 }
 
-const EXPRESSIONS = ["neutral", "happy", "sad", "surprised", "action"];
+const EXPRESSIONS = ["neutral", "happy", "sad", "surprised", "angry"];
 const CAMERA_MOVES = ["pan-left", "pan-right", "zoom-in", "zoom-out", "static"];
 
 // Output language is pinned to the series' narration voice, independent of whatever language

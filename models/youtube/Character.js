@@ -6,7 +6,7 @@ const mongoose = require("mongoose");
 // reliably) — see the "why" comment on Character.description below.
 const spriteSchema = new mongoose.Schema(
   {
-    expression: { type: String, required: true }, // 'neutral' | 'happy' | 'sad' | 'surprised' | 'action'
+    expression: { type: String, required: true }, // 'neutral' | 'happy' | 'sad' | 'surprised' | 'angry'
     imageUrl: { type: String, required: true }, // B2 public URL
     seed: { type: Number, default: null },
   },
