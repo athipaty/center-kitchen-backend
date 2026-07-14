@@ -537,8 +537,13 @@ async function enrichAspectsWithAI(catId, aspects, title, specs, bullets = [], v
   const catAspects = await getValidAspectValues(catId);
   if (!Object.keys(catAspects).length) return;
 
+  // MPN is excluded from AI-fill entirely, not just guarded after the fact — there's no real
+  // signal to infer a manufacturer part number from title/specs/bullets, so asking the model to
+  // "provide a value" for it just invites a plausible-looking hallucination (confirmed live:
+  // "DNUZEWR" for a trimmer line with no MPN, rejected by eBay error 21919326). MPN only ever
+  // comes from buildAspects' own sanitized scrape-derived value, or is left blank.
   const missing = Object.entries(catAspects)
-    .filter(([name]) => !aspects[name] && name !== 'Brand')
+    .filter(([name]) => !aspects[name] && name !== 'Brand' && name !== 'MPN')
     .map(([name, info]) => ({
       name,
       ...(info.values.length ? { validValues: info.values.slice(0, 25) } : {}),
@@ -590,8 +595,10 @@ ${JSON.stringify(missing)}`;
     for (const [name, value] of Object.entries(filled)) {
       if (!value || aspects[name]) continue;
       const val = String(value).slice(0, 65);
-      // Never let AI set MPN to a barcode value or placeholder
+      // Belt-and-suspenders even though MPN is no longer requested above — same three guards as
+      // buildAspects, in case the model returns it anyway despite not being asked.
       if (name === 'MPN' && /^\d{8,14}$/.test(val.trim())) continue;
+      if (name === 'MPN' && /^[A-Z0-9]{6,12}$/.test(val.trim())) continue;
       if (name === 'MPN' && MPN_PLACEHOLDERS.has(val.trim().toLowerCase())) continue;
       const info = catAspects[name];
       if (info?.values?.length) {
