@@ -55,12 +55,15 @@ async function stepScript(episode) {
 // the first time an episode references it. `onProgress(expression)` is optional, used to keep an
 // Episode's statusDetail live while this runs as part of that pipeline.
 //
-// "solo" up front and "no other people/characters" reinforced near the end — Pollinations' free
-// tier has no negative-prompt param, so the only lever against the model's tendency to populate a
-// scene with extra background figures is repeating the single-subject constraint in plain
-// positive language at both ends of the prompt.
+// Pollinations' documented GET endpoint (image.pollinations.ai/prompt/...) has no negative-prompt
+// param despite some third-party docs claiming otherwise — confirmed against the official
+// APIDOCS.md, which only lists prompt/model/width/height/seed/nologo/enhance/private. So the only
+// lever against the model's tendency to populate a scene with extra background figures is
+// repeating the single-subject constraint in plain positive language, several times, in different
+// words, front and back of the prompt. Spot-checked several generations with this phrasing —
+// consistently single-character, a clear improvement over a single "solo" mention.
 function buildSpritePrompt(character, expression) {
-  return `solo single character, ${character.description}, ${expression} expression, full body, one subject only, no other people, no extra characters in background, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
+  return `single character portrait, exactly one (1) person only, ${character.description}, ${expression} expression, full body, solo, alone, no other people, no second character, no crowd, no background figures, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
 }
 
 // The seed is baked into the filename so a regenerated sprite gets a brand-new URL — sprite
