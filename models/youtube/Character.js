@@ -21,6 +21,11 @@ const characterSchema = new mongoose.Schema(
     // text IS the character's identity as far as the image model is concerned; changing it after
     // sprites already exist would make new sprites (if ever regenerated) look like someone else.
     description: { type: String, required: true },
+    // The guided attribute-picker's structured selections (species/age/build/colors/etc.) that
+    // composed `description`, so editing a character can reopen the same dropdowns pre-filled
+    // instead of just handing back the flattened text. Null for characters created by typing the
+    // description manually — the edit form falls back to plain-text editing for those.
+    attrs: { type: mongoose.Schema.Types.Mixed, default: null },
     voiceName: { type: String, required: true }, // exact edge-tts voice id, e.g. 'en-US-GuyNeural'
     sprites: [spriteSchema], // 5-8 expressions, generated once during the 'sprites' pipeline step
     status: { type: String, enum: ["pending", "generating_sprites", "ready", "error"], default: "pending" },

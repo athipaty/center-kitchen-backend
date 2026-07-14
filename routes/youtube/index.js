@@ -71,11 +71,11 @@ router.delete("/series/:id", async (req, res) => {
 // ── Characters ──────────────────────────────────────────────────────
 router.post("/characters", async (req, res) => {
   try {
-    const { seriesId, name, description, voiceName } = req.body;
+    const { seriesId, name, description, voiceName, attrs } = req.body;
     if (!seriesId || !name || !description || !voiceName) {
       return res.status(400).json({ error: "seriesId, name, description, and voiceName are required" });
     }
-    const character = await Character.create({ series: seriesId, name, description, voiceName });
+    const character = await Character.create({ series: seriesId, name, description, voiceName, attrs: attrs || null });
     res.json(character);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -88,6 +88,25 @@ router.get("/characters", async (req, res) => {
     const filter = seriesId ? { series: seriesId } : {};
     const characters = await Character.find(filter).sort({ createdAt: -1 });
     res.json(characters);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Edit an existing character's name/description/voice/attrs. Sprites already generated are left
+// as-is — they're the model's snapshot of whatever description was locked in when they were made,
+// so an edit only affects future generate-sprites/regenerate-sprite calls, not existing images.
+router.patch("/characters/:id", async (req, res) => {
+  try {
+    const { name, description, voiceName, attrs } = req.body;
+    const update = {};
+    if (name !== undefined) update.name = name;
+    if (description !== undefined) update.description = description;
+    if (voiceName !== undefined) update.voiceName = voiceName;
+    if (attrs !== undefined) update.attrs = attrs;
+    const character = await Character.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!character) return res.status(404).json({ error: "Character not found" });
+    res.json(character);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
