@@ -1944,8 +1944,8 @@ router.get('/selling-limits/debug', async (req, res) => {
       <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
         ${creds}
         <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList>
-        <SoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
-        <UnsoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></UnsoldList>
+        <SoldList><Include>true</Include><DurationInDays>60</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
+        <UnsoldList><Include>true</Include><DurationInDays>60</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></UnsoldList>
       </GetMyeBaySellingRequest>`;
     const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
       headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
@@ -2057,8 +2057,8 @@ async function fetchMyeBaySellingXml(token) {
     <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
       ${creds}
       <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList>
-      <SoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
-      <UnsoldList><Include>true</Include><DurationInDays>31</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></UnsoldList>
+      <SoldList><Include>true</Include><DurationInDays>60</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></SoldList>
+      <UnsoldList><Include>true</Include><DurationInDays>60</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></UnsoldList>
     </GetMyeBaySellingRequest>`;
   const { data } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
     headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
