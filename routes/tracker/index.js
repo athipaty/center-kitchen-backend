@@ -96,7 +96,9 @@ function _keepaImageUrl(p) {
 // candidate ASINs) and its category (fallback best-sellers pull if FBT alone is thin). Amazon's
 // Choice is a HARD filter — it isn't exposed by Keepa at all, so surviving candidates are
 // individually checked via ScraperAPI's raw HTML (badge marker: "mvt-ac-badge-wrapper"/
-// "Amazon's Choice" text), and anything not flagged is dropped, not just unbadged.
+// "Amazon's Choice" text), and anything not flagged is dropped, not just unbadged. $20 price
+// ceiling is also a hard filter (applied before the Amazon's Choice check, so it also shrinks
+// how many candidates need that per-item ScraperAPI call).
 router.get("/search-similar", async (req, res) => {
   try {
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
@@ -181,7 +183,7 @@ router.get("/search-similar", async (req, res) => {
           hasVariants:  !!p.parentAsin,
         };
       })
-      .filter(d => d.price != null && d.isPrime && (d.rating == null || d.rating >= 4.0))
+      .filter(d => d.price != null && d.price <= 20 && d.isPrime && (d.rating == null || d.rating >= 4.0))
       .sort((a, b) => (b.monthlySold || 0) - (a.monthlySold || 0) || (b.rating || 0) - (a.rating || 0))
       .slice(0, 25); // caps the ScraperAPI check below — cost/latency control, not a quality cutoff
 
