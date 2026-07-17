@@ -1796,32 +1796,7 @@ router.get('/competitors', async (req, res) => {
       });
     }
 
-    const [items, auctionItems] = await Promise.all([
-      searchListings('FIXED_PRICE'),
-      searchListings('AUCTION'),
-    ]);
-
-    // Auctions kept separate from the fixed-price stats — a current bid isn't a sale price
-    // (it can still climb before the auction ends), so blending it into median/lowest would
-    // understate what buyers actually end up paying. $0.01 starting bids are normal for
-    // auctions, not noise, so unlike fixed-price listings these aren't filtered by a price floor.
-    const auctionsWithBid = auctionItems
-      .map(item => ({ item, bid: parseFloat(item.currentBidPrice?.value ?? item.price?.value ?? 0), bidCount: item.bidCount || 0 }))
-      .sort((a, b) => a.bid - b.bid);
-    const auctions = {
-      count: auctionsWithBid.length,
-      lowest: auctionsWithBid.length ? auctionsWithBid[0].bid : null,
-      items: auctionsWithBid.slice(0, 5).map(({ item, bid, bidCount }) => ({
-        title: item.title,
-        currentBid: bid,
-        bidCount,
-        url: item.itemWebUrl || null,
-        image: item.image?.imageUrl || null,
-        condition: item.condition || null,
-        seller: item.seller?.username || null,
-        endDate: item.itemEndDate || null,
-      })),
-    };
+    const items = await searchListings('FIXED_PRICE');
 
     const withPrice = items
       .map(item => ({ item, price: parseFloat(item.price?.value || 0) }))
@@ -1829,7 +1804,7 @@ router.get('/competitors', async (req, res) => {
       .sort((a, b) => a.price - b.price);
 
     if (!withPrice.length) {
-      const empty = { count: 0, lowest: null, median: null, avg: null, items: [], auctions };
+      const empty = { count: 0, lowest: null, median: null, avg: null, items: [] };
       setCache(cacheKey, empty);
       return res.json(empty);
     }
@@ -1854,7 +1829,6 @@ router.get('/competitors', async (req, res) => {
         condition: item.condition || null,
         seller: item.seller?.username || null,
       })),
-      auctions,
     };
     setCache(cacheKey, result);
     res.json(result);
@@ -1924,10 +1898,8 @@ router.get('/sold', async (req, res) => {
 
 // ── Debug: raw GetMyeBaySelling section lengths + samples ──────────
 // GET this seller's payment policies, with immediatePay flagged — used to diagnose eBay error
-// 21917141 ("To require immediate payment, you must specify a Buy It Now price"), which fires
-// on auction listings when the payment policy picked by trading-create-auction-listing has
-// immediate payment required (a fixed-price-oriented setting that doesn't make sense pre-sale
-// on a bid-based item). Read-only, no side effects.
+// 21917141 ("To require immediate payment, you must specify a Buy It Now price"). Read-only,
+// no side effects.
 router.get('/payment-policies/debug', async (req, res) => {
   try {
     const token = await getAccessToken();
@@ -3673,264 +3645,6 @@ function escXml(str) {
   return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
-// ── Create AUCTION listing via Trading API (AddItem) ────────────────────
-// Single-item only — eBay's AddItem call has no multi-variation concept at all (that's an
-// AddFixedPriceItem-only feature), so unlike trading-create-listing there's no isMultiVariation
-// branch here. Mirrors that route's single-item body (buildBody's `else` branch) with the
-// ListingType/ListingDuration/StartPrice swapped for auction semantics, and no BuyItNow/reserve.
-// Confirmed live via GetCategoryFeatures against two real categories (36870, 177765) — both
-// share the exact same auction duration set (durationSetID=1): 3/5/7/10 days, no 1-day option.
-// Real failure seen in production: "[83] The duration '1' day(s) is not available for this
-// listing type" — eBay simply doesn't offer 1-day auctions, not a category-specific quirk.
-const AUCTION_DURATION_MAP = { 3: 'Days_3', 5: 'Days_5', 7: 'Days_7', 10: 'Days_10' };
-
-router.post('/trading-create-auction-listing', async (req, res) => {
-  try {
-    const token = await getAccessToken();
-    const {
-      title, price: _price, currency = 'USD',
-      condition = 'NEW', categoryId,
-      imageUrls = [], upc, specs = {}, bullets = [], description,
-      durationDays,
-      shipping = { free: true, carrier: 'FedExStandardOvernight', handlingDays: 1 },
-      returns = { accepted: true, days: 30, buyerPays: true },
-      sellerCountry = 'TH',
-      sellerLocation = 'Phayao',
-      productId, cloudinaryFolder,
-    } = req.body;
-
-    if (!title || !_price) return res.status(400).json({ error: 'title and price are required' });
-    if (Number(_price) >= 100) return res.status(400).json({ error: `Starting price $${Number(_price).toFixed(2)} is $100 or more — eBay requires account approval for premium listings. Keep it under $100.` });
-    const ebayDuration = AUCTION_DURATION_MAP[Number(durationDays)];
-    if (!ebayDuration) return res.status(400).json({ error: `durationDays must be one of: ${Object.keys(AUCTION_DURATION_MAP).join(', ')}` });
-    const price = String(_price);
-
-    const safeTitle = sanitizeTitle(title);
-    const conditionId = condition === 'NEW' ? '1000' : '3000';
-
-    let catId = categoryId ? String(categoryId) : null;
-    if (!catId) catId = await lookupCategory(safeTitle, upc);
-    if (!catId) return res.status(400).json({ error: 'Could not auto-detect eBay category. Please provide categoryId.' });
-
-    const aspects = buildAspects(specs);
-    if (upc && !aspects['UPC']) aspects['UPC'] = [upc];
-    if (!aspects['Brand']) aspects['Brand'] = [specs.brand_name || 'Unbranded'];
-
-    await injectTitleAspects(catId, aspects, safeTitle);
-    await enrichAspectsWithAI(catId, aspects, safeTitle, specs, bullets, []);
-
-    const buildSpecXml = (asp) => Object.entries(asp)
-      .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
-      .join('');
-
-    const pics = [...new Set(imageUrls)].slice(0, 12);
-    const picturesXml = pics.length
-      ? `<PictureDetails>${pics.map(u => `<PictureURL>${escXml(u)}</PictureURL>`).join('')}</PictureDetails>`
-      : '';
-
-    // Business policies (same lookup as trading-create-listing — duplicated per this file's
-    // established convention of not sharing request-orchestration logic across routes)
-    const h = { Authorization: `Bearer ${token}` };
-    const mid = 'EBAY_US';
-    let fulfillmentPolicyId = null;
-    let returnPolicyId = null;
-    let paymentPolicyId = null;
-    try {
-      const [fulRes, retRes, payRes] = await Promise.all([
-        axios.get(`https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=${mid}`, { headers: h }),
-        axios.get(`https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=${mid}`, { headers: h }),
-        axios.get(`https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=${mid}`, { headers: h }),
-      ]);
-      const fuls = fulRes.data.fulfillmentPolicies || [];
-      const usaBuyer = fuls.find(p => /usa.?buyer/i.test(p.name));
-      fulfillmentPolicyId = (usaBuyer || fuls[0])?.fulfillmentPolicyId || null;
-
-      const rets = retRes.data.returnPolicies || [];
-      const returnsAccepted = rets.find(p => /return.*accept|30d/i.test(p.name));
-      returnPolicyId = (returnsAccepted || rets[0])?.returnPolicyId || null;
-
-      // Auctions can't satisfy "require immediate payment" without a Buy It Now price (eBay
-      // error 21917141) — we deliberately don't set one, so prefer a payment policy that
-      // doesn't require immediate payment. Confirmed live via /payment-policies/debug: this
-      // seller has both kinds, and the immediate-pay one was being picked first, which is
-      // exactly what broke every auction attempt.
-      const pays = payRes.data.paymentPolicies || [];
-      const nonImmediatePay = pays.find(p => p.immediatePay !== true);
-      paymentPolicyId = (nonImmediatePay || pays[0])?.paymentPolicyId || null;
-    } catch { /* proceed without business policies — eBay may accept inline */ }
-
-    const sellerProfilesXml = fulfillmentPolicyId
-      ? `<SellerProfiles>
-          <SellerShippingProfile><ShippingProfileID>${fulfillmentPolicyId}</ShippingProfileID></SellerShippingProfile>
-          <SellerReturnProfile>${returnPolicyId ? `<ReturnProfileID>${returnPolicyId}</ReturnProfileID>` : ''}</SellerReturnProfile>
-          ${paymentPolicyId ? `<SellerPaymentProfile><PaymentProfileID>${paymentPolicyId}</PaymentProfileID></SellerPaymentProfile>` : ''}
-        </SellerProfiles>`
-      : '';
-
-    const shipCost = shipping.free ? '0.00' : Number(shipping.cost || 0).toFixed(2);
-    const inlineShippingXml = fulfillmentPolicyId ? '' : `<ShippingDetails>
-      <ShippingType>Flat</ShippingType>
-      <ShippingServiceOptions>
-        <ShippingServicePriority>1</ShippingServicePriority>
-        <ShippingService>${escXml(shipping.carrier || 'FedExStandardOvernight')}</ShippingService>
-        <ShippingServiceCost currencyID="USD">${shipCost}</ShippingServiceCost>
-      </ShippingServiceOptions>
-    </ShippingDetails>`;
-
-    const inlineReturnXml = (fulfillmentPolicyId || !returns.accepted) ? '' : `<ReturnPolicy>
-      <ReturnsAcceptedOption>ReturnsAccepted</ReturnsAcceptedOption>
-      <RefundOption>MoneyBack</RefundOption>
-      <ReturnsWithinOption>Days_${returns.days || 30}</ReturnsWithinOption>
-      <ShippingCostPaidByOption>${returns.buyerPays ? 'Buyer' : 'Seller'}</ShippingCostPaidByOption>
-    </ReturnPolicy>`;
-
-    const desc = description || buildDescription();
-
-    const tradingHeaders = {
-      'X-EBAY-API-SITEID': '0',
-      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-      'X-EBAY-API-IAF-TOKEN': token,
-      'Content-Type': 'text/xml',
-    };
-    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
-
-    function tradingPost(callName, body) {
-      return axios.post('https://api.ebay.com/ws/api.dll',
-        `<?xml version="1.0" encoding="utf-8"?>${body}`,
-        { headers: { ...tradingHeaders, 'X-EBAY-API-CALL-NAME': callName } }
-      );
-    }
-
-    const buildBody = (iSpecXml) => {
-      const iSpecBlock = iSpecXml ? `<ItemSpecifics>${iSpecXml}</ItemSpecifics>` : '';
-      return `<AddItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-        ${creds}
-        <Item>
-          <Title>${escXml(safeTitle)}</Title>
-          <Description><![CDATA[${desc}]]></Description>
-          <PrimaryCategory><CategoryID>${catId}</CategoryID></PrimaryCategory>
-          <StartPrice currencyID="USD">${Number(price).toFixed(2)}</StartPrice>
-          <ConditionID>${conditionId}</ConditionID>
-          <Country>${escXml(sellerCountry)}</Country>
-          <Currency>USD</Currency>
-          <DispatchTimeMax>${Number(shipping.handlingDays) || 1}</DispatchTimeMax>
-          <ListingDuration>${ebayDuration}</ListingDuration>
-          <ListingType>Chinese</ListingType>
-          <Quantity>1</Quantity>
-          <Location>${escXml(sellerLocation)}</Location>
-          ${picturesXml}
-          ${iSpecBlock}
-          ${sellerProfilesXml}
-          ${inlineShippingXml}
-          ${inlineReturnXml}
-          ${upc ? `<ProductListingDetails><UPC>${escXml(upc)}</UPC></ProductListingDetails>` : ''}
-        </Item>
-      </AddItemRequest>`;
-    };
-
-    let { data: xml } = await tradingPost('AddItem', buildBody(buildSpecXml(aspects)));
-
-    // Retry once if eBay reports missing item specifics (21919303) and no ItemID yet
-    if (!/<ItemID>\d+<\/ItemID>/.test(xml)) {
-      const missingFields = [];
-      const r21 = /<Errors>([\s\S]*?)<\/Errors>/g;
-      let m21;
-      while ((m21 = r21.exec(xml)) !== null) {
-        if (/<ErrorCode>21919303<\/ErrorCode>/.test(m21[1])) {
-          const f = m21[1].match(/item specific ([^\s.]+) is missing/i)?.[1];
-          if (f && !missingFields.includes(f)) missingFields.push(f);
-        }
-      }
-      if (missingFields.length) {
-        const catAspects = await getValidAspectValues(catId);
-        for (const f of missingFields) {
-          if (f === 'Brand') {
-            aspects[f] = ['Unbranded'];
-          } else {
-            const info = catAspects[f] || { values: [] };
-            const matched = matchAspectValue(info.values, safeTitle);
-            if (matched) {
-              aspects[f] = [matched];
-            } else if (info.values.length) {
-              const best = await pickBestAspectValue(f, info.values, safeTitle);
-              if (best) aspects[f] = [best];
-            }
-            if (!aspects[f]) aspects[f] = ['Other'];
-          }
-        }
-        console.log('trading-create-auction-listing: retry specifics:', JSON.stringify(Object.fromEntries(missingFields.map(f => [f, aspects[f]]))));
-        ({ data: xml } = await tradingPost('AddItem', buildBody(buildSpecXml(aspects))));
-      }
-    }
-
-    const listingId = xml.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-
-    if (/<Ack>Failure<\/Ack>/.test(xml) || (/<Ack>PartialFailure<\/Ack>/.test(xml) && !listingId)) {
-      const allMsgs = [];
-      const errRe = /<Errors>([\s\S]*?)<\/Errors>/g;
-      let em;
-      while ((em = errRe.exec(xml)) !== null) {
-        const sev = em[1].match(/<SeverityCode>([^<]+)<\/SeverityCode>/)?.[1] || '';
-        if (sev === 'Warning') continue;
-        const code = em[1].match(/<ErrorCode>([^<]+)<\/ErrorCode>/)?.[1] || '';
-        const long = em[1].match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || '';
-        const short = em[1].match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/)?.[1] || '';
-        const paramVals = [...em[1].matchAll(/<ErrorParameters[^>]*>\s*<Value>([\s\S]*?)<\/Value>/g)]
-          .map(p => p[1].replace(/&apos;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/<[^>]+>/g, '').trim())
-          .filter(Boolean);
-        const detail = paramVals[0] || long || short;
-        allMsgs.push(`[${code}] ${detail}`);
-      }
-      const msg = allMsgs.join(' | ') || xml.slice(0, 600);
-      const allCodes = [...xml.matchAll(/<ErrorCode>([^<]+)<\/ErrorCode>/g)].map(m => m[1]);
-      const allSevs  = [...xml.matchAll(/<SeverityCode>([^<]+)<\/SeverityCode>/g)].map(m => m[1]);
-      const allLongs = [...xml.matchAll(/<LongMessage>([\s\S]*?)<\/LongMessage>/g)].map(m => m[1].slice(0, 120));
-      console.error('trading-create-auction-listing errors:', allCodes.map((c, i) => `[${c}/${allSevs[i] || '?'}] ${allLongs[i] || ''}`).join(' | '));
-      console.error('trading-create-auction-listing failure XML:\n', xml.slice(0, 2500));
-      if (allMsgs.some(m => m.startsWith('[240]'))) {
-        return res.status(429).json({ error: 'selling_limit_reached', message: msg });
-      }
-      // 21917141's real LongMessage is "To require immediate payment, you must specify a Buy It
-      // Now price" — a payment-policy conflict (immediate payment doesn't make sense pre-sale on
-      // a bid-based item with no BIN price), not a category restriction as it first appeared
-      // (the ErrorParameters value surfaced here was misleadingly "FIXED_PRICE"). Already fixed
-      // at the source above by preferring a non-immediate-pay payment policy — this only still
-      // fires if the seller has no such policy available.
-      if (allCodes.includes('21917141')) {
-        return res.status(400).json({ error: "This eBay account's payment policy requires immediate payment, which isn't allowed on an auction with no Buy It Now price. Add a non-immediate-payment policy in eBay's Business Policies, or add a Buy It Now price." });
-      }
-      return res.status(400).json({ error: msg });
-    }
-
-    if (!listingId) return res.status(500).json({ error: 'Listing created but could not extract ItemID', raw: xml.slice(0, 500) });
-
-    // Link the tracked product record in the SAME request that created the listing — see the
-    // matching comment in trading-create-listing for why this can't be a separate follow-up call.
-    let linkFailed = false;
-    if (productId) {
-      try {
-        const updated = await Product.findByIdAndUpdate(productId, {
-          ebayListingId: listingId,
-          cloudinaryFolder: cloudinaryFolder || null,
-          ebayPrice: Number(_price),
-          listingType: 'AUCTION',
-          listedAt: new Date(),
-        }, { new: true });
-        if (!updated) linkFailed = true;
-      } catch (e) {
-        console.error(`trading-create-auction-listing: failed to link product ${productId} to ${listingId}:`, e.message);
-        linkFailed = true;
-      }
-    }
-
-    res.json({ listingId, url: `https://www.ebay.com/itm/${listingId}`, ...(linkFailed ? { linkFailed: true } : {}) });
-  } catch (err) {
-    if (err.status === 401 || err.message === 'not_authenticated')
-      return res.status(401).json({ error: 'not_authenticated' });
-    res.status(500).json({ error: err.message || 'Failed to create auction listing' });
-  }
-});
-
 // ── API usage stats ────────────────────────────────────────────────────
 router.get('/api-usage', async (req, res) => {
   try {
@@ -4073,42 +3787,6 @@ router.get('/listings/prices-batch', async (req, res) => {
           variations.push({ price, specs });
         }
         result[cleanId] = { base, variations };
-      } catch { result[cleanId] = { error: 'failed' }; }
-    }));
-    res.json(result);
-  } catch (err) {
-    if (err.status === 401 || err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Batch auction status (bid count + end time) — one GetItem call per listing ──
-// ?ids=123,456  Returns { "123": { bidCount, endTime }, ... }
-router.get('/listings/auction-status', async (req, res) => {
-  const rawIds = String(req.query.ids || '').split(',').map(s => s.replace(/\D/g, '')).filter(Boolean);
-  if (!rawIds.length) return res.status(400).json({ error: 'ids required' });
-  try {
-    const token = await getAccessToken();
-    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
-    const headers = { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' };
-
-    const result = {};
-    await Promise.all(rawIds.map(async cleanId => {
-      try {
-        const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
-          `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`,
-          { headers: { ...headers, 'X-EBAY-API-CALL-NAME': 'GetItem' } }
-        );
-        if (/<Ack>Failure<\/Ack>/.test(xml)) {
-          const errCode = xml.match(/<ErrorCode>(\d+)<\/ErrorCode>/)?.[1];
-          const longMsg = (xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || '').toLowerCase();
-          const isGone = errCode === '17' || longMsg.includes('no such') || longMsg.includes('invalid item') || longMsg.includes('not found for itemid');
-          result[cleanId] = { error: isGone ? 'not_found' : 'api_error' };
-          return;
-        }
-        const bidCount = parseInt(xml.match(/<BidCount>(\d+)<\/BidCount>/)?.[1] || '0', 10) || 0;
-        const endTime = xml.match(/<EndTime>([^<]+)<\/EndTime>/)?.[1] || null;
-        result[cleanId] = { bidCount, endTime };
       } catch { result[cleanId] = { error: 'failed' }; }
     }));
     res.json(result);
@@ -4664,9 +4342,7 @@ router.post('/promoted-listings/end-all', async (req, res) => {
 router.post('/batch-optimize', async (req, res) => {
   const BASE = `http://localhost:${process.env.PORT || 5000}`;
 
-  // Excludes auctions — this route revises title/description/specifics via
-  // ReviseFixedPriceItem, the wrong call type for an auction-format listing.
-  const products = await Product.find({ ebayListingId: { $exists: true, $ne: null }, listingType: { $ne: 'AUCTION' } }).lean();
+  const products = await Product.find({ ebayListingId: { $exists: true, $ne: null } }).lean();
   // Group by listingId, pick most-data variant as primary
   const groups = {};
   for (const p of products) {
