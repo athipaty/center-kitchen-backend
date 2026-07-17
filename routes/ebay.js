@@ -4560,3 +4560,8 @@ router.post('/restock-now', async (req, res) => {
 
 module.exports = router;
 module.exports.setIo = setIo;
+// Exposes the in-memory listing-views cache (id -> { count, expiresAt }) so other routes
+// (e.g. tracker's "similar to what sells" search) can read current view counts without
+// re-hitting the Analytics API themselves — best-effort, empty until the Tracker tab has
+// loaded at least once and populated it via GET /api/ebay/listings/views.
+module.exports.getViewsCache = () => viewsCache;

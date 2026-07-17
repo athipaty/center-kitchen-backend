@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 const Product = require("../../models/tracker/Product");
+const Order = require("../../models/tracker/Order");
 
 // 10-minute cache for deal search results — each search costs 5 credits
 const _dealSearchCache = new Map(); // query → { deals, expiresAt }
@@ -11,6 +12,8 @@ const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
 const { endListing, removeVariation } = require("../../jobs/ebayPriceSync");
+const { getViewsCache } = require("../ebay");
+const cheerio = require("cheerio");
 
 router.get("/settings", async (req, res) => {
   res.json({});
@@ -69,27 +72,6 @@ router.post("/preview", async (req, res) => {
   }
 });
 
-// Amazon browse-node IDs that Keepa uses for category filtering (matches Amazon's native IDs)
-const KEEPA_CATEGORY_IDS = {
-  'Electronics':              172282,
-  'Home & Kitchen':           1055398,
-  'Kitchen & Dining':         284507,
-  'Tools & Home Improvement': 228013,
-  'Sports & Outdoors':        3375251,
-  'Toys & Games':             165793011,
-  'Beauty & Personal Care':   11055981,
-  'Clothing, Shoes & Jewelry':7141123011,
-  'Health & Household':       3760901,
-  'Pet Supplies':             2619533011,
-  'Office Products':          1064954,
-  'Patio, Lawn & Garden':     2972638011,
-  'Baby':                     165796011,
-  'Grocery & Gourmet Food':   16310101,
-  'Automotive':               15690151,
-  'Books':                    283155,
-  'Video Games':              468642,
-};
-
 // Keepa response helpers (inline — avoids import coupling with scraper.js). Verified against
 // a live /product?stats=1&buybox=1&rating=1 response — stats.current[] is indexed by Keepa's
 // CSV_TYPE convention (0=Amazon, 3=SALES_RANK, 4=LISTPRICE, ...), so buyBoxPrice is used
@@ -106,58 +88,83 @@ function _keepaImageUrl(p) {
   return `https://m.media-amazon.com/images/I/${img.l || img.m}`;
 }
 
-// GET search for the top best-selling items in a category using Keepa's Best Sellers API
-// (ranked by Amazon sales rank, no price ceiling). Prime and 4+ star rating are still hard
-// filters — ratings/price/Prime aren't in the Best Sellers response so a second batch
-// product call fills them in, same two-step shape the old Deal-API version used.
-router.get("/search-deals", async (req, res) => {
+// GET find new products worth sourcing, seeded from what you actually sell — not a manual
+// category pick. Two source signals: recently sold orders and your highest-viewed tracked
+// listings (best-effort — the latter reads ebay.js's in-memory views cache, empty until the
+// Tracker tab has loaded at least once). Each source ASIN's Keepa data gives two free signals
+// (no extra token cost beyond the normal per-product fetch): frequentlyBoughtTogether (direct
+// candidate ASINs) and its category (fallback best-sellers pull if FBT alone is thin). Amazon's
+// Choice is a HARD filter — it isn't exposed by Keepa at all, so surviving candidates are
+// individually checked via ScraperAPI's raw HTML (badge marker: "mvt-ac-badge-wrapper"/
+// "Amazon's Choice" text), and anything not flagged is dropped, not just unbadged.
+router.get("/search-similar", async (req, res) => {
   try {
-    const category = (req.query.category || "").trim();
-    if (!category) return res.status(400).json({ error: "category is required" });
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
-
-    const categoryId = KEEPA_CATEGORY_IDS[category];
-    if (!categoryId) return res.status(400).json({ error: `Unknown category "${category}". Must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
-
-    const singleOnly = req.query.singleOnly === 'true';
-    const cacheKey = `${category.toLowerCase()}:bestsellers:${singleOnly}`;
-    const cached = _dealSearchCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      console.log(`search-deals: cache hit for "${category}" — 0 tokens`);
-      return res.json({ category, deals: cached.deals, cached: true });
-    }
-
+    if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set — required for the Amazon's Choice filter" });
     const keepaKey = process.env.KEEPA_API_KEY;
 
-    // Step 1: Keepa Best Sellers API — asinList is already sales-rank ordered (best first),
-    // can run to tens of thousands of entries, so only the top slice goes to the batch
-    // product lookup below. Kept small (20) since that lookup is the expensive part
-    // (~4 tokens/ASIN with stats+buybox+rating) — 20 in, usually ~18 pass the Prime/rating
-    // filters, which is plenty for a quick per-category check.
-    const { data: bsData } = await axios.get("https://api.keepa.com/bestsellers", {
-      params: { key: keepaKey, domain: 1, category: categoryId },
-      timeout: 30000,
-    });
+    const cacheKey = "similar:v1";
+    const cached = _dealSearchCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      console.log("search-similar: cache hit — 0 tokens/credits");
+      return res.json({ deals: cached.deals, cached: true });
+    }
 
-    const asinList = (bsData.bestSellersList?.asinList || []).slice(0, 20);
-    if (!asinList.length) return res.json({ category, deals: [] });
+    // Step 1: source ASINs = recently sold + highest-viewed tracked listings
+    const recentOrders = await Order.find().sort({ createdAt: -1 }).limit(15).select("ebayItemId").lean();
+    const soldListingIds = recentOrders.map(o => o.ebayItemId).filter(Boolean);
 
-    // Step 2: batch-fetch price/rating/Prime/image — none of that is in the Best Sellers response.
-    // buybox:1 is needed for stats.buyBoxPrice/buyBoxIsPrimeEligible; rating:1 + the default csv
-    // history (do NOT pass history:0) are needed for the csv[16]/csv[17] rating/review arrays.
-    const { data: pData } = await axios.get("https://api.keepa.com/product", {
-      params: { key: keepaKey, asin: asinList.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
+    const viewsCache = getViewsCache();
+    const viewedListingIds = [...viewsCache.entries()]
+      .sort((a, b) => (b[1]?.count || 0) - (a[1]?.count || 0))
+      .slice(0, 10)
+      .map(([id]) => id);
+
+    const sourceListingIds = [...new Set([...soldListingIds, ...viewedListingIds])];
+    if (!sourceListingIds.length) return res.json({ deals: [], note: "No sold orders or viewed listings yet to base this on." });
+
+    const sourceProducts = await Product.find({ ebayListingId: { $in: sourceListingIds } }, "url").lean();
+    const sourceAsins = [...new Set(
+      sourceProducts.map(p => p.url?.match(/\/dp\/([A-Z0-9]{10})/i)?.[1]).filter(Boolean)
+    )].slice(0, 20);
+    if (!sourceAsins.length) return res.json({ deals: [], note: "Couldn't map sold/viewed listings back to Amazon ASINs." });
+
+    // Step 2: fetch source products from Keepa for category + frequently-bought-together
+    const { data: srcData } = await axios.get("https://api.keepa.com/product", {
+      params: { key: keepaKey, asin: sourceAsins.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
       timeout: 60000,
     });
-    if (pData.tokensLeft != null) console.log(`search-deals: tokensLeft=${pData.tokensLeft}`);
 
-    const rankIndex = new Map(asinList.map((asin, i) => [asin, i]));
+    const fbtAsins = new Set();
+    const catCounts = new Map();
+    for (const p of (srcData.products || [])) {
+      for (const a of (p.frequentlyBoughtTogether || [])) fbtAsins.add(a);
+      if (p.rootCategory) catCounts.set(p.rootCategory, (catCounts.get(p.rootCategory) || 0) + 1);
+    }
+    for (const a of sourceAsins) fbtAsins.delete(a); // don't recommend what you already sell
 
-    // Step 3: apply Prime + 4+ star filters and build the response shape the frontend expects.
-    // singleOnly sorts single-item listings first rather than excluding variation-family items
-    // outright — a hard exclude leaves many categories thin, since most cheap/popular products
-    // *do* have color/size variants. hasVariants is exposed either way so the frontend can badge it.
-    const deals = (pData.products || [])
+    // Step 3: frequently-bought-together is the primary candidate source (free — already have
+    // the data); only spend a Best Sellers call (50 tokens) as a supplement if FBT is thin.
+    let candidateAsins = [...fbtAsins];
+    if (candidateAsins.length < 15 && catCounts.size) {
+      const topCatId = [...catCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      const { data: bsData } = await axios.get("https://api.keepa.com/bestsellers", {
+        params: { key: keepaKey, domain: 1, category: topCatId },
+        timeout: 30000,
+      });
+      const bsAsins = (bsData.bestSellersList?.asinList || []).slice(0, 20);
+      candidateAsins = [...new Set([...candidateAsins, ...bsAsins])];
+    }
+    candidateAsins = candidateAsins.filter(a => !sourceAsins.includes(a)).slice(0, 40);
+    if (!candidateAsins.length) return res.json({ deals: [] });
+
+    // Step 4: fetch candidate price/rating/Prime/image — same shape as search-deals
+    const { data: candData } = await axios.get("https://api.keepa.com/product", {
+      params: { key: keepaKey, asin: candidateAsins.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
+      timeout: 60000,
+    });
+
+    const shortlisted = (candData.products || [])
       .map(p => {
         const ratingRaw = _lastCsvValue(p.csv, 16);
         return {
@@ -171,23 +178,46 @@ router.get("/search-deals", async (req, res) => {
           reviewCount:  _lastCsvValue(p.csv, 17) || 0,
           monthlySold:  p.monthlySold > 0 ? p.monthlySold : null,
           isPrime:      p.stats?.buyBoxIsPrimeEligible === true,
-          hasVariants:  !!p.parentAsin,  // child of a variation family (color/size siblings)
-          rank:         rankIndex.get(p.asin) ?? 999,
+          hasVariants:  !!p.parentAsin,
         };
       })
       .filter(d => d.price != null && d.isPrime && (d.rating == null || d.rating >= 4.0))
-      .sort((a, b) => {
-        if (singleOnly && a.hasVariants !== b.hasVariants) return a.hasVariants ? 1 : -1;
-        return a.rank - b.rank;
-      })
-      .map(({ rank, ...d }) => d);
+      .sort((a, b) => (b.monthlySold || 0) - (a.monthlySold || 0) || (b.rating || 0) - (a.rating || 0))
+      .slice(0, 25); // caps the ScraperAPI check below — cost/latency control, not a quality cutoff
 
-    console.log(`search-deals "${category}": bestSellers=${asinList.length} passed=${deals.length}`);
+    // Step 5: Amazon's Choice — hard filter via ScraperAPI raw HTML (no autoparse field exposes
+    // this; it's a badge in the page markup, not product data). Scoped to #ppd (the product-detail
+    // container) specifically — a bare page-wide text search would also match the SAME badge
+    // rendered for other items inside "compare similar items"/sponsored widgets elsewhere on the
+    // page, which isn't this product's own badge. Checked with limited concurrency so 25 checks
+    // don't serialize into a multi-minute request.
+    async function isAmazonChoice(asin) {
+      try {
+        const { data: html } = await axios.get("http://api.scraperapi.com/", {
+          params: { api_key: process.env.SCRAPER_API_KEY, url: `https://www.amazon.com/dp/${asin}` },
+          timeout: 30000,
+        });
+        if (typeof html !== "string") return false;
+        const $ = cheerio.load(html);
+        return $("#ppd .mvt-ac-badge-wrapper").length > 0;
+      } catch {
+        return false;
+      }
+    }
+    const CONCURRENCY = 5;
+    const deals = [];
+    for (let i = 0; i < shortlisted.length; i += CONCURRENCY) {
+      const batch = shortlisted.slice(i, i + CONCURRENCY);
+      const flags = await Promise.all(batch.map(d => isAmazonChoice(d.asin)));
+      batch.forEach((d, j) => { if (flags[j]) deals.push(d); });
+    }
+
+    console.log(`search-similar: sources=${sourceAsins.length} candidates=${candidateAsins.length} shortlisted=${shortlisted.length} amazonChoice=${deals.length}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
-    res.json({ category, deals });
+    res.json({ deals });
   } catch (err) {
     if (err.response?.status === 429)
-      return res.status(503).json({ error: "Keepa rate limit — best-seller search is cached 10min, try again shortly." });
+      return res.status(503).json({ error: "Rate limit — similar-products search is cached 10min, try again shortly." });
     res.status(502).json({ error: err.response?.data?.message || err.message });
   }
 });
