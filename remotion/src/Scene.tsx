@@ -24,16 +24,20 @@ export const Scene: React.FC<SceneProps & { durationInFrames: number }> = ({
         return (
           <Sequence key={i} from={from} durationInFrames={lineFrames} layout="none">
             <Audio src={line.audioUrl} />
-            {line.spriteUrl && (
-              // Sprites are upper-body busts (head/shoulders/chest, cropped at the waist), not
-              // full-body standing figures — sized down from the old 70%/18% (tuned for legs
-              // reaching near the frame bottom) and anchored flush with the bottom edge, like the
-              // character's torso continues past the visible frame.
-              <AbsoluteFill style={{ alignItems: "center", justifyContent: "flex-end" }}>
-                <Img
-                  src={line.spriteUrl}
-                  style={{ height: "50%", objectFit: "contain", marginBottom: "0%" }}
-                />
+            {line.characters.length > 0 && (
+              // One portrait per on-screen character, spread evenly left-to-right across the top
+              // of the frame (not stacked center-bottom) so two characters sharing a scene don't
+              // just replace each other in the same spot as the speaker changes. Kept near the top
+              // and slightly see-through so the background stays visible and the bottom-anchored
+              // CaptionOverlay has clear room.
+              <AbsoluteFill style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-evenly", paddingTop: "4%" }}>
+                {line.characters.map((c, i) => (
+                  <Img
+                    key={i}
+                    src={c.spriteUrl}
+                    style={{ height: "32%", objectFit: "contain", opacity: 0.82 }}
+                  />
+                ))}
               </AbsoluteFill>
             )}
             <CaptionOverlay text={line.text} speaker={line.speaker} />

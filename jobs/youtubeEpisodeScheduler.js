@@ -238,6 +238,40 @@ async function stepTts(episode) {
   episode.statusDetail = "";
 }
 
+// Builds one scene's per-line render props — critically, every line lists ALL of that scene's
+// on-screen characters (not just whoever's speaking), so Scene.tsx can show both characters
+// sharing the frame side-by-side instead of one sprite replacing another in the same spot every
+// time the speaker changes. Each character's sprite reflects their most recently-voiced expression
+// (defaulting to neutral before their first line), so a listening character's face doesn't reset
+// between their own lines.
+function buildDialogueProps(scene, byId) {
+  const currentExpression = new Map();
+  for (const charId of scene.charactersOnScreen) currentExpression.set(String(charId), "neutral");
+
+  return scene.dialogue.map((line) => {
+    const character = line.character ? byId.get(String(line.character)) : null;
+    if (character) currentExpression.set(String(character._id), line.expression);
+
+    const characters = scene.charactersOnScreen
+      .map((id) => byId.get(String(id)))
+      .filter(Boolean)
+      .map((c) => {
+        const expr = currentExpression.get(String(c._id)) || "neutral";
+        const sprite = c.sprites.find((s) => s.expression === expr) || c.sprites[0];
+        return sprite ? { name: c.name, spriteUrl: sprite.imageUrl } : null;
+      })
+      .filter(Boolean);
+
+    return {
+      text: line.text,
+      speaker: character ? character.name : null,
+      audioUrl: line.audioUrl,
+      durationMs: line.durationMs,
+      characters,
+    };
+  });
+}
+
 // review -> uploading: renders the MP4 (via the Remotion subprocess) and uploads it to B2, in one
 // step rather than persisting an intermediate "rendered but not uploaded" state — if this is
 // interrupted, retrying just re-renders from the already-cached background/sprite/audio URLs
@@ -258,17 +292,7 @@ async function stepRenderAndUpload(episode) {
     scenes: episode.scenes.map((scene) => ({
       backgroundUrl: scene.backgroundUrl,
       cameraMove: scene.cameraMove,
-      dialogue: scene.dialogue.map((line) => {
-        const character = line.character ? byId.get(String(line.character)) : null;
-        const sprite = character?.sprites.find((s) => s.expression === line.expression) || character?.sprites[0];
-        return {
-          text: line.text,
-          speaker: character ? character.name : null,
-          spriteUrl: sprite ? sprite.imageUrl : null,
-          audioUrl: line.audioUrl,
-          durationMs: line.durationMs,
-        };
-      }),
+      dialogue: buildDialogueProps(scene, byId),
     })),
     bgmUrl: null, // no royalty-free track bundled in v1 — see remotion/src/EpisodeComposition.tsx
   };
