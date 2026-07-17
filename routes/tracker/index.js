@@ -131,13 +131,15 @@ router.get("/search-deals", async (req, res) => {
 
     // Step 1: Keepa Best Sellers API — asinList is already sales-rank ordered (best first),
     // can run to tens of thousands of entries, so only the top slice goes to the batch
-    // product lookup below (Keepa's /product endpoint caps at ~100 ASINs per call).
+    // product lookup below. Kept small (20) since that lookup is the expensive part
+    // (~4 tokens/ASIN with stats+buybox+rating) — 20 in, usually ~18 pass the Prime/rating
+    // filters, which is plenty for a quick per-category check.
     const { data: bsData } = await axios.get("https://api.keepa.com/bestsellers", {
       params: { key: keepaKey, domain: 1, category: categoryId },
       timeout: 30000,
     });
 
-    const asinList = (bsData.bestSellersList?.asinList || []).slice(0, 100);
+    const asinList = (bsData.bestSellersList?.asinList || []).slice(0, 20);
     if (!asinList.length) return res.json({ category, deals: [] });
 
     // Step 2: batch-fetch price/rating/Prime/image — none of that is in the Best Sellers response.
