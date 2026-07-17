@@ -4,9 +4,11 @@ const axios = require("axios");
 const Product = require("../../models/tracker/Product");
 const Order = require("../../models/tracker/Order");
 
-// 10-minute cache for deal search results — each search costs 5 credits
+// Cache for search-similar results — each fresh search costs ~150-200 Keepa tokens plus
+// up to 25 ScraperAPI credits (the Amazon's Choice check), so repeat clicks within the TTL
+// return instantly at zero extra cost instead of re-running the whole pipeline.
 const _dealSearchCache = new Map(); // query → { deals, expiresAt }
-const DEAL_CACHE_TTL = 10 * 60 * 1000; // 10 min — conserves Keepa tokens (Deal API costs 5/call)
+const DEAL_CACHE_TTL = 30 * 60 * 1000; // 30 min — conserves Keepa tokens + ScraperAPI credits
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
