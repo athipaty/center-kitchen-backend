@@ -158,6 +158,24 @@ router.patch("/:id/delivered", async (req, res) => {
   }
 });
 
+// PATCH undo an accidental "mark delivered" click — reverts back to shipped. Only
+// valid from 'delivered' (not 'notified': once the buyer's been messaged about delivery,
+// reverting would leave that message contradicting the order's own status).
+router.patch("/:id/undo-delivered", async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: "order not found" });
+    if (order.status !== 'delivered') return res.status(400).json({ error: "order is not marked delivered" });
+
+    order.status = 'shipped';
+    order.deliveredAt = null;
+    await order.save();
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST compose a thank-you message for the buyer — just generates the text for you
 // to copy and paste into eBay's message center yourself (eBay's buyer-messaging API
 // is legacy and unreliable, so this skips trying to auto-send entirely).
