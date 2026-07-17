@@ -136,4 +136,49 @@ Return ONLY a raw JSON object (no markdown fences): { "summary": "..." }`;
   return parsed.summary || episode.title;
 }
 
-module.exports = { generateScript, summarizeEpisode, EXPRESSIONS, CAMERA_MOVES };
+// Writes YouTube listing metadata (title/description/tags) the way an established channel would —
+// separate from the episode's internal `title` (which drives continuity/UI), since a good SEO
+// title often differs from a clean in-universe episode title.
+async function generateYoutubeMetadata(series, episode) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const script = episode.scenes
+    .map((s) => s.dialogue.map((d) => d.text).join(" "))
+    .join(" ");
+
+  const prompt = `You are a YouTube SEO specialist writing the public listing for one episode of an
+ongoing animated "motion comic" series, the way a successful animation/storytime channel would.
+
+Series: ${series.title}
+Genre: ${series.genre || "n/a"}
+Episode number: ${episode.episodeNumber}
+Episode title (internal): ${episode.title}
+Episode script: ${script}
+
+Write:
+1. "title": a punchy, clickable YouTube title, at most 95 characters. Include the episode number.
+   No misleading clickbait — it must accurately reflect the episode.
+2. "description": 150-250 words. First 1-2 lines are the hook (shown before "Show more", so make
+   them count). Then a short spoiler-light summary. Then a line inviting viewers to subscribe for
+   more episodes. End with 4-6 relevant hashtags on their own line (format: #Word, no spaces).
+3. "tags": 15-20 individual search keywords/short-phrases (YouTube's tag field, not hashtags — no
+   # symbol), ordered most-relevant first, covering the series name, genre, and general terms
+   viewers of this kind of content search for.
+
+Return ONLY a raw JSON object (no markdown fences):
+{ "title": "...", "description": "...", "tags": ["...", "..."] }`;
+
+  const msg = await anthropic.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 1024,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const parsed = parseJsonResponse(msg);
+  return {
+    title: (parsed.title || episode.title || series.title).slice(0, 95),
+    description: parsed.description || episode.premise,
+    tags: Array.isArray(parsed.tags) ? parsed.tags.slice(0, 20) : [],
+  };
+}
+
+module.exports = { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS, CAMERA_MOVES };

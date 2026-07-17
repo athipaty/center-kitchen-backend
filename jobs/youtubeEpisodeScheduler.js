@@ -1,13 +1,15 @@
 const cron = require("node-cron");
 const sharp = require("sharp");
+const axios = require("axios");
 const Series = require("../models/youtube/Series");
 const Character = require("../models/youtube/Character");
 const Episode = require("../models/youtube/Episode");
 const { generateImage } = require("../utils/youtube/pollinations");
 const { synthesize } = require("../utils/youtube/edgeTts");
-const { generateScript, summarizeEpisode, EXPRESSIONS } = require("../utils/youtube/claudeScript");
+const { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS } = require("../utils/youtube/claudeScript");
 const { renderEpisodeToBuffer } = require("../utils/youtube/remotionRender");
 const { uploadToB2, deleteB2File, b2KeyFromUrl } = require("../utils/b2Utils");
+const { uploadVideoToYoutube } = require("../utils/youtube/youtubeUpload");
 
 let io = null;
 
@@ -204,8 +206,11 @@ async function stepBackgrounds(episode) {
   episode.statusDetail = "";
 }
 
-// backgrounds -> tts: one audio file per dialogue line. Narrator lines use a per-locale default
-// voice; character lines use that character's own locked voiceName.
+// backgrounds -> review: one audio file per dialogue line, then STOPS at "review" instead of
+// going straight into rendering — gives a human a chance to read the dialogue, look at the
+// backgrounds, and edit anything before the render (which is comparatively expensive/slow) runs.
+// Narrator lines use a per-locale default voice; character lines use that character's own locked
+// voiceName.
 async function stepTts(episode) {
   const series = await Series.findById(episode.series);
   const characters = await Character.find({ series: episode.series });
@@ -229,11 +234,11 @@ async function stepTts(episode) {
       line.durationMs = durationMs;
     }
   }
-  episode.status = "tts";
+  episode.status = "review";
   episode.statusDetail = "";
 }
 
-// tts -> uploading: renders the MP4 (via the Remotion subprocess) and uploads it to B2, in one
+// review -> uploading: renders the MP4 (via the Remotion subprocess) and uploads it to B2, in one
 // step rather than persisting an intermediate "rendered but not uploaded" state — if this is
 // interrupted, retrying just re-renders from the already-cached background/sprite/audio URLs
 // above (no repeated Pollinations/TTS calls, so it's cheap and safe to redo).
@@ -280,7 +285,26 @@ async function stepRenderAndUpload(episode) {
   episode.statusDetail = "";
 }
 
-// uploading -> done: summarizes the episode into the series' continuity log so the NEXT episode's
+// uploading -> publishing: pushes the B2-hosted MP4 to the actual YouTube channel via the Data API
+// (videos.insert), as a private upload — a human still reviews and flips visibility in YouTube
+// Studio before it goes public. Re-fetches the buffer from B2 (rather than threading it through
+// from stepRenderAndUpload) since each step reloads the episode fresh from Mongo on its own tick.
+async function stepPublishToYoutube(episode) {
+  const series = await Series.findById(episode.series);
+  episode.statusDetail = "uploading to YouTube";
+  await episode.save();
+  await emit(episode);
+
+  const meta = await generateYoutubeMetadata(series, episode);
+  const { data: mp4Buffer } = await axios.get(episode.videoUrl, { responseType: "arraybuffer" });
+  const { videoId, url } = await uploadVideoToYoutube(Buffer.from(mp4Buffer), meta);
+  episode.youtubeVideoId = videoId;
+  episode.youtubeUrl = url;
+  episode.status = "publishing";
+  episode.statusDetail = "";
+}
+
+// publishing -> done: summarizes the episode into the series' continuity log so the NEXT episode's
 // script prompt remembers what happened here.
 async function stepDone(episode) {
   const series = await Series.findById(episode.series);
@@ -298,10 +322,23 @@ const STEP_HANDLERS = {
   backgrounds: stepTts,
   tts: stepRenderAndUpload,
   rendering: stepRenderAndUpload, // safe to redo — see stepRenderAndUpload's comment
-  uploading: stepDone,
+  uploading: stepPublishToYoutube,
+  publishing: stepDone,
 };
 
+// Guards a single episode against being processed by two callers at once — the 30s cron sweep
+// (runDueTick) and an explicit triggerNow() (called right after episode creation, retry,
+// approve-render, and the review edit-cascade) are otherwise completely unsynchronized, and a
+// step like stepRenderAndUpload legitimately takes well over 30s. Without this, the cron tick can
+// fire mid-render and start a second concurrent render of the same episode, and the two runs stomp
+// on each other's identically-named temp files in remotionRender.js (surfaced as an ENOENT on the
+// output MP4 — one process deleting/overwriting what the other was still reading/writing).
+const inFlightEpisodes = new Set();
+
 async function processOne(episode) {
+  const id = String(episode._id);
+  if (inFlightEpisodes.has(id)) return;
+  inFlightEpisodes.add(id);
   try {
     const handler = STEP_HANDLERS[episode.status];
     if (!handler) return; // 'done' or 'error' — nothing to do
@@ -313,7 +350,9 @@ async function processOne(episode) {
     episode.errorMessage = err.message;
     episode.statusDetail = "";
     await episode.save();
-    io?.emit("episode:error", { episodeId: String(episode._id), error: err.message });
+    io?.emit("episode:error", { episodeId: id, error: err.message });
+  } finally {
+    inFlightEpisodes.delete(id);
   }
 }
 

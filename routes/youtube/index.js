@@ -197,7 +197,11 @@ router.get("/episodes", async (req, res) => {
   try {
     const { seriesId } = req.query;
     const filter = seriesId ? { series: seriesId } : {};
-    const episodes = await Episode.find(filter).sort({ episodeNumber: -1 });
+    // Populated so the "review" step can show a speaker name + their current voice next to each
+    // line without a second round-trip per character.
+    const episodes = await Episode.find(filter)
+      .sort({ episodeNumber: -1 })
+      .populate("scenes.dialogue.character", "name voiceName");
     res.json(episodes);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -206,8 +210,102 @@ router.get("/episodes", async (req, res) => {
 
 router.get("/episodes/:id", async (req, res) => {
   try {
+    const episode = await Episode.findById(req.params.id).populate("scenes.dialogue.character", "name voiceName");
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    res.json(episode);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Edit dialogue text/expression, background prompts, and/or a character's voice while an episode
+// is paused at "review" (after TTS, before the expensive render). Only touches what actually
+// changed and re-enters the pipeline at the earliest step that needs to redo — reusing the same
+// "already generated, skip it" guards stepBackgrounds/stepTts use for resuming after a crash, so
+// unrelated scenes/lines are never regenerated.
+router.put("/episodes/:id/scenes", async (req, res) => {
+  try {
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (episode.status !== "review") {
+      return res.status(409).json({ error: "This episode isn't awaiting review right now." });
+    }
+
+    const { scenes: editedScenes = [], voiceChanges = [] } = req.body;
+    let needsBackgrounds = false;
+    let needsTts = false;
+
+    // Voice changes are a character-level fix (e.g. the wrong gender voice got assigned when the
+    // character was created) — update the Character so every future episode gets it too, then
+    // wipe just this episode's already-recorded lines for that character so they re-synthesize.
+    for (const { characterId, voiceName } of voiceChanges) {
+      if (!characterId || !voiceName) continue;
+      await Character.findByIdAndUpdate(characterId, { voiceName });
+      for (const scene of episode.scenes) {
+        for (const line of scene.dialogue) {
+          if (String(line.character) === String(characterId)) {
+            line.audioUrl = null;
+            line.durationMs = null;
+            needsTts = true;
+          }
+        }
+      }
+    }
+
+    for (const edited of editedScenes) {
+      const scene = episode.scenes.find((s) => s.order === edited.order);
+      if (!scene) continue;
+      if (typeof edited.backgroundPrompt === "string" && edited.backgroundPrompt.trim() !== scene.backgroundPrompt.trim()) {
+        scene.backgroundPrompt = edited.backgroundPrompt.trim();
+        scene.backgroundUrl = null;
+        needsBackgrounds = true;
+      }
+      (edited.dialogue || []).forEach((editedLine, i) => {
+        const line = scene.dialogue[i];
+        if (!line) return;
+        if (typeof editedLine.text === "string" && editedLine.text.trim() !== line.text.trim()) {
+          line.text = editedLine.text.trim();
+          line.audioUrl = null;
+          line.durationMs = null;
+          needsTts = true;
+        }
+        if (editedLine.expression && editedLine.expression !== line.expression) {
+          line.expression = editedLine.expression; // free — every character's sprite set already covers all 5 expressions
+        }
+      });
+    }
+
+    episode.markModified("scenes");
+    // 'sprites' and 'backgrounds' are the same safe re-entry points stepBackgrounds/stepTts's
+    // "already generated" checks make resumable everywhere else in this pipeline.
+    if (needsBackgrounds) episode.status = "sprites";
+    else if (needsTts) episode.status = "backgrounds";
+    // else: only expressions changed (or nothing did) — stays "review", nothing to regenerate.
+    await episode.save();
+
+    if (needsBackgrounds || needsTts) {
+      scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
+    }
+    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName");
+    res.json(fresh);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Approves an episode paused at "review" and kicks off the actual render/upload/publish chain.
+// Sets status to "tts" only as a momentary internal handoff — STEP_HANDLERS.tts (stepRenderAndUpload)
+// picks it up immediately via triggerNow, so it's never visibly stuck there.
+router.post("/episodes/:id/approve-render", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (episode.status !== "review") {
+      return res.status(409).json({ error: "This episode isn't awaiting review right now." });
+    }
+    episode.status = "tts";
+    await episode.save();
+    scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     res.json(episode);
   } catch (err) {
     res.status(500).json({ error: err.message });

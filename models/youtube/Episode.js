@@ -39,13 +39,15 @@ const episodeSchema = new mongoose.Schema(
     // advances it to the next status. See that file for exactly what each step does.
     status: {
       type: String,
-      enum: ["pending", "script", "sprites", "backgrounds", "tts", "rendering", "uploading", "done", "error"],
+      enum: ["pending", "script", "sprites", "backgrounds", "tts", "review", "rendering", "uploading", "publishing", "done", "error"],
       default: "pending",
       index: true,
     },
     statusDetail: { type: String, default: "" }, // human-readable sub-step, e.g. "background 2/4"
     errorMessage: { type: String, default: null },
     videoUrl: { type: String, default: null }, // final B2 MP4 URL
+    youtubeVideoId: { type: String, default: null }, // filled during the 'uploading' step
+    youtubeUrl: { type: String, default: null },
     durationMs: { type: Number, default: null },
   },
   { timestamps: true }
