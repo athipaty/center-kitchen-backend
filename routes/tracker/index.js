@@ -90,22 +90,26 @@ const KEEPA_CATEGORY_IDS = {
   'Video Games':              468642,
 };
 
-// Keepa price helpers (inline — avoids import coupling with scraper.js)
-function _kPrice(cents) { return (cents != null && cents !== -1 && cents > 0) ? cents / 100 : null; }
-function _keepaCurrentPrice(s) {
-  if (!s?.current) return null;
-  return _kPrice(s.current[3]) || _kPrice(s.current[0]) || _kPrice(s.current[7]) || null;
+// Keepa response helpers (inline — avoids import coupling with scraper.js). Verified against
+// a live /product?stats=1&buybox=1&rating=1 response — stats.current[] is indexed by Keepa's
+// CSV_TYPE convention (0=Amazon, 3=SALES_RANK, 4=LISTPRICE, ...), so buyBoxPrice is used
+// directly instead of guessing an index; rating/reviewCount only come through as csv[16]/
+// csv[17] history arrays (last entry = current value), not as flat top-level fields.
+function _kCents(v) { return (v != null && v > 0) ? v / 100 : null; }
+function _lastCsvValue(csv, idx) {
+  const arr = csv?.[idx];
+  return Array.isArray(arr) && arr.length >= 2 ? arr[arr.length - 1] : null;
 }
-function _keepaListPrice(s) { return _kPrice(s?.current?.[11]) || null; }
-function _keepaImages(p) {
-  if (!p.imagesCSV) return [];
-  return p.imagesCSV.split(',').filter(Boolean).map(s => `https://images-na.ssl-images-amazon.com/images/I/${s.trim()}`);
+function _keepaImageUrl(p) {
+  const img = p.images?.[0];
+  if (!img) return null;
+  return `https://m.media-amazon.com/images/I/${img.l || img.m}`;
 }
 
-// GET search for items with recent price drops using Keepa Deal API, under an optional
-// maxPrice (defaults to $15, matches the Deals-tab search).
-// Deal API returns up to 150 items per category; price/rating filters applied client-side
-// since API-side filters are unreliable. Ratings fetched via a second batch product call.
+// GET search for the top best-selling items in a category using Keepa's Best Sellers API
+// (ranked by Amazon sales rank, no price ceiling). Prime and 4+ star rating are still hard
+// filters — ratings/price/Prime aren't in the Best Sellers response so a second batch
+// product call fills them in, same two-step shape the old Deal-API version used.
 router.get("/search-deals", async (req, res) => {
   try {
     const category = (req.query.category || "").trim();
@@ -115,9 +119,8 @@ router.get("/search-deals", async (req, res) => {
     const categoryId = KEEPA_CATEGORY_IDS[category];
     if (!categoryId) return res.status(400).json({ error: `Unknown category "${category}". Must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
 
-    const maxPrice = Number(req.query.maxPrice) > 0 ? Number(req.query.maxPrice) : 15;
     const singleOnly = req.query.singleOnly === 'true';
-    const cacheKey = `${category.toLowerCase()}:${maxPrice}:${singleOnly}`;
+    const cacheKey = `${category.toLowerCase()}:bestsellers:${singleOnly}`;
     const cached = _dealSearchCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       console.log(`search-deals: cache hit for "${category}" — 0 tokens`);
@@ -126,114 +129,63 @@ router.get("/search-deals", async (req, res) => {
 
     const keepaKey = process.env.KEEPA_API_KEY;
 
-    // Step 1: Keepa Deal API — returns up to 150 recent price-drop items per category.
-    // Keepa Deal response uses dr[] array where each item has: asin, title, current (price array),
-    // avg (4-period price averages), image (byte array of slug), deltaPercent (2D change array).
-    // Use GET — POST with URLSearchParams has encoding issues in some Node.js environments.
-    // priceTypes must be a single integer: 0=Amazon, 1=New, 7=FBA (not an array)
-    const { data: dealData } = await axios.get("https://api.keepa.com/deal", {
-      params: {
-        key: keepaKey,
-        selection: JSON.stringify({
-          domainId: 1,
-          priceTypes: 0,
-          limit: 150,
-          includeCategories: [categoryId],
-        }),
-      },
+    // Step 1: Keepa Best Sellers API — asinList is already sales-rank ordered (best first),
+    // can run to tens of thousands of entries, so only the top slice goes to the batch
+    // product lookup below (Keepa's /product endpoint caps at ~100 ASINs per call).
+    const { data: bsData } = await axios.get("https://api.keepa.com/bestsellers", {
+      params: { key: keepaKey, domain: 1, category: categoryId },
       timeout: 30000,
     });
 
-    const drItems = dealData.deals?.dr || [];
-    if (!drItems.length) return res.json({ category, deals: [] });
+    const asinList = (bsData.bestSellersList?.asinList || []).slice(0, 100);
+    if (!asinList.length) return res.json({ category, deals: [] });
 
-    // Best buyable price for this deal item (same index priority as scraper.js)
-    function dealPrice(cur) {
-      if (!Array.isArray(cur)) return null;
-      const c = v => (v > 0 ? v / 100 : null);
-      return c(cur[0]) || c(cur[7]) || c(cur[1]) || null;
-    }
-
-    // Keepa stores image slugs as byte arrays — convert to string
-    function slugFromBytes(b) {
-      if (!b) return null;
-      if (typeof b === "string") return b;
-      try { return Buffer.from(b).toString("utf-8"); } catch { return null; }
-    }
-
-    // Step 2: client-side filter — keep only items priced ≤ maxPrice
-    const candidates = drItems.filter(d => {
-      const p = dealPrice(d.current);
-      return p !== null && p <= maxPrice;
-    }).slice(0, 50);
-
-    if (!candidates.length) {
-      console.log(`search-deals "${category}": dr=${drItems.length} — no items under $${maxPrice}`);
-      return res.json({ category, deals: [] });
-    }
-
-    // Step 3: batch-fetch product data to get ratings (not included in Deal response)
-    const asinList = [...new Set(candidates.map(d => d.asin))];
+    // Step 2: batch-fetch price/rating/Prime/image — none of that is in the Best Sellers response.
+    // buybox:1 is needed for stats.buyBoxPrice/buyBoxIsPrimeEligible; rating:1 + the default csv
+    // history (do NOT pass history:0) are needed for the csv[16]/csv[17] rating/review arrays.
     const { data: pData } = await axios.get("https://api.keepa.com/product", {
-      params: { key: keepaKey, asin: asinList.join(","), domain: 1, stats: 0, history: 0 },
+      params: { key: keepaKey, asin: asinList.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
       timeout: 60000,
     });
     if (pData.tokensLeft != null) console.log(`search-deals: tokensLeft=${pData.tokensLeft}`);
 
-    const ratingMap = {}, reviewMap = {}, soldMap = {}, hasVariantsMap = {};
-    for (const p of (pData.products || [])) {
-      ratingMap[p.asin] = p.rating > 0 ? p.rating / 10 : null;
-      reviewMap[p.asin] = p.countReviews || 0;
-      soldMap[p.asin]   = p.monthlySold > 0 ? p.monthlySold : null;
-      // Keepa sets parentAsin on any ASIN that's a child of a variation family (color/size/etc.
-      // siblings) — null means this exact ASIN is a standalone, single-variant listing.
-      hasVariantsMap[p.asin] = !!p.parentAsin;
-    }
+    const rankIndex = new Map(asinList.map((asin, i) => [asin, i]));
 
-    // Step 4: apply 4+ star filter and build the response shape the frontend expects. singleOnly
-    // sorts single-item listings first rather than excluding variation-family items outright —
-    // a hard exclude compounds too badly with a low maxPrice (cheap price-drop deals are already
-    // rare, and most cheap products *do* have color/size variants), leaving many categories with
-    // zero results. hasVariants is exposed either way so the frontend can show a badge.
-    const CDN = "https://images-na.ssl-images-amazon.com/images/I/";
-    const deals = candidates
-      .filter(d => ratingMap[d.asin] == null || ratingMap[d.asin] >= 4.0)
-      .map(d => {
-        const cur = d.current || [];
-        const price = dealPrice(cur);
-        // 90-day average Amazon price as the "original/was" reference price
-        const avg90Amazon = Array.isArray(d.avg?.[1]) && d.avg[1][0] > 0 ? d.avg[1][0] / 100 : null;
-        const originalPrice = avg90Amazon && avg90Amazon > price ? avg90Amazon : null;
-        const discountPercent = originalPrice ? Math.round((1 - price / originalPrice) * 100) : null;
-        const slug = slugFromBytes(d.image);
+    // Step 3: apply Prime + 4+ star filters and build the response shape the frontend expects.
+    // singleOnly sorts single-item listings first rather than excluding variation-family items
+    // outright — a hard exclude leaves many categories thin, since most cheap/popular products
+    // *do* have color/size variants. hasVariants is exposed either way so the frontend can badge it.
+    const deals = (pData.products || [])
+      .map(p => {
+        const ratingRaw = _lastCsvValue(p.csv, 16);
         return {
-          asin:            d.asin,
-          title:           d.title || "",
-          image:           slug ? `${CDN}${slug}` : null,
-          url:             `https://www.amazon.com/dp/${d.asin}`,
-          price,
-          originalPrice,
-          currency:        "$",
-          discountPercent: discountPercent > 0 ? discountPercent : null,
-          rating:          ratingMap[d.asin] || null,
-          reviewCount:     reviewMap[d.asin] || 0,
-          monthlySold:     soldMap[d.asin] || null,
-          isPrime:         cur[0] > 0,  // sold by Amazon = definitely Prime
-          isLimitedDeal:   !!(d.lightningStart && d.lightningEnd),
-          hasVariants:     hasVariantsMap[d.asin] || false,
+          asin:         p.asin,
+          title:        p.title || "",
+          image:        _keepaImageUrl(p),
+          url:          `https://www.amazon.com/dp/${p.asin}`,
+          price:        _kCents(p.stats?.buyBoxPrice),
+          currency:     "$",
+          rating:       ratingRaw > 0 ? ratingRaw / 10 : null,
+          reviewCount:  _lastCsvValue(p.csv, 17) || 0,
+          monthlySold:  p.monthlySold > 0 ? p.monthlySold : null,
+          isPrime:      p.stats?.buyBoxIsPrimeEligible === true,
+          hasVariants:  !!p.parentAsin,  // child of a variation family (color/size siblings)
+          rank:         rankIndex.get(p.asin) ?? 999,
         };
       })
+      .filter(d => d.price != null && d.isPrime && (d.rating == null || d.rating >= 4.0))
       .sort((a, b) => {
         if (singleOnly && a.hasVariants !== b.hasVariants) return a.hasVariants ? 1 : -1;
-        return (b.discountPercent || 0) - (a.discountPercent || 0);
-      });
+        return a.rank - b.rank;
+      })
+      .map(({ rank, ...d }) => d);
 
-    console.log(`search-deals "${category}": dr=${drItems.length} under$${maxPrice}=${candidates.length} passed=${deals.length}`);
+    console.log(`search-deals "${category}": bestSellers=${asinList.length} passed=${deals.length}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ category, deals });
   } catch (err) {
-    if (err.response?.status === 429 || err.response?.status === 429)
-      return res.status(503).json({ error: "Keepa rate limit — deal search is cached 12h, try again shortly." });
+    if (err.response?.status === 429)
+      return res.status(503).json({ error: "Keepa rate limit — best-seller search is cached 10min, try again shortly." });
     res.status(502).json({ error: err.response?.data?.message || err.message });
   }
 });
