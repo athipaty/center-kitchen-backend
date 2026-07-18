@@ -4,18 +4,17 @@ const axios = require("axios");
 const Product = require("../../models/tracker/Product");
 const Order = require("../../models/tracker/Order");
 
-// Cache for search-similar results — each fresh search costs ~150-200 Keepa tokens plus
-// up to 25 ScraperAPI credits (the Amazon's Choice check), so repeat clicks within the TTL
-// return instantly at zero extra cost instead of re-running the whole pipeline.
+// Cache for search-similar results — each fresh search costs ~150-200 Keepa tokens,
+// so repeat clicks within the TTL return instantly at zero extra cost instead of
+// re-running the whole pipeline.
 const _dealSearchCache = new Map(); // query → { deals, expiresAt }
-const DEAL_CACHE_TTL = 30 * 60 * 1000; // 30 min — conserves Keepa tokens + ScraperAPI credits
+const DEAL_CACHE_TTL = 30 * 60 * 1000; // 30 min — conserves Keepa tokens
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
 const { endListing, removeVariation } = require("../../jobs/ebayPriceSync");
 const { getViewsCache } = require("../ebay");
-const cheerio = require("cheerio");
 
 router.get("/settings", async (req, res) => {
   res.json({});
@@ -156,26 +155,21 @@ function _qtyVariants(variations) {
 // pull if FBT alone is thin). Passing an explicit `category` query param (one of
 // KEEPA_CATEGORY_IDS' keys) bypasses sold/viewed sourcing entirely and pulls straight from
 // Keepa's Best Sellers API for that category instead — for when you want to prospect outside
-// what you already sell. Either way, candidates flow through the same filters: Amazon's Choice
-// is a HARD filter — it isn't exposed by Keepa at all, so surviving candidates are individually
-// checked via ScraperAPI's raw HTML (badge marker: "mvt-ac-badge-wrapper"/"Amazon's Choice"
-// text), and anything not flagged is dropped, not just unbadged. $60 price ceiling is also a
-// hard filter (applied before the Amazon's Choice check, so it also shrinks how many candidates
-// need that per-item ScraperAPI call). Quantity-variant count (distinct pack sizes like "Pack
-// of 2"/"5-Pack"/"10 Count" parsed off Keepa's variation attributes) is also a hard filter —
-// min 2 distinct pack sizes required — and is the primary sort key (more pack-size options =
-// more upsell room = ranked higher), ahead of monthlySold/rating.
+// what you already sell. Either way, candidates flow through the same filters: $60 price
+// ceiling, Prime eligibility, rating ≥4.0, and quantity-variant count (distinct pack sizes
+// like "Pack of 2"/"5-Pack"/"10 Count" parsed off Keepa's variation attributes) — min 2
+// distinct pack sizes required, and the primary sort key (more pack-size options = more
+// upsell room = ranked higher), ahead of monthlySold/rating.
 router.get("/search-similar", async (req, res) => {
   try {
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
-    if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set — required for the Amazon's Choice filter" });
     const keepaKey = process.env.KEEPA_API_KEY;
 
     const category = (req.query.category || "").trim();
     if (category && !KEEPA_CATEGORY_IDS[category])
       return res.status(400).json({ error: `Unknown category "${category}". Must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
 
-    const cacheKey = category ? `similar:v1:cat:${category}` : "similar:v1";
+    const cacheKey = category ? `similar:v2:cat:${category}` : "similar:v2";
     const cached = _dealSearchCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       console.log(`search-similar: cache hit (${category || "auto"}) — 0 tokens/credits`);
@@ -270,7 +264,7 @@ router.get("/search-similar", async (req, res) => {
       }
     }
 
-    const shortlisted = candProducts
+    const deals = candProducts
       .map(p => {
         const ratingRaw = _lastCsvValue(p.csv, 16);
         const variations = (Array.isArray(p.variations) && p.variations.length)
@@ -295,36 +289,9 @@ router.get("/search-similar", async (req, res) => {
       })
       .filter(d => d.price != null && d.price <= 60 && d.isPrime && (d.rating == null || d.rating >= 4.0) && d.qtyVariantCount >= 2)
       .sort((a, b) => (b.qtyVariantCount - a.qtyVariantCount) || (b.monthlySold || 0) - (a.monthlySold || 0) || (b.rating || 0) - (a.rating || 0))
-      .slice(0, 25); // caps the ScraperAPI check below — cost/latency control, not a quality cutoff
+      .slice(0, 25);
 
-    // Step 5: Amazon's Choice — hard filter via ScraperAPI raw HTML (no autoparse field exposes
-    // this; it's a badge in the page markup, not product data). Scoped to #ppd (the product-detail
-    // container) specifically — a bare page-wide text search would also match the SAME badge
-    // rendered for other items inside "compare similar items"/sponsored widgets elsewhere on the
-    // page, which isn't this product's own badge. Checked with limited concurrency so 25 checks
-    // don't serialize into a multi-minute request.
-    async function isAmazonChoice(asin) {
-      try {
-        const { data: html } = await axios.get("http://api.scraperapi.com/", {
-          params: { api_key: process.env.SCRAPER_API_KEY, url: `https://www.amazon.com/dp/${asin}` },
-          timeout: 30000,
-        });
-        if (typeof html !== "string") return false;
-        const $ = cheerio.load(html);
-        return $("#ppd .mvt-ac-badge-wrapper").length > 0;
-      } catch {
-        return false;
-      }
-    }
-    const CONCURRENCY = 5;
-    const deals = [];
-    for (let i = 0; i < shortlisted.length; i += CONCURRENCY) {
-      const batch = shortlisted.slice(i, i + CONCURRENCY);
-      const flags = await Promise.all(batch.map(d => isAmazonChoice(d.asin)));
-      batch.forEach((d, j) => { if (flags[j]) deals.push(d); });
-    }
-
-    console.log(`search-similar (${category || "auto"}): sources=${sourceAsins.length} candidates=${candidateAsins.length} shortlisted=${shortlisted.length} amazonChoice=${deals.length}`);
+    console.log(`search-similar (${category || "auto"}): sources=${sourceAsins.length} candidates=${candidateAsins.length} deals=${deals.length}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ deals });
   } catch (err) {
