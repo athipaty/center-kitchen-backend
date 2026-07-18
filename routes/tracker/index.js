@@ -89,6 +89,28 @@ function _keepaImageUrl(p) {
   if (!img) return null;
   return `https://m.media-amazon.com/images/I/${img.l || img.m}`;
 }
+// Parses common Amazon pack-size phrasing out of a variation attribute value
+// ("Pack of 2", "5-Pack", "10 Count", "Qty 4", "Set of 3") into an integer, or null if the
+// value doesn't look like a quantity (e.g. a color/size variant like "Red" or "Large").
+function _parseQtyFromLabel(text) {
+  if (!text) return null;
+  const m = String(text).match(/pack of (\d+)|set of (\d+)|qty\.?\s*(\d+)|(\d+)\s*[- ]?(?:pack|pk|ct|count|pcs|piece|pieces)\b/i);
+  if (!m) return null;
+  const n = parseInt(m[1] || m[2] || m[3] || m[4], 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+// Distinct quantity values found across a product's variation list (checked against each
+// variation's joined attribute values, e.g. "Pack of 2" from attributes:[{dimension:"Size",value:"Pack of 2"}]).
+function _qtyVariants(variations) {
+  if (!Array.isArray(variations) || !variations.length) return [];
+  const qtys = new Set();
+  for (const v of variations) {
+    const label = Array.isArray(v.attributes) ? v.attributes.map(a => a.value).filter(Boolean).join(' / ') : '';
+    const qty = _parseQtyFromLabel(label);
+    if (qty != null) qtys.add(qty);
+  }
+  return [...qtys].sort((a, b) => a - b);
+}
 
 // GET find new products worth sourcing, seeded from what you actually sell — not a manual
 // category pick. Two source signals: recently sold orders and your highest-viewed tracked
@@ -100,7 +122,10 @@ function _keepaImageUrl(p) {
 // individually checked via ScraperAPI's raw HTML (badge marker: "mvt-ac-badge-wrapper"/
 // "Amazon's Choice" text), and anything not flagged is dropped, not just unbadged. $20 price
 // ceiling is also a hard filter (applied before the Amazon's Choice check, so it also shrinks
-// how many candidates need that per-item ScraperAPI call).
+// how many candidates need that per-item ScraperAPI call). Quantity-variant count (distinct
+// pack sizes like "Pack of 2"/"5-Pack"/"10 Count" parsed off Keepa's variation attributes) is
+// also a hard filter — min 2 distinct pack sizes required — and is the primary sort key
+// (more pack-size options = more upsell room = ranked higher), ahead of monthlySold/rating.
 router.get("/search-similar", async (req, res) => {
   try {
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
@@ -167,10 +192,35 @@ router.get("/search-similar", async (req, res) => {
       params: { key: keepaKey, asin: candidateAsins.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
       timeout: 60000,
     });
+    const candProducts = candData.products || [];
 
-    const shortlisted = (candData.products || [])
+    // Quantity-variant candidates (child ASINs) often don't carry their own `variations` array —
+    // only the parent does. Batch-fetch every missing parent in ONE extra call (not per-candidate)
+    // so this stays cheap regardless of how many candidates need it.
+    const missingParentAsins = [...new Set(
+      candProducts
+        .filter(p => !(Array.isArray(p.variations) && p.variations.length) && p.parentAsin)
+        .map(p => p.parentAsin)
+    )];
+    const parentVariationsMap = new Map();
+    if (missingParentAsins.length) {
+      const { data: parentData } = await axios.get("https://api.keepa.com/product", {
+        params: { key: keepaKey, asin: missingParentAsins.join(","), domain: 1 },
+        timeout: 60000,
+      });
+      for (const parent of (parentData.products || [])) {
+        if (Array.isArray(parent.variations) && parent.variations.length)
+          parentVariationsMap.set(parent.asin, parent.variations);
+      }
+    }
+
+    const shortlisted = candProducts
       .map(p => {
         const ratingRaw = _lastCsvValue(p.csv, 16);
+        const variations = (Array.isArray(p.variations) && p.variations.length)
+          ? p.variations
+          : (parentVariationsMap.get(p.parentAsin) || []);
+        const qtyVariants = _qtyVariants(variations);
         return {
           asin:         p.asin,
           title:        p.title || "",
@@ -183,10 +233,12 @@ router.get("/search-similar", async (req, res) => {
           monthlySold:  p.monthlySold > 0 ? p.monthlySold : null,
           isPrime:      p.stats?.buyBoxIsPrimeEligible === true,
           hasVariants:  !!p.parentAsin,
+          qtyVariants,
+          qtyVariantCount: qtyVariants.length,
         };
       })
-      .filter(d => d.price != null && d.price <= 20 && d.isPrime && (d.rating == null || d.rating >= 4.0))
-      .sort((a, b) => (b.monthlySold || 0) - (a.monthlySold || 0) || (b.rating || 0) - (a.rating || 0))
+      .filter(d => d.price != null && d.price <= 20 && d.isPrime && (d.rating == null || d.rating >= 4.0) && d.qtyVariantCount >= 2)
+      .sort((a, b) => (b.qtyVariantCount - a.qtyVariantCount) || (b.monthlySold || 0) - (a.monthlySold || 0) || (b.rating || 0) - (a.rating || 0))
       .slice(0, 25); // caps the ScraperAPI check below — cost/latency control, not a quality cutoff
 
     // Step 5: Amazon's Choice — hard filter via ScraperAPI raw HTML (no autoparse field exposes
