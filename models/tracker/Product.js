@@ -41,7 +41,7 @@ const productSchema = new mongoose.Schema(
     listFailCount: { type: Number, default: 0 },
     listingBlocked: { type: Boolean, default: false },
     listingBlockReason: { type: String, default: null },
-    // Times an order for this listing/variant has blown eBay's 24h tracking deadline —
+    // Times an order for this listing/variant has blown eBay's 48h tracking deadline —
     // surfaces chronically-late SKUs so their handling time can be bumped on eBay.
     lateShipmentCount: { type: Number, default: 0 },
     // Set when a zero-view listing gets an automatic retitle rescue attempt — gives it

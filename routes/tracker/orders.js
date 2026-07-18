@@ -8,7 +8,7 @@ const { getAccessToken, bestVariantMatch } = require("../../jobs/ebayPriceSync")
 
 // eBay expects tracking uploaded within this many hours of payment (handling time) —
 // past this, the order counts as a late shipment against seller performance metrics.
-const SHIP_DEADLINE_HOURS = 24;
+const SHIP_DEADLINE_HOURS = 48;
 
 // Delivered/notified orders drop off the page this long after delivery — the DB record
 // stays (Remove is still manual/explicit), this just keeps the list from filling up with

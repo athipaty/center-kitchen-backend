@@ -857,7 +857,7 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
 // eBay expects tracking uploaded within this many hours of payment (handling time) —
 // past this it's a late shipment against seller performance metrics. deadlineAlertsSent
 // tracks which tier already fired per order so this doesn't re-alert every 15 minutes.
-const SHIP_DEADLINE_HOURS = 24;
+const SHIP_DEADLINE_HOURS = 48;
 
 // Ordered most-urgent-first. When a check finds hoursLeft has dropped past more than
 // one threshold at once (e.g. after the server was down a while), it sends only the
@@ -899,7 +899,7 @@ async function runShippingDeadlineCheck() {
         if (!alerts.includes('overdue24h')) {
           const sent = await ntfyPush(
             '🚨 เกินกำหนดส่งของแล้ว',
-            `"${label}" (order ${o.ebayOrderId}) เกิน 24 ชม. หลังชำระเงิน ${Math.abs(hoursLeft).toFixed(1)} ชม. — ใส่เลขพัสดุด่วน!`,
+            `"${label}" (order ${o.ebayOrderId}) เกิน 48 ชม. หลังชำระเงิน ${Math.abs(hoursLeft).toFixed(1)} ชม. — ใส่เลขพัสดุด่วน!`,
             { priority: 'urgent', tags: ['rotating_light'] }
           );
           if (sent) {
@@ -916,7 +916,7 @@ async function runShippingDeadlineCheck() {
 
       const sent = await ntfyPush(
         tier.title,
-        `"${label}" (order ${o.ebayOrderId}) เหลือเวลาอีก ${hoursLeft.toFixed(1)} ชม. ก่อนเกิน 24 ชม. — กรุณาใส่เลขพัสดุ`,
+        `"${label}" (order ${o.ebayOrderId}) เหลือเวลาอีก ${hoursLeft.toFixed(1)} ชม. ก่อนเกิน 48 ชม. — กรุณาใส่เลขพัสดุ`,
         { priority: tier.priority, tags: tier.tags }
       );
       if (sent) {
