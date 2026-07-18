@@ -4,11 +4,6 @@ const axios = require("axios");
 const Product = require("../../models/tracker/Product");
 const Order = require("../../models/tracker/Order");
 
-// Cache for search-similar results — each fresh search costs ~150-200 Keepa tokens,
-// so repeat clicks within the TTL return instantly at zero extra cost instead of
-// re-running the whole pipeline.
-const _dealSearchCache = new Map(); // query → { deals, expiresAt }
-const DEAL_CACHE_TTL = 30 * 60 * 1000; // 30 min — conserves Keepa tokens
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
@@ -169,13 +164,6 @@ router.get("/search-similar", async (req, res) => {
     if (category && !KEEPA_CATEGORY_IDS[category])
       return res.status(400).json({ error: `Unknown category "${category}". Must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
 
-    const cacheKey = category ? `similar:v2:cat:${category}` : "similar:v2";
-    const cached = _dealSearchCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      console.log(`search-similar: cache hit (${category || "auto"}) — 0 tokens/credits`);
-      return res.json({ deals: cached.deals, cached: true });
-    }
-
     let sourceAsins = [];
     let candidateAsins;
 
@@ -292,11 +280,10 @@ router.get("/search-similar", async (req, res) => {
       .slice(0, 25);
 
     console.log(`search-similar (${category || "auto"}): sources=${sourceAsins.length} candidates=${candidateAsins.length} deals=${deals.length}`);
-    _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ deals });
   } catch (err) {
     if (err.response?.status === 429)
-      return res.status(503).json({ error: "Rate limit — similar-products search is cached 10min, try again shortly." });
+      return res.status(503).json({ error: "Rate limit — try again shortly." });
     res.status(502).json({ error: err.response?.data?.message || err.message });
   }
 });
