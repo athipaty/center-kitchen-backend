@@ -99,14 +99,26 @@ function _parseQtyFromLabel(text) {
   const n = parseInt(m[1] || m[2] || m[3] || m[4], 10);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
-// Distinct quantity values found across a product's variation list (checked against each
-// variation's joined attribute values, e.g. "Pack of 2" from attributes:[{dimension:"Size",value:"Pack of 2"}]).
+// Distinct quantity values found across a product's variation list. Checks two shapes Keepa
+// uses: (1) a dedicated quantity dimension with a bare numeric value, e.g.
+// attributes:[{dimension:"PackageQuantity",value:"10"}] — common on hardware/parts listings;
+// (2) pack-size phrasing embedded in another dimension's value, e.g.
+// attributes:[{dimension:"Size",value:"Pack of 2"}] — common on grocery/household listings.
 function _qtyVariants(variations) {
   if (!Array.isArray(variations) || !variations.length) return [];
   const qtys = new Set();
   for (const v of variations) {
-    const label = Array.isArray(v.attributes) ? v.attributes.map(a => a.value).filter(Boolean).join(' / ') : '';
-    const qty = _parseQtyFromLabel(label);
+    const attrs = Array.isArray(v.attributes) ? v.attributes : [];
+    let qty = null;
+    const qtyAttr = attrs.find(a => /quantity|pack size|count/i.test(a.dimension || ''));
+    if (qtyAttr) {
+      const n = parseInt(qtyAttr.value, 10);
+      if (Number.isFinite(n) && n > 0) qty = n;
+    }
+    if (qty == null) {
+      const label = attrs.map(a => a.value).filter(Boolean).join(' / ');
+      qty = _parseQtyFromLabel(label);
+    }
     if (qty != null) qtys.add(qty);
   }
   return [...qtys].sort((a, b) => a - b);
