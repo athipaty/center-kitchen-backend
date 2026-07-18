@@ -89,6 +89,29 @@ function _keepaImageUrl(p) {
   if (!img) return null;
   return `https://m.media-amazon.com/images/I/${img.l || img.m}`;
 }
+// Amazon browse-node IDs that Keepa uses for category filtering (matches Amazon's native IDs).
+// Used only when the caller passes an explicit `category` override to /search-similar —
+// otherwise candidates come from frequentlyBoughtTogether + the source products' own category.
+const KEEPA_CATEGORY_IDS = {
+  'Electronics':              172282,
+  'Home & Kitchen':           1055398,
+  'Kitchen & Dining':         284507,
+  'Tools & Home Improvement': 228013,
+  'Sports & Outdoors':        3375251,
+  'Toys & Games':             165793011,
+  'Beauty & Personal Care':   11055981,
+  'Clothing, Shoes & Jewelry':7141123011,
+  'Health & Household':       3760901,
+  'Pet Supplies':             2619533011,
+  'Office Products':          1064954,
+  'Patio, Lawn & Garden':     2972638011,
+  'Baby':                     165796011,
+  'Grocery & Gourmet Food':   16310101,
+  'Automotive':               15690151,
+  'Books':                    283155,
+  'Video Games':              468642,
+};
+
 // Parses common Amazon pack-size phrasing out of a variation attribute value
 // ("Pack of 2", "5-Pack", "10 Count", "Qty 4", "Set of 3") into an integer, or null if the
 // value doesn't look like a quantity (e.g. a color/size variant like "Red" or "Large").
@@ -124,80 +147,101 @@ function _qtyVariants(variations) {
   return [...qtys].sort((a, b) => a - b);
 }
 
-// GET find new products worth sourcing, seeded from what you actually sell — not a manual
-// category pick. Two source signals: recently sold orders and your highest-viewed tracked
-// listings (best-effort — the latter reads ebay.js's in-memory views cache, empty until the
-// Tracker tab has loaded at least once). Each source ASIN's Keepa data gives two free signals
-// (no extra token cost beyond the normal per-product fetch): frequentlyBoughtTogether (direct
-// candidate ASINs) and its category (fallback best-sellers pull if FBT alone is thin). Amazon's
-// Choice is a HARD filter — it isn't exposed by Keepa at all, so surviving candidates are
-// individually checked via ScraperAPI's raw HTML (badge marker: "mvt-ac-badge-wrapper"/
-// "Amazon's Choice" text), and anything not flagged is dropped, not just unbadged. $60 price
-// ceiling is also a hard filter (applied before the Amazon's Choice check, so it also shrinks
-// how many candidates need that per-item ScraperAPI call). Quantity-variant count (distinct
-// pack sizes like "Pack of 2"/"5-Pack"/"10 Count" parsed off Keepa's variation attributes) is
-// also a hard filter — min 2 distinct pack sizes required — and is the primary sort key
-// (more pack-size options = more upsell room = ranked higher), ahead of monthlySold/rating.
+// GET find new products worth sourcing. Default mode seeds candidates from what you actually
+// sell — not a manual category pick. Two source signals: recently sold orders and your
+// highest-viewed tracked listings (best-effort — the latter reads ebay.js's in-memory views
+// cache, empty until the Tracker tab has loaded at least once). Each source ASIN's Keepa data
+// gives two free signals (no extra token cost beyond the normal per-product fetch):
+// frequentlyBoughtTogether (direct candidate ASINs) and its category (fallback best-sellers
+// pull if FBT alone is thin). Passing an explicit `category` query param (one of
+// KEEPA_CATEGORY_IDS' keys) bypasses sold/viewed sourcing entirely and pulls straight from
+// Keepa's Best Sellers API for that category instead — for when you want to prospect outside
+// what you already sell. Either way, candidates flow through the same filters: Amazon's Choice
+// is a HARD filter — it isn't exposed by Keepa at all, so surviving candidates are individually
+// checked via ScraperAPI's raw HTML (badge marker: "mvt-ac-badge-wrapper"/"Amazon's Choice"
+// text), and anything not flagged is dropped, not just unbadged. $60 price ceiling is also a
+// hard filter (applied before the Amazon's Choice check, so it also shrinks how many candidates
+// need that per-item ScraperAPI call). Quantity-variant count (distinct pack sizes like "Pack
+// of 2"/"5-Pack"/"10 Count" parsed off Keepa's variation attributes) is also a hard filter —
+// min 2 distinct pack sizes required — and is the primary sort key (more pack-size options =
+// more upsell room = ranked higher), ahead of monthlySold/rating.
 router.get("/search-similar", async (req, res) => {
   try {
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
     if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set — required for the Amazon's Choice filter" });
     const keepaKey = process.env.KEEPA_API_KEY;
 
-    const cacheKey = "similar:v1";
+    const category = (req.query.category || "").trim();
+    if (category && !KEEPA_CATEGORY_IDS[category])
+      return res.status(400).json({ error: `Unknown category "${category}". Must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
+
+    const cacheKey = category ? `similar:v1:cat:${category}` : "similar:v1";
     const cached = _dealSearchCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
-      console.log("search-similar: cache hit — 0 tokens/credits");
+      console.log(`search-similar: cache hit (${category || "auto"}) — 0 tokens/credits`);
       return res.json({ deals: cached.deals, cached: true });
     }
 
-    // Step 1: source ASINs = recently sold + highest-viewed tracked listings
-    const recentOrders = await Order.find().sort({ createdAt: -1 }).limit(15).select("ebayItemId").lean();
-    const soldListingIds = recentOrders.map(o => o.ebayItemId).filter(Boolean);
+    let sourceAsins = [];
+    let candidateAsins;
 
-    const viewsCache = getViewsCache();
-    const viewedListingIds = [...viewsCache.entries()]
-      .sort((a, b) => (b[1]?.count || 0) - (a[1]?.count || 0))
-      .slice(0, 10)
-      .map(([id]) => id);
-
-    const sourceListingIds = [...new Set([...soldListingIds, ...viewedListingIds])];
-    if (!sourceListingIds.length) return res.json({ deals: [], note: "No sold orders or viewed listings yet to base this on." });
-
-    const sourceProducts = await Product.find({ ebayListingId: { $in: sourceListingIds } }, "url").lean();
-    const sourceAsins = [...new Set(
-      sourceProducts.map(p => p.url?.match(/\/dp\/([A-Z0-9]{10})/i)?.[1]).filter(Boolean)
-    )].slice(0, 20);
-    if (!sourceAsins.length) return res.json({ deals: [], note: "Couldn't map sold/viewed listings back to Amazon ASINs." });
-
-    // Step 2: fetch source products from Keepa for category + frequently-bought-together
-    const { data: srcData } = await axios.get("https://api.keepa.com/product", {
-      params: { key: keepaKey, asin: sourceAsins.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
-      timeout: 60000,
-    });
-
-    const fbtAsins = new Set();
-    const catCounts = new Map();
-    for (const p of (srcData.products || [])) {
-      for (const a of (p.frequentlyBoughtTogether || [])) fbtAsins.add(a);
-      if (p.rootCategory) catCounts.set(p.rootCategory, (catCounts.get(p.rootCategory) || 0) + 1);
-    }
-    for (const a of sourceAsins) fbtAsins.delete(a); // don't recommend what you already sell
-
-    // Step 3: frequently-bought-together is the primary candidate source (free — already have
-    // the data); only spend a Best Sellers call (50 tokens) as a supplement if FBT is thin.
-    let candidateAsins = [...fbtAsins];
-    if (candidateAsins.length < 15 && catCounts.size) {
-      const topCatId = [...catCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    if (category) {
+      // Category override: skip sold/viewed sourcing, pull straight from Best Sellers.
       const { data: bsData } = await axios.get("https://api.keepa.com/bestsellers", {
-        params: { key: keepaKey, domain: 1, category: topCatId },
+        params: { key: keepaKey, domain: 1, category: KEEPA_CATEGORY_IDS[category] },
         timeout: 30000,
       });
-      const bsAsins = (bsData.bestSellersList?.asinList || []).slice(0, 20);
-      candidateAsins = [...new Set([...candidateAsins, ...bsAsins])];
+      candidateAsins = (bsData.bestSellersList?.asinList || []).slice(0, 40);
+      if (!candidateAsins.length) return res.json({ deals: [], note: `No best-sellers data for "${category}".` });
+    } else {
+      // Step 1: source ASINs = recently sold + highest-viewed tracked listings
+      const recentOrders = await Order.find().sort({ createdAt: -1 }).limit(15).select("ebayItemId").lean();
+      const soldListingIds = recentOrders.map(o => o.ebayItemId).filter(Boolean);
+
+      const viewsCache = getViewsCache();
+      const viewedListingIds = [...viewsCache.entries()]
+        .sort((a, b) => (b[1]?.count || 0) - (a[1]?.count || 0))
+        .slice(0, 10)
+        .map(([id]) => id);
+
+      const sourceListingIds = [...new Set([...soldListingIds, ...viewedListingIds])];
+      if (!sourceListingIds.length) return res.json({ deals: [], note: "No sold orders or viewed listings yet to base this on. Try a category search instead." });
+
+      const sourceProducts = await Product.find({ ebayListingId: { $in: sourceListingIds } }, "url").lean();
+      sourceAsins = [...new Set(
+        sourceProducts.map(p => p.url?.match(/\/dp\/([A-Z0-9]{10})/i)?.[1]).filter(Boolean)
+      )].slice(0, 20);
+      if (!sourceAsins.length) return res.json({ deals: [], note: "Couldn't map sold/viewed listings back to Amazon ASINs." });
+
+      // Step 2: fetch source products from Keepa for category + frequently-bought-together
+      const { data: srcData } = await axios.get("https://api.keepa.com/product", {
+        params: { key: keepaKey, asin: sourceAsins.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
+        timeout: 60000,
+      });
+
+      const fbtAsins = new Set();
+      const catCounts = new Map();
+      for (const p of (srcData.products || [])) {
+        for (const a of (p.frequentlyBoughtTogether || [])) fbtAsins.add(a);
+        if (p.rootCategory) catCounts.set(p.rootCategory, (catCounts.get(p.rootCategory) || 0) + 1);
+      }
+      for (const a of sourceAsins) fbtAsins.delete(a); // don't recommend what you already sell
+
+      // Step 3: frequently-bought-together is the primary candidate source (free — already have
+      // the data); only spend a Best Sellers call (50 tokens) as a supplement if FBT is thin.
+      candidateAsins = [...fbtAsins];
+      if (candidateAsins.length < 15 && catCounts.size) {
+        const topCatId = [...catCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        const { data: bsData } = await axios.get("https://api.keepa.com/bestsellers", {
+          params: { key: keepaKey, domain: 1, category: topCatId },
+          timeout: 30000,
+        });
+        const bsAsins = (bsData.bestSellersList?.asinList || []).slice(0, 20);
+        candidateAsins = [...new Set([...candidateAsins, ...bsAsins])];
+      }
+      candidateAsins = candidateAsins.filter(a => !sourceAsins.includes(a)).slice(0, 40);
+      if (!candidateAsins.length) return res.json({ deals: [] });
     }
-    candidateAsins = candidateAsins.filter(a => !sourceAsins.includes(a)).slice(0, 40);
-    if (!candidateAsins.length) return res.json({ deals: [] });
 
     // Step 4: fetch candidate price/rating/Prime/image — same shape as search-deals
     const { data: candData } = await axios.get("https://api.keepa.com/product", {
@@ -280,7 +324,7 @@ router.get("/search-similar", async (req, res) => {
       batch.forEach((d, j) => { if (flags[j]) deals.push(d); });
     }
 
-    console.log(`search-similar: sources=${sourceAsins.length} candidates=${candidateAsins.length} shortlisted=${shortlisted.length} amazonChoice=${deals.length}`);
+    console.log(`search-similar (${category || "auto"}): sources=${sourceAsins.length} candidates=${candidateAsins.length} shortlisted=${shortlisted.length} amazonChoice=${deals.length}`);
     _dealSearchCache.set(cacheKey, { deals, expiresAt: Date.now() + DEAL_CACHE_TTL });
     res.json({ deals });
   } catch (err) {
