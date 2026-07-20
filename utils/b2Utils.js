@@ -61,8 +61,15 @@ async function uploadToB2(buffer, fileKey, contentType = 'image/jpeg', cacheCont
       // header on download, so this controls actual browser caching behavior.
       'X-Bz-Info-Cache-Control': encodeURIComponent(cacheControl),
     },
-    maxBodyLength: 20 * 1024 * 1024,
-    timeout: 30000,
+    // This function uploads everything from tiny sprite/audio images up to full rendered
+    // episode videos (youtubeEpisodeScheduler's stepRender uploads the final mp4 here) — a
+    // hardcoded 20MB cap and 30s timeout sized for images made every video upload fail with
+    // axios's own "Request body larger than maxBodyLength limit" before the request even went
+    // out. No artificial cap; B2's own per-file limits are the real constraint. Timeout is
+    // generous specifically for large video uploads over a normal connection.
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+    timeout: 10 * 60 * 1000,
   });
 
   return b2PublicUrl(fileKey);
