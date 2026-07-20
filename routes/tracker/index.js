@@ -151,10 +151,11 @@ function _qtyVariants(variations) {
 // KEEPA_CATEGORY_IDS' keys) bypasses sold/viewed sourcing entirely and pulls straight from
 // Keepa's Best Sellers API for that category instead — for when you want to prospect outside
 // what you already sell. Either way, candidates flow through the same filters: $60 price
-// ceiling, Prime eligibility, rating ≥4.0, and quantity-variant count (distinct pack sizes
-// like "Pack of 2"/"5-Pack"/"10 Count" parsed off Keepa's variation attributes) — min 2
-// distinct pack sizes required, and the primary sort key (more pack-size options = more
-// upsell room = ranked higher), ahead of monthlySold/rating.
+// ceiling, Prime eligibility, rating ≥4.0. Quantity-variant count (distinct pack sizes like
+// "Pack of 2"/"5-Pack"/"10 Count" parsed off Keepa's variation attributes) is no longer a
+// hard requirement — single-quantity products can qualify too — but it's still the primary
+// sort key (more pack-size options = more upsell room = ranked higher), ahead of
+// monthlySold/rating.
 router.get("/search-similar", async (req, res) => {
   try {
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
@@ -275,7 +276,7 @@ router.get("/search-similar", async (req, res) => {
           qtyVariantCount: qtyVariants.length,
         };
       })
-      .filter(d => d.price != null && d.price <= 60 && d.isPrime && (d.rating == null || d.rating >= 4.0) && d.qtyVariantCount >= 2)
+      .filter(d => d.price != null && d.price <= 60 && d.isPrime && (d.rating == null || d.rating >= 4.0))
       .sort((a, b) => (b.qtyVariantCount - a.qtyVariantCount) || (b.monthlySold || 0) - (a.monthlySold || 0) || (b.rating || 0) - (a.rating || 0))
       .slice(0, 25);
 
