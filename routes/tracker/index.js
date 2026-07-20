@@ -166,10 +166,16 @@ async function _pickSourceAsins(limit) {
 }
 
 // Scrapes a single Amazon product page's "Products related to this item" carousel — Amazon
-// now fills that widget almost entirely with sponsored offers, each individually tagged
-// "Sponsored" (widget id sims-simsContainer). It loads via client-side ads after the initial
-// page render, so a plain fetch (even with render=true alone) returns the container empty —
-// this requires ScraperAPI's render=true AND wait_for_selector targeting a card inside it.
+// now fills that widget with EITHER of two different templates depending on the request —
+// a sponsored-ads carousel (div[data-asin].sp_offerVertical, "Sponsored" tagged) or a plain
+// organic "customers also bought" carousel (li.a-carousel-card wrapping a
+// span[data-csa-c-item-id="amzn1.asin.XXXX"], no data-asin attribute at all). Verified live:
+// the exact same product's page returned the sponsored template once and the organic one on
+// two other fetches — parsing only one template (the original bug here) meant the organic
+// case silently returned zero candidates, indistinguishable from "no ad fill". Both templates
+// load via client-side JS after the initial page render, so this needs ScraperAPI's
+// render=true AND wait_for_selector — targeting either template's card marker, since which
+// one loads isn't known ahead of time.
 async function _fetchRelatedSponsored(asin) {
   if (!process.env.SCRAPER_API_KEY) return [];
   try {
@@ -178,36 +184,50 @@ async function _fetchRelatedSponsored(asin) {
         api_key: process.env.SCRAPER_API_KEY,
         url: `https://www.amazon.com/dp/${asin}`,
         render: true,
-        wait_for_selector: "#sims-simsContainer_feature_div_0 [data-asin]",
+        wait_for_selector: "#sims-simsContainer_feature_div_0 [data-asin], #sims-simsContainer_feature_div_0 [data-csa-c-item-id]",
       },
       timeout: 90000,
     });
     if (typeof html !== "string") return [];
 
     const $ = cheerio.load(html);
+    const container = $("#sims-simsContainer_feature_div_0");
     const results = [];
-    $("#sims-simsContainer_feature_div_0 [data-asin].sp_offerVertical").each((i, el) => {
-      const $el = $(el);
-      const cardAsin = $el.attr("data-asin");
-      if (!cardAsin || cardAsin === asin) return;
+    const seen = new Set();
 
-      const priceText = $el.find(".apex-price-to-pay-value .a-offscreen").first().text().trim();
-      const price = priceText ? parseFloat(priceText.replace(/[^0-9.]/g, "")) : null;
-      const ratingLabel = $el.find(".adReviewLink").attr("aria-label") || "";
-      const ratingMatch = ratingLabel.match(/([\d.]+) out of 5 stars ([\d,]+) rating/i);
+    const cardDefs = [
+      { root: "[data-asin].sp_offerVertical", getAsin: $el => $el.attr("data-asin") },
+      { root: "li.a-carousel-card", getAsin: $el => $el.find("[data-csa-c-item-id]").first().attr("data-csa-c-item-id")?.match(/asin\.([A-Z0-9]{10})/)?.[1] },
+    ];
 
-      results.push({
-        asin: cardAsin,
-        title: $el.find('a[id$="_title"]').attr("title") || $el.find("img").attr("alt") || null,
-        image: $el.find("img").attr("src") || null,
-        url: `https://www.amazon.com/dp/${cardAsin}`,
-        currency: "$",
-        price: Number.isFinite(price) ? price : null,
-        rating: ratingMatch ? parseFloat(ratingMatch[1]) : null,
-        reviewCount: ratingMatch ? parseInt(ratingMatch[2].replace(/,/g, ""), 10) : null,
-        hasAmazonChoice: /amazon.s choice/i.test($.html(el)),
+    for (const { root, getAsin } of cardDefs) {
+      container.find(root).each((i, el) => {
+        const $el = $(el);
+        const cardAsin = getAsin($el);
+        if (!cardAsin || cardAsin === asin || seen.has(cardAsin)) return;
+        seen.add(cardAsin);
+
+        // Price/rating markup differs slightly between templates (apex-price-to-pay-value
+        // vs plain a-price; "stars 123 ratings" vs "stars, 123 ratings") — try both.
+        const priceText = $el.find(".apex-price-to-pay-value .a-offscreen").first().text().trim()
+          || $el.find(".a-price .a-offscreen").first().text().trim();
+        const price = priceText ? parseFloat(priceText.replace(/[^0-9.]/g, "")) : null;
+        const ratingLabel = $el.find('a[aria-label*="out of 5 stars"]').first().attr("aria-label") || "";
+        const ratingMatch = ratingLabel.match(/([\d.]+) out of 5 stars,?\s*([\d,]+) ratings?/i);
+
+        results.push({
+          asin: cardAsin,
+          title: $el.find('a[id$="_title"]').attr("title") || $el.find("img").attr("alt") || null,
+          image: $el.find("img").attr("src") || null,
+          url: `https://www.amazon.com/dp/${cardAsin}`,
+          currency: "$",
+          price: Number.isFinite(price) ? price : null,
+          rating: ratingMatch ? parseFloat(ratingMatch[1]) : null,
+          reviewCount: ratingMatch ? parseInt(ratingMatch[2].replace(/,/g, ""), 10) : null,
+          hasAmazonChoice: /amazon.s choice/i.test($.html(el)),
+        });
       });
-    });
+    }
     return results;
   } catch (e) {
     console.error(`_fetchRelatedSponsored(${asin}):`, e.message);
@@ -218,9 +238,11 @@ async function _fetchRelatedSponsored(asin) {
 // GET find new products from the "Products related to this item" carousel on 5 of your source
 // products' own Amazon pages (same sold/viewed sourcing as /search-similar, capped lower since
 // each source costs a live ScraperAPI render — expect ~10-30s per product, run sequentially so
-// 5 back-to-back page loads don't read as a bot burst). Hard-filtered to Amazon's Choice AND
-// under $10 — both requested explicitly; no price ceiling/Prime/rating floor carried over from
-// /search-similar since this is a separate, narrower search.
+// 5 back-to-back page loads don't read as a bot burst). Hard-filtered to under $10 only —
+// Amazon's Choice is NOT a hard filter here (dropped after live testing: the badge itself
+// rarely survives scraping even when the item genuinely carries it — same failure mode as the
+// now-removed Amazon's Choice filter on /search-similar). hasAmazonChoice still rides along
+// per-candidate and pushes matches to the top of the sort when it IS detected.
 router.get("/search-related", async (req, res) => {
   try {
     if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
@@ -238,8 +260,8 @@ router.get("/search-related", async (req, res) => {
     }
 
     const deals = [...seen.values()]
-      .filter(d => d.hasAmazonChoice && d.price != null && d.price < 10)
-      .sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.price - b.price)
+      .filter(d => d.price != null && d.price < 10)
+      .sort((a, b) => (b.hasAmazonChoice - a.hasAmazonChoice) || (b.rating || 0) - (a.rating || 0) || a.price - b.price)
       .slice(0, 25);
 
     console.log(`search-related: sources=${sourceAsins.length} candidates=${seen.size} deals=${deals.length}`);
@@ -252,7 +274,8 @@ router.get("/search-related", async (req, res) => {
 // GET the same "Products related to this item" check as /search-related, but for a single
 // ASIN — one live ScraperAPI render instead of 5, so this is cheap enough to run inline right
 // after pasting a URL in the Track Price flow (the ASIN you're about to track, not a sold/
-// viewed source list). Same hard filter: Amazon's Choice AND under $10.
+// viewed source list). Same filter as /search-related: under $10 only, Amazon's Choice sorts
+// first when detected but isn't required.
 router.get("/related-for/:asin", async (req, res) => {
   try {
     if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
@@ -261,8 +284,8 @@ router.get("/related-for/:asin", async (req, res) => {
 
     const related = await _fetchRelatedSponsored(asin);
     const deals = related
-      .filter(d => d.hasAmazonChoice && d.price != null && d.price < 10)
-      .sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.price - b.price)
+      .filter(d => d.price != null && d.price < 10)
+      .sort((a, b) => (b.hasAmazonChoice - a.hasAmazonChoice) || (b.rating || 0) - (a.rating || 0) || a.price - b.price)
       .slice(0, 25);
 
     res.json({ deals });
