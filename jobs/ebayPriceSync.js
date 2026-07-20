@@ -91,6 +91,27 @@ function checkFailure(xml) {
   return xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || 'eBay error';
 }
 
+// A GetItem/Revise* failure whose error means the listing itself no longer exists on eBay
+// (ended, deleted, or never existed) — as opposed to a transient failure (rate limit, bad
+// token) worth retrying. Same detection pattern already used in routes/ebay.js for the
+// orphan-listing/price-check routes: error code 17, or one of the "item's gone" phrasings
+// eBay uses across different call types.
+function isListingGoneError(xml) {
+  if (!/<Ack>Failure<\/Ack>/.test(xml)) return false;
+  const errCode = xml.match(/<ErrorCode>(\d+)<\/ErrorCode>/)?.[1];
+  const longMsg = (xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || '').toLowerCase();
+  return errCode === '17' || longMsg.includes('no such') || longMsg.includes('invalid item') || longMsg.includes('not found for itemid') || longMsg.includes('item does not exist');
+}
+
+// Wraps a "listing gone" failure in a distinctly-coded error so callers (trackerScheduler's
+// checkProduct/runAutoRestock) can tell "the listing died, stop retrying and clear the DB
+// link" apart from a transient failure worth retrying.
+function listingGoneErr(message) {
+  const err = new Error(message);
+  err.code = 'LISTING_GONE';
+  return err;
+}
+
 function decodeEntities(str) {
   return (str || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
@@ -171,7 +192,7 @@ async function syncEbayQty(listingId, variantLabel, qty) {
     `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
   );
   const getErr = checkFailure(getItemXml);
-  if (getErr) throw new Error(getErr);
+  if (getErr) throw isListingGoneError(getItemXml) ? listingGoneErr(getErr) : new Error(getErr);
 
   const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
   if (varBlocks.length === 0) return; // single listing — qty not applicable here
@@ -220,7 +241,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
     `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${cleanId}</ItemID></GetItemRequest>`
   );
   const getErr = checkFailure(getItemXml);
-  if (getErr) throw new Error(getErr);
+  if (getErr) throw isListingGoneError(getItemXml) ? listingGoneErr(getErr) : new Error(getErr);
 
   const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
 
@@ -370,4 +391,4 @@ async function removeVariation(listingId, variantLabel) {
   if (err) throw new Error(err);
 }
 
-module.exports = { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, bestVariantMatch, calcEbayPrice };
+module.exports = { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, bestVariantMatch, calcEbayPrice, checkFailure, isListingGoneError };

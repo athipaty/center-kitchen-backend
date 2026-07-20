@@ -3,7 +3,7 @@ const axios = require("axios");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
 const Order = require("../models/tracker/Order");
-const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice, bestVariantMatch } = require("./ebayPriceSync");
+const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice, bestVariantMatch, checkFailure, isListingGoneError } = require("./ebayPriceSync");
 const { b2Enabled, listB2Files, deleteB2Prefix } = require("../utils/b2Utils");
 const { ntfyPush } = require("../utils/ntfy");
 
@@ -127,13 +127,27 @@ async function checkProduct(p, syncedListings = null) {
             markEbayRateLimited(e.message);
             break;
           }
+          // Don't retry a genuinely dead listing — retrying won't make it exist again.
+          if (e.code === 'LISTING_GONE') break;
           if (attempt < 2) {
             console.warn(`eBay sync attempt ${attempt} failed for ${p.ebayListingId}: ${e.message} — retrying in 8s`);
             await new Promise(r => setTimeout(r, 8000));
           }
         }
       }
-      if (syncErr) {
+      if (syncErr?.code === 'LISTING_GONE') {
+        // The listing no longer exists on eBay (ended/deleted, most often eBay auto-ending a
+        // single-quantity listing before our restock cron got to it) — clear ebayListingId so
+        // the product falls back to "unlisted" in the UI and the Auto List button reappears,
+        // instead of silently failing every sync forever with the card still pointing at a
+        // dead listing. Clears every variant sharing this listingId, not just this one.
+        const deadId = p.ebayListingId;
+        p.ebayListingId = null;
+        p.ebayPrice = null;
+        await Product.updateMany({ ebayListingId: deadId, _id: { $ne: p._id } }, { $set: { ebayListingId: null, ebayPrice: null } });
+        console.log(`eBay listing ${deadId} no longer exists — cleared ebayListingId (all variants) so it can be relisted`);
+        if (io) io.emit('tracker:listing:ended', { listingId: deadId });
+      } else if (syncErr) {
         // p.ebayPrice retains oldEbayPrice — next check will detect the mismatch and retry
         console.error(`eBay price sync failed for listing ${p.ebayListingId} after 2 attempts:`, syncErr.message);
         if (io) io.emit('tracker:ebay:sync:fail', { productId: String(p._id), error: syncErr.message });
@@ -813,6 +827,9 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
           const { data: getXml } = await tradingPost('GetItem',
             `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${itemId}</ItemID></GetItemRequest>`
           );
+          const getFailMsg = checkFailure(getXml);
+          if (getFailMsg) throw isListingGoneError(getXml) ? Object.assign(new Error(getFailMsg), { code: 'LISTING_GONE' }) : new Error(getFailMsg);
+
           const varBlocks = [...getXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
           const decodeXmlEntities = s => (s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
           const soldSpecifics = varSpecs.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
@@ -834,18 +851,32 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
           // scrambling carefully-fixed per-variant photos on every restock.
           const picturesXml = getXml.match(/<Variations>[\s\S]*?(<Pictures>[\s\S]*?<\/Pictures>)[\s\S]*?<\/Variations>/)?.[1] || '';
 
-          await tradingPost('ReviseFixedPriceItem',
+          const { data: reviseXml } = await tradingPost('ReviseFixedPriceItem',
             `<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<Item><ItemID>${itemId}</ItemID><Variations>${variationXml}${picturesXml}</Variations></Item></ReviseFixedPriceItemRequest>`
           );
+          const reviseFailMsg = checkFailure(reviseXml);
+          if (reviseFailMsg) throw isListingGoneError(reviseXml) ? Object.assign(new Error(reviseFailMsg), { code: 'LISTING_GONE' }) : new Error(reviseFailMsg);
         } else {
           // Single listing: set qty back to 1
-          await tradingPost('ReviseInventoryStatus',
+          const { data: reviseXml } = await tradingPost('ReviseInventoryStatus',
             `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>1</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`
           );
+          const reviseFailMsg = checkFailure(reviseXml);
+          if (reviseFailMsg) throw isListingGoneError(reviseXml) ? Object.assign(new Error(reviseFailMsg), { code: 'LISTING_GONE' }) : new Error(reviseFailMsg);
         }
         console.log(`auto-restock: restocked listing ${itemId}`);
       } catch (e) {
-        console.error(`auto-restock: failed to restock ${itemId}:`, e.message);
+        if (e.code === 'LISTING_GONE') {
+          // Same recovery as checkProduct's price-sync path — the listing eBay just sold out
+          // ended (or was otherwise removed) before this restock could run. Clear ebayListingId
+          // so the product falls back to "unlisted" and Auto List reappears, instead of retrying
+          // this restock forever against a listing that will never come back.
+          await Product.updateMany({ ebayListingId: itemId }, { $set: { ebayListingId: null, ebayPrice: null } });
+          console.log(`auto-restock: listing ${itemId} no longer exists — cleared ebayListingId so it can be relisted`);
+          if (io) io.emit('tracker:listing:ended', { listingId: itemId });
+        } else {
+          console.error(`auto-restock: failed to restock ${itemId}:`, e.message);
+        }
       }
       await new Promise(r => setTimeout(r, 3000));
     }
