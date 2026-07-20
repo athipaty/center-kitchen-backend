@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
+const cheerio = require("cheerio");
 const Product = require("../../models/tracker/Product");
 const Order = require("../../models/tracker/Order");
 
@@ -141,6 +142,113 @@ function _qtyVariants(variations) {
   return [...qtys].sort((a, b) => a - b);
 }
 
+// Source ASINs = recently sold orders + highest-viewed tracked listings, mapped back to
+// Amazon ASINs via the tracker's own Product records. Shared by /search-similar (up to 20,
+// as Keepa candidate seeds) and /search-related (capped at 5 — each one costs a live
+// per-product ScraperAPI render, so it stays cheap).
+async function _pickSourceAsins(limit) {
+  const recentOrders = await Order.find().sort({ createdAt: -1 }).limit(15).select("ebayItemId").lean();
+  const soldListingIds = recentOrders.map(o => o.ebayItemId).filter(Boolean);
+
+  const viewsCache = getViewsCache();
+  const viewedListingIds = [...viewsCache.entries()]
+    .sort((a, b) => (b[1]?.count || 0) - (a[1]?.count || 0))
+    .slice(0, 10)
+    .map(([id]) => id);
+
+  const sourceListingIds = [...new Set([...soldListingIds, ...viewedListingIds])];
+  if (!sourceListingIds.length) return [];
+
+  const sourceProducts = await Product.find({ ebayListingId: { $in: sourceListingIds } }, "url").lean();
+  return [...new Set(
+    sourceProducts.map(p => p.url?.match(/\/dp\/([A-Z0-9]{10})/i)?.[1]).filter(Boolean)
+  )].slice(0, limit);
+}
+
+// Scrapes a single Amazon product page's "Products related to this item" carousel — Amazon
+// now fills that widget almost entirely with sponsored offers, each individually tagged
+// "Sponsored" (widget id sims-simsContainer). It loads via client-side ads after the initial
+// page render, so a plain fetch (even with render=true alone) returns the container empty —
+// this requires ScraperAPI's render=true AND wait_for_selector targeting a card inside it.
+async function _fetchRelatedSponsored(asin) {
+  if (!process.env.SCRAPER_API_KEY) return [];
+  try {
+    const { data: html } = await axios.get("http://api.scraperapi.com/", {
+      params: {
+        api_key: process.env.SCRAPER_API_KEY,
+        url: `https://www.amazon.com/dp/${asin}`,
+        render: true,
+        wait_for_selector: "#sims-simsContainer_feature_div_0 [data-asin]",
+      },
+      timeout: 90000,
+    });
+    if (typeof html !== "string") return [];
+
+    const $ = cheerio.load(html);
+    const results = [];
+    $("#sims-simsContainer_feature_div_0 [data-asin].sp_offerVertical").each((i, el) => {
+      const $el = $(el);
+      const cardAsin = $el.attr("data-asin");
+      if (!cardAsin || cardAsin === asin) return;
+
+      const priceText = $el.find(".apex-price-to-pay-value .a-offscreen").first().text().trim();
+      const price = priceText ? parseFloat(priceText.replace(/[^0-9.]/g, "")) : null;
+      const ratingLabel = $el.find(".adReviewLink").attr("aria-label") || "";
+      const ratingMatch = ratingLabel.match(/([\d.]+) out of 5 stars ([\d,]+) rating/i);
+
+      results.push({
+        asin: cardAsin,
+        title: $el.find('a[id$="_title"]').attr("title") || $el.find("img").attr("alt") || null,
+        image: $el.find("img").attr("src") || null,
+        url: `https://www.amazon.com/dp/${cardAsin}`,
+        currency: "$",
+        price: Number.isFinite(price) ? price : null,
+        rating: ratingMatch ? parseFloat(ratingMatch[1]) : null,
+        reviewCount: ratingMatch ? parseInt(ratingMatch[2].replace(/,/g, ""), 10) : null,
+        hasAmazonChoice: /amazon.s choice/i.test($.html(el)),
+      });
+    });
+    return results;
+  } catch (e) {
+    console.error(`_fetchRelatedSponsored(${asin}):`, e.message);
+    return [];
+  }
+}
+
+// GET find new products from the "Products related to this item" carousel on 5 of your source
+// products' own Amazon pages (same sold/viewed sourcing as /search-similar, capped lower since
+// each source costs a live ScraperAPI render — expect ~10-30s per product, run sequentially so
+// 5 back-to-back page loads don't read as a bot burst). Hard-filtered to Amazon's Choice AND
+// under $10 — both requested explicitly; no price ceiling/Prime/rating floor carried over from
+// /search-similar since this is a separate, narrower search.
+router.get("/search-related", async (req, res) => {
+  try {
+    if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
+
+    const sourceAsins = await _pickSourceAsins(5);
+    if (!sourceAsins.length) return res.json({ deals: [], note: "No sold orders or viewed listings yet to base this on." });
+
+    const seen = new Map(); // asin -> first-seen candidate
+    for (const asin of sourceAsins) {
+      const related = await _fetchRelatedSponsored(asin);
+      for (const r of related) {
+        if (!sourceAsins.includes(r.asin) && !seen.has(r.asin)) seen.set(r.asin, r);
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    const deals = [...seen.values()]
+      .filter(d => d.hasAmazonChoice && d.price != null && d.price < 10)
+      .sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.price - b.price)
+      .slice(0, 25);
+
+    console.log(`search-related: sources=${sourceAsins.length} candidates=${seen.size} deals=${deals.length}`);
+    res.json({ deals, sourcesChecked: sourceAsins.length });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // GET find new products worth sourcing. Default mode seeds candidates from what you actually
 // sell — not a manual category pick. Two source signals: recently sold orders and your
 // highest-viewed tracked listings (best-effort — the latter reads ebay.js's in-memory views
@@ -178,23 +286,8 @@ router.get("/search-similar", async (req, res) => {
       if (!candidateAsins.length) return res.json({ deals: [], note: `No best-sellers data for "${category}".` });
     } else {
       // Step 1: source ASINs = recently sold + highest-viewed tracked listings
-      const recentOrders = await Order.find().sort({ createdAt: -1 }).limit(15).select("ebayItemId").lean();
-      const soldListingIds = recentOrders.map(o => o.ebayItemId).filter(Boolean);
-
-      const viewsCache = getViewsCache();
-      const viewedListingIds = [...viewsCache.entries()]
-        .sort((a, b) => (b[1]?.count || 0) - (a[1]?.count || 0))
-        .slice(0, 10)
-        .map(([id]) => id);
-
-      const sourceListingIds = [...new Set([...soldListingIds, ...viewedListingIds])];
-      if (!sourceListingIds.length) return res.json({ deals: [], note: "No sold orders or viewed listings yet to base this on. Try a category search instead." });
-
-      const sourceProducts = await Product.find({ ebayListingId: { $in: sourceListingIds } }, "url").lean();
-      sourceAsins = [...new Set(
-        sourceProducts.map(p => p.url?.match(/\/dp\/([A-Z0-9]{10})/i)?.[1]).filter(Boolean)
-      )].slice(0, 20);
-      if (!sourceAsins.length) return res.json({ deals: [], note: "Couldn't map sold/viewed listings back to Amazon ASINs." });
+      sourceAsins = await _pickSourceAsins(20);
+      if (!sourceAsins.length) return res.json({ deals: [], note: "No sold orders or viewed listings yet to base this on. Try a category search instead." });
 
       // Step 2: fetch source products from Keepa for category + frequently-bought-together
       const { data: srcData } = await axios.get("https://api.keepa.com/product", {
