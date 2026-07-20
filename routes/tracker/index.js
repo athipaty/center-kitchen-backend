@@ -249,6 +249,28 @@ router.get("/search-related", async (req, res) => {
   }
 });
 
+// GET the same "Products related to this item" check as /search-related, but for a single
+// ASIN — one live ScraperAPI render instead of 5, so this is cheap enough to run inline right
+// after pasting a URL in the Track Price flow (the ASIN you're about to track, not a sold/
+// viewed source list). Same hard filter: Amazon's Choice AND under $10.
+router.get("/related-for/:asin", async (req, res) => {
+  try {
+    if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
+    const asin = String(req.params.asin || "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin)) return res.status(400).json({ error: "Invalid ASIN" });
+
+    const related = await _fetchRelatedSponsored(asin);
+    const deals = related
+      .filter(d => d.hasAmazonChoice && d.price != null && d.price < 10)
+      .sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.price - b.price)
+      .slice(0, 25);
+
+    res.json({ deals });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // GET find new products worth sourcing. Default mode seeds candidates from what you actually
 // sell — not a manual category pick. Two source signals: recently sold orders and your
 // highest-viewed tracked listings (best-effort — the latter reads ebay.js's in-memory views
