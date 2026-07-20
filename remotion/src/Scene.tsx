@@ -5,6 +5,18 @@ import type { SceneProps } from "./types";
 
 const msToFrames = (ms: number, fps: number) => Math.max(1, Math.round((ms / 1000) * fps));
 
+// Percent-from-edge margin for a lone speaker's portrait. Positions are driven by each
+// character's fixed `slot`, not how many are currently speaking, so a two-character scene always
+// puts character 0 near the left edge and character 1 near the right edge, line to line, rather
+// than the portrait re-centering itself each time the speaker changes.
+const EDGE_MARGIN_PCT = 7;
+const PORTRAIT_SIZE_PCT = 26;
+
+function slotToLeftPct(slot: number, totalSlots: number): number {
+  if (totalSlots <= 1) return 50;
+  return EDGE_MARGIN_PCT + (slot / (totalSlots - 1)) * (100 - 2 * EDGE_MARGIN_PCT);
+}
+
 export const Scene: React.FC<SceneProps & { durationInFrames: number }> = ({
   backgroundUrl,
   cameraMove,
@@ -21,24 +33,30 @@ export const Scene: React.FC<SceneProps & { durationInFrames: number }> = ({
         const lineFrames = msToFrames(line.durationMs, fps);
         const from = cursor;
         cursor += lineFrames;
+        // Only the character currently speaking gets a portrait — a listening character's sprite
+        // sitting on screen unchanged read as clutter, not as "this person is in the scene".
+        const speaking = line.characters.find((c) => c.name === line.speaker);
+        const leftPct = speaking ? slotToLeftPct(speaking.slot, line.characters.length) : 50;
         return (
           <Sequence key={i} from={from} durationInFrames={lineFrames} layout="none">
             <Audio src={line.audioUrl} />
-            {line.characters.length > 0 && (
-              // One portrait per on-screen character, spread evenly left-to-right across the top
-              // of the frame (not stacked center-bottom) so two characters sharing a scene don't
-              // just replace each other in the same spot as the speaker changes. Kept near the top
-              // and slightly see-through so the background stays visible and the bottom-anchored
-              // CaptionOverlay has clear room.
-              <AbsoluteFill style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-evenly", paddingTop: "4%" }}>
-                {line.characters.map((c, i) => (
-                  <Img
-                    key={i}
-                    src={c.spriteUrl}
-                    style={{ height: "32%", objectFit: "contain", opacity: 0.82 }}
-                  />
-                ))}
-              </AbsoluteFill>
+            {speaking && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "6%",
+                  left: `${leftPct}%`,
+                  transform: "translateX(-50%)",
+                  width: `${PORTRAIT_SIZE_PCT}%`,
+                  aspectRatio: "1 / 1",
+                  borderRadius: "50%",
+                  overflow: "hidden",
+                  border: "4px solid rgba(255,255,255,0.9)",
+                  boxShadow: "0 6px 20px rgba(0,0,0,0.3)",
+                }}
+              >
+                <Img src={speaking.spriteUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              </div>
             )}
             <CaptionOverlay text={line.text} speaker={line.speaker} />
           </Sequence>

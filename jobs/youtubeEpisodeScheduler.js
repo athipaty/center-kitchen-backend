@@ -262,12 +262,12 @@ async function stepTts(episode) {
   episode.statusDetail = "";
 }
 
-// Builds one scene's per-line render props — critically, every line lists ALL of that scene's
-// on-screen characters (not just whoever's speaking), so Scene.tsx can show both characters
-// sharing the frame side-by-side instead of one sprite replacing another in the same spot every
-// time the speaker changes. Each character's sprite reflects their most recently-voiced expression
-// (defaulting to neutral before their first line), so a listening character's face doesn't reset
-// between their own lines.
+// Builds one scene's per-line render props. Every line still lists ALL of that scene's on-screen
+// characters (each tagged with a stable left-to-right `slot`), but Scene.tsx only renders the one
+// matching `speaker` for a given line — the slot is what keeps a character's portrait anchored to
+// the same edge across the scene instead of jumping as the speaker changes. Each character's
+// sprite reflects their most recently-voiced expression (defaulting to neutral before their first
+// line), so their face doesn't reset to neutral on lines where someone else is speaking.
 function buildDialogueProps(scene, byId) {
   const currentExpression = new Map();
   for (const charId of scene.charactersOnScreen) currentExpression.set(String(charId), "neutral");
@@ -279,10 +279,10 @@ function buildDialogueProps(scene, byId) {
     const characters = scene.charactersOnScreen
       .map((id) => byId.get(String(id)))
       .filter(Boolean)
-      .map((c) => {
+      .map((c, slot) => {
         const expr = currentExpression.get(String(c._id)) || "neutral";
         const sprite = c.sprites.find((s) => s.expression === expr) || c.sprites[0];
-        return sprite ? { name: c.name, spriteUrl: sprite.imageUrl } : null;
+        return sprite ? { name: c.name, spriteUrl: sprite.imageUrl, slot } : null;
       })
       .filter(Boolean);
 
