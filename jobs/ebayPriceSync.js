@@ -203,13 +203,21 @@ async function syncEbayQty(listingId, variantLabel, qty) {
     const currentPrice = currentPriceM ? parseFloat(currentPriceM[1]).toFixed(2) : '0.00';
     const currentQtyM  = block.match(/<Quantity>([\d]+)<\/Quantity>/);
     const currentQty   = currentQtyM ? currentQtyM[1] : '1';
+    // <Quantity> on a Good-Til-Cancelled listing is the LIFETIME total ever set, not what's
+    // currently available — eBay computes remaining stock as Quantity - QuantitySold (which
+    // never resets). Setting Quantity back to a flat "1" after a variant has sold before
+    // leaves 0 actually available (1 - 1 = 0) even though the tag reads "1", which is exactly
+    // why a variant can still show "Out of Stock" on the live listing despite Quantity looking
+    // restocked. The new Quantity has to be soldSoFar + qty, not just qty.
+    const soldM = block.match(/<QuantitySold>(\d+)<\/QuantitySold>/);
+    const currentSold = soldM ? parseInt(soldM[1], 10) : 0;
 
     const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
     const varVal = valueMatch?.[1] || '';
     // No label = update all variations; with label = match only the target variant
     const isMatch = !label || labelMatch(varVal, label);
 
-    const thisQty = isMatch ? String(qty) : currentQty;
+    const thisQty = isMatch ? String(currentSold + qty) : currentQty;
     const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
     const sku = block.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
     const skuXml = `<SKU>${sku || (cleanId + (varVal ? '-' + varVal.replace(/[^a-z0-9]/gi,'').slice(0,20) : '')).slice(0,50)}</SKU>`;

@@ -841,7 +841,14 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
             const price = vBlock.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0';
             const sku = vBlock.match(/<SKU>([\s\S]*?)<\/SKU>/)?.[1]?.trim();
             const skuXml = `<SKU>${sku || (itemId + (val ? '-' + val.replace(/[^a-z0-9]/g, '') : '')).slice(0, 50)}</SKU>`;
-            const qty = (val === soldValue) ? 1 : (parseInt(vBlock.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '1'));
+            // <Quantity> is the lifetime total ever set on a Good-Til-Cancelled listing, not
+            // what's currently available — eBay computes remaining as Quantity - QuantitySold
+            // (which never resets). Resetting to a flat "1" after this variant has sold before
+            // leaves 0 actually available (1 - 1 = 0), which is why a restocked variant can
+            // still show "Out of Stock" live despite Quantity looking fine. Has to be
+            // soldSoFar + 1, not just 1.
+            const soldSoFar = parseInt(vBlock.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
+            const qty = (val === soldValue) ? (soldSoFar + 1) : (parseInt(vBlock.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '1'));
             return `<Variation>${skuXml}<StartPrice currencyID="USD">${parseFloat(price).toFixed(2)}</StartPrice><Quantity>${qty}</Quantity><VariationSpecifics>${specs}</VariationSpecifics></Variation>`;
           }).join('');
 
@@ -857,9 +864,21 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
           const reviseFailMsg = checkFailure(reviseXml);
           if (reviseFailMsg) throw isListingGoneError(reviseXml) ? Object.assign(new Error(reviseFailMsg), { code: 'LISTING_GONE' }) : new Error(reviseFailMsg);
         } else {
-          // Single listing: set qty back to 1
+          // Single listing: <Quantity> is the lifetime total ever set on a Good-Til-Cancelled
+          // listing, not what's currently available — eBay computes remaining as
+          // Quantity - QuantitySold (which never resets across sales). Reviving to a flat "1"
+          // once QuantitySold >= 1 leaves 0 actually available, which is exactly why a
+          // "restocked" single listing can still show Out of Stock live. Need the item's
+          // current QuantitySold before picking the new Quantity, so GetItem first.
+          const { data: getSingleXml } = await tradingPost('GetItem',
+            `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${itemId}</ItemID></GetItemRequest>`
+          );
+          const getSingleFailMsg = checkFailure(getSingleXml);
+          if (getSingleFailMsg) throw isListingGoneError(getSingleXml) ? Object.assign(new Error(getSingleFailMsg), { code: 'LISTING_GONE' }) : new Error(getSingleFailMsg);
+          const soldSoFar = parseInt(getSingleXml.match(/<SellingStatus>[\s\S]*?<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
+
           const { data: reviseXml } = await tradingPost('ReviseInventoryStatus',
-            `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>1</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`
+            `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>${soldSoFar + 1}</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`
           );
           const reviseFailMsg = checkFailure(reviseXml);
           if (reviseFailMsg) throw isListingGoneError(reviseXml) ? Object.assign(new Error(reviseFailMsg), { code: 'LISTING_GONE' }) : new Error(reviseFailMsg);
