@@ -235,6 +235,60 @@ async function _fetchRelatedSponsored(asin) {
   }
 }
 
+// Enriches scraped related-item candidates with Keepa data — the carousel scrape only gives a
+// single price/rating snapshot per card, but a candidate can have its own quantity/pack-size
+// variants (same signal /search-similar surfaces via Keepa's `variations` array) that the
+// snapshot price doesn't reflect. One batched Keepa call for all candidate ASINs, same
+// parent-ASIN variations fallback as /search-similar since child ASINs often don't carry their
+// own `variations` array. Keepa's price/rating (when available) replace the scraped values as
+// the more reliable source; scraped values remain the fallback if a candidate isn't on Keepa.
+async function _enrichWithKeepa(candidates) {
+  if (!process.env.KEEPA_API_KEY || !candidates.length) return candidates.map(c => ({ ...c, qtyVariants: [], qtyVariantCount: 0 }));
+  const keepaKey = process.env.KEEPA_API_KEY;
+  try {
+    const { data } = await axios.get("https://api.keepa.com/product", {
+      params: { key: keepaKey, asin: candidates.map(c => c.asin).join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
+      timeout: 60000,
+    });
+    const products = data.products || [];
+    const byAsin = new Map(products.map(p => [p.asin, p]));
+
+    const missingParentAsins = [...new Set(
+      products.filter(p => !(Array.isArray(p.variations) && p.variations.length) && p.parentAsin).map(p => p.parentAsin)
+    )];
+    const parentVariationsMap = new Map();
+    if (missingParentAsins.length) {
+      const { data: parentData } = await axios.get("https://api.keepa.com/product", {
+        params: { key: keepaKey, asin: missingParentAsins.join(","), domain: 1 },
+        timeout: 60000,
+      });
+      for (const parent of (parentData.products || [])) {
+        if (Array.isArray(parent.variations) && parent.variations.length)
+          parentVariationsMap.set(parent.asin, parent.variations);
+      }
+    }
+
+    return candidates.map(c => {
+      const p = byAsin.get(c.asin);
+      if (!p) return { ...c, qtyVariants: [], qtyVariantCount: 0 };
+      const variations = (Array.isArray(p.variations) && p.variations.length) ? p.variations : (parentVariationsMap.get(p.parentAsin) || []);
+      const qtyVariants = _qtyVariants(variations);
+      const ratingRaw = _lastCsvValue(p.csv, 16);
+      return {
+        ...c,
+        price: _kCents(p.stats?.buyBoxPrice) ?? c.price,
+        rating: (ratingRaw > 0 ? ratingRaw / 10 : null) ?? c.rating,
+        reviewCount: _lastCsvValue(p.csv, 17) ?? c.reviewCount,
+        qtyVariants,
+        qtyVariantCount: qtyVariants.length,
+      };
+    });
+  } catch (e) {
+    console.error("_enrichWithKeepa:", e.message);
+    return candidates.map(c => ({ ...c, qtyVariants: [], qtyVariantCount: 0 }));
+  }
+}
+
 // GET find new products from the "Products related to this item" carousel on 5 of your source
 // products' own Amazon pages (same sold/viewed sourcing as /search-similar, capped lower since
 // each source costs a live ScraperAPI render — expect ~10-30s per product, run sequentially so
@@ -259,7 +313,8 @@ router.get("/search-related", async (req, res) => {
       await new Promise(r => setTimeout(r, 2000));
     }
 
-    const deals = [...seen.values()]
+    const enriched = await _enrichWithKeepa([...seen.values()]);
+    const deals = enriched
       .filter(d => d.price != null && d.price < 30)
       .sort((a, b) => (b.hasAmazonChoice - a.hasAmazonChoice) || (b.rating || 0) - (a.rating || 0) || a.price - b.price)
       .slice(0, 25);
@@ -283,7 +338,8 @@ router.get("/related-for/:asin", async (req, res) => {
     if (!/^[A-Z0-9]{10}$/.test(asin)) return res.status(400).json({ error: "Invalid ASIN" });
 
     const related = await _fetchRelatedSponsored(asin);
-    const deals = related
+    const enriched = await _enrichWithKeepa(related);
+    const deals = enriched
       .filter(d => d.price != null && d.price < 30)
       .sort((a, b) => (b.hasAmazonChoice - a.hasAmazonChoice) || (b.rating || 0) - (a.rating || 0) || a.price - b.price)
       .slice(0, 25);
