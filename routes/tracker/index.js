@@ -238,7 +238,7 @@ async function _fetchRelatedSponsored(asin) {
 // GET find new products from the "Products related to this item" carousel on 5 of your source
 // products' own Amazon pages (same sold/viewed sourcing as /search-similar, capped lower since
 // each source costs a live ScraperAPI render — expect ~10-30s per product, run sequentially so
-// 5 back-to-back page loads don't read as a bot burst). Hard-filtered to under $10 only —
+// 5 back-to-back page loads don't read as a bot burst). Hard-filtered to under $30 only —
 // Amazon's Choice is NOT a hard filter here (dropped after live testing: the badge itself
 // rarely survives scraping even when the item genuinely carries it — same failure mode as the
 // now-removed Amazon's Choice filter on /search-similar). hasAmazonChoice still rides along
@@ -260,7 +260,7 @@ router.get("/search-related", async (req, res) => {
     }
 
     const deals = [...seen.values()]
-      .filter(d => d.price != null && d.price < 10)
+      .filter(d => d.price != null && d.price < 30)
       .sort((a, b) => (b.hasAmazonChoice - a.hasAmazonChoice) || (b.rating || 0) - (a.rating || 0) || a.price - b.price)
       .slice(0, 25);
 
@@ -274,7 +274,7 @@ router.get("/search-related", async (req, res) => {
 // GET the same "Products related to this item" check as /search-related, but for a single
 // ASIN — one live ScraperAPI render instead of 5, so this is cheap enough to run inline right
 // after pasting a URL in the Track Price flow (the ASIN you're about to track, not a sold/
-// viewed source list). Same filter as /search-related: under $10 only, Amazon's Choice sorts
+// viewed source list). Same filter as /search-related: under $30 only, Amazon's Choice sorts
 // first when detected but isn't required.
 router.get("/related-for/:asin", async (req, res) => {
   try {
@@ -284,7 +284,7 @@ router.get("/related-for/:asin", async (req, res) => {
 
     const related = await _fetchRelatedSponsored(asin);
     const deals = related
-      .filter(d => d.price != null && d.price < 10)
+      .filter(d => d.price != null && d.price < 30)
       .sort((a, b) => (b.hasAmazonChoice - a.hasAmazonChoice) || (b.rating || 0) - (a.rating || 0) || a.price - b.price)
       .slice(0, 25);
 
