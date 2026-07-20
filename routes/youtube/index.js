@@ -157,6 +157,32 @@ router.post("/characters/:id/regenerate-sprite", async (req, res) => {
   }
 });
 
+// Generates only the expressions a character doesn't have yet — for when EXPRESSIONS grows
+// (e.g. new expressions added on top of an existing 5) and an already-'ready' character needs
+// catching up, without regenerating (and losing) the sprites it already has. Same
+// background-job-over-socket pattern as generate-sprites, for the same reason (this can take a
+// while — several missing expressions at ~16s each).
+router.post("/characters/:id/backfill-sprites", async (req, res) => {
+  try {
+    const character = await Character.findById(req.params.id);
+    if (!character) return res.status(404).json({ error: "Character not found" });
+    const io = req.app.get("io");
+    const characterId = String(character._id);
+
+    scheduler.backfillMissingSprites(character, async (expression) => {
+      io?.emit("character:progress", { characterId, expression });
+    }).then((missing) => {
+      io?.emit("character:sprites:done", { characterId, character: character.toJSON(), backfilled: missing });
+    }).catch((err) => {
+      io?.emit("character:sprites:done", { characterId, error: err.message });
+    });
+
+    res.status(202).json({ started: true, character });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE a character. Blocked while it's on-screen in an episode that's still mid-pipeline
 // (not done/error) — deleting mid-render would leave that render looking up a sprite that no
 // longer exists. Already-finished episodes keep referencing the character's _id harmlessly

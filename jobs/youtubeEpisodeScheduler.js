@@ -63,12 +63,21 @@ async function stepScript(episode) {
 // out exaggerated face + pose cues instead of leaving the model to infer them.
 // "action" (a pose, not an emotion) was replaced with "angry" — an actual emotion, and a more
 // useful complement to happy/sad/surprised for dialogue-driven scenes.
+// These 5 additions were picked for genre fit rather than a generic full emotional range —
+// this is a comedic everyday-life series (per the series' own "fun + comedic" tone field), which
+// leans on curious/confused/embarrassed/laughing reaction shots far more than e.g. "scared" or
+// "sleepy" would come up.
 const EXPRESSION_DETAILS = {
   neutral: "calm relaxed neutral face, soft gentle closed-mouth expression, relaxed shoulders",
   happy: "huge joyful open-mouth smile, eyes crinkled shut with happiness, rosy cheeks, both arms raised in excitement, bouncy cheerful body language",
   sad: "big exaggerated frown, downturned mouth, glassy teary eyes, eyebrows angled up in sorrow, shoulders slumped and drooping, head hung low",
   surprised: "eyes wide open like saucers, eyebrows shot up high, mouth open in a shocked round gasp, hands jumped up near face, body leaning back in surprise",
   angry: "furious scowl, furrowed angry eyebrows pressed down, gritted clenched teeth, clenched fists raised, red angry cheeks, aggressive leaning-forward posture",
+  curious: "head tilted to one side, one eyebrow raised high, eyes wide and intently focused, mouth slightly open in wonder, one hand touching chin thoughtfully, body leaning forward toward something interesting",
+  excited: "eyes sparkling wide open, huge open-mouth grin, both fists pumped up near shoulders, bouncing on toes, entire body leaning forward with eager energy",
+  laughing: "head tilted back, mouth wide open in a big laugh, eyes squeezed shut with mirth, one hand clutching stomach, body bent slightly forward with laughter",
+  confused: "eyebrows scrunched together with one raised and one lowered, head tilted, mouth twisted to one side in puzzlement, one hand scratching head, shoulders shrugged",
+  embarrassed: "bright red blushing cheeks, awkward closed-mouth smile, eyes glancing sideways avoiding contact, one hand rubbing back of neck, shoulders hunched inward shyly",
 };
 //
 // Pollinations' documented GET endpoint (image.pollinations.ai/prompt/...) has no negative-prompt
@@ -160,6 +169,21 @@ async function regenerateCharacterSprite(character, expression) {
   // Best-effort — an old file surviving as an orphan is harmless, so a delete failure here
   // shouldn't affect the (already-successful) regeneration result.
   if (oldSprite) await deleteB2File(b2KeyFromUrl(oldSprite.imageUrl)).catch(() => {});
+}
+
+// Generates only the expressions a character doesn't have yet — for when EXPRESSIONS grows
+// (e.g. adding "curious"/"excited"/etc. to an existing 5) and already-'ready' characters need
+// the new ones added on top, without regenerating (and losing seed continuity on) the sprites
+// that already exist. Each missing expression reuses regenerateCharacterSprite's push-if-absent
+// behavior one at a time, same throttling as the initial batch generation.
+async function backfillMissingSprites(character, onProgress) {
+  const missing = EXPRESSIONS.filter((e) => !character.sprites.some((s) => s.expression === e));
+  for (const expression of missing) {
+    if (onProgress) await onProgress(expression);
+    await regenerateCharacterSprite(character, expression);
+    await sleep(POLLINATIONS_DELAY_MS);
+  }
+  return missing;
 }
 
 // script -> sprites: generates sprite sets for any NEW character this episode references (skips
@@ -407,4 +431,4 @@ async function triggerNow(episodeId) {
   if (episode) await processOne(episode);
 }
 
-module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite };
+module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites };

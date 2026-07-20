@@ -11,7 +11,11 @@ function parseJsonResponse(msg) {
   return JSON.parse(raw);
 }
 
-const EXPRESSIONS = ["neutral", "happy", "sad", "surprised", "angry"];
+// The original 5 cover the basic emotional range; these 5 were picked to fit this series'
+// actual tone (fun + comedic, per the series' own tone field) rather than a generic
+// adventure/peril set — curious/confused/embarrassed/laughing are the reaction shots a
+// comedic everyday-life story leans on constantly, more than e.g. "scared" or "sleepy" would be.
+const EXPRESSIONS = ["neutral", "happy", "sad", "surprised", "angry", "curious", "excited", "laughing", "confused", "embarrassed"];
 const CAMERA_MOVES = ["pan-left", "pan-right", "zoom-in", "zoom-out", "static"];
 
 // Output language is pinned to the series' narration voice, independent of whatever language
