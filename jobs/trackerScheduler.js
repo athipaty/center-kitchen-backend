@@ -3,7 +3,7 @@ const axios = require("axios");
 const { fetchProduct } = require("../scraper");
 const Product = require("../models/tracker/Product");
 const Order = require("../models/tracker/Order");
-const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice, bestVariantMatch, checkFailure, isListingGoneError } = require("./ebayPriceSync");
+const { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, calcEbayPrice, bestVariantMatch, checkFailure, isListingGoneError, isListingEnded } = require("./ebayPriceSync");
 const { b2Enabled, listB2Files, deleteB2Prefix } = require("../utils/b2Utils");
 const { ntfyPush } = require("../utils/ntfy");
 
@@ -829,6 +829,7 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
           );
           const getFailMsg = checkFailure(getXml);
           if (getFailMsg) throw isListingGoneError(getXml) ? Object.assign(new Error(getFailMsg), { code: 'LISTING_GONE' }) : new Error(getFailMsg);
+          if (isListingEnded(getXml)) throw Object.assign(new Error('Listing has ended (ListingStatus != Active)'), { code: 'LISTING_GONE' });
 
           const varBlocks = [...getXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
           const decodeXmlEntities = s => (s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
@@ -875,6 +876,7 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
           );
           const getSingleFailMsg = checkFailure(getSingleXml);
           if (getSingleFailMsg) throw isListingGoneError(getSingleXml) ? Object.assign(new Error(getSingleFailMsg), { code: 'LISTING_GONE' }) : new Error(getSingleFailMsg);
+          if (isListingEnded(getSingleXml)) throw Object.assign(new Error('Listing has ended (ListingStatus != Active)'), { code: 'LISTING_GONE' });
           const soldSoFar = parseInt(getSingleXml.match(/<SellingStatus>[\s\S]*?<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
 
           const { data: reviseXml } = await tradingPost('ReviseInventoryStatus',

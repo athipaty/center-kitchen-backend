@@ -112,6 +112,18 @@ function listingGoneErr(message) {
   return err;
 }
 
+// A GetItem call can succeed (Ack=Success — nothing isListingGoneError catches) while the
+// listing itself is no longer live: eBay keeps a listing queryable for a while after it ends.
+// This is the single-SKU counterpart to a variation hitting 0 remaining stock — once a
+// non-variation Good-Til-Cancelled listing's remaining stock hits 0, eBay ends the whole
+// listing outright instead of just marking it unavailable (confirmed live on listing
+// 358810188207: sold out under the old flat-quantity restock bug, came back
+// ListingStatus=Completed with a perfectly successful Ack).
+function isListingEnded(xml) {
+  const status = xml.match(/<ListingStatus>([\s\S]*?)<\/ListingStatus>/)?.[1];
+  return !!status && status !== 'Active';
+}
+
 function decodeEntities(str) {
   return (str || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
@@ -193,6 +205,7 @@ async function syncEbayQty(listingId, variantLabel, qty) {
   );
   const getErr = checkFailure(getItemXml);
   if (getErr) throw isListingGoneError(getItemXml) ? listingGoneErr(getErr) : new Error(getErr);
+  if (isListingEnded(getItemXml)) throw listingGoneErr('Listing has ended (ListingStatus != Active)');
 
   const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
   if (varBlocks.length === 0) return; // single listing — qty not applicable here
@@ -250,6 +263,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
   );
   const getErr = checkFailure(getItemXml);
   if (getErr) throw isListingGoneError(getItemXml) ? listingGoneErr(getErr) : new Error(getErr);
+  if (isListingEnded(getItemXml)) throw listingGoneErr('Listing has ended (ListingStatus != Active)');
 
   const varBlocks = [...getItemXml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[0]);
 
@@ -399,4 +413,4 @@ async function removeVariation(listingId, variantLabel) {
   if (err) throw new Error(err);
 }
 
-module.exports = { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, bestVariantMatch, calcEbayPrice, checkFailure, isListingGoneError };
+module.exports = { syncEbayPrice, syncEbayQty, endListing, removeVariation, getAccessToken, bestVariantMatch, calcEbayPrice, checkFailure, isListingGoneError, isListingEnded };
