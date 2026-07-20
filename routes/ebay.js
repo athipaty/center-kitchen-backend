@@ -339,74 +339,6 @@ router.get('/upc', async (req, res) => {
   }
 });
 
-// ── My Listings ────────────────────────────────────────────────────
-router.get('/my-listings', async (req, res) => {
-  try {
-    const token = await getAccessToken();
-
-    // Note: /sell/inventory/v1/offer does NOT support a status filter param
-    let offersData;
-    try {
-      ({ data: offersData } = await axios.get('https://api.ebay.com/sell/inventory/v1/offer', {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: 100 },
-      }));
-    } catch (offerErr) {
-      console.error('my-listings: GET /offer failed:', JSON.stringify(offerErr.response?.data ?? offerErr.message));
-      return res.json([]);
-    }
-
-    const offers = offersData.offers || [];
-    if (!offers.length) return res.json([]);
-
-    // Use Shopping API (public) to get real titles + images by listing ID
-    const listingIds = offers.map(o => o.listing?.listingId).filter(Boolean);
-    const itemMap = {};
-    for (let i = 0; i < listingIds.length; i += 20) {
-      try {
-        const { data: shopData } = await axios.get('https://open.api.ebay.com/shopping', {
-          params: {
-            callname: 'GetMultipleItems',
-            responseencoding: 'JSON',
-            appid: process.env.EBAY_APP_ID,
-            version: '967',
-            ItemID: listingIds.slice(i, i + 20).join(','),
-            IncludeSelector: 'Details',
-          },
-        });
-        (shopData.Item || []).forEach(item => {
-          itemMap[item.ItemID] = { title: item.Title, image: item.PictureURL?.[0] };
-        });
-      } catch { /* skip on error, fall back to SKU */ }
-    }
-
-    res.json(offers.map(offer => {
-      const detail = itemMap[offer.listing?.listingId] || {};
-      return {
-        offerId: offer.offerId,
-        listingId: offer.listing?.listingId,
-        sku: offer.sku,
-        title: detail.title || offer.sku,
-        image: detail.image || null,
-        price: parseFloat(offer.pricingSummary?.price?.value || 0),
-        currency: offer.pricingSummary?.price?.currency || 'USD',
-        quantity: offer.availableQuantity ?? 0,
-        url: offer.listing?.listingId ? `https://www.ebay.com/itm/${offer.listing.listingId}` : null,
-      };
-    }));
-  } catch (err) {
-    if (err.status === 401 || err.message === 'not_authenticated') {
-      return res.status(401).json({ error: 'not_authenticated' });
-    }
-    const ebayErrs = err.response?.data?.errors;
-    const detail = ebayErrs?.length
-      ? ebayErrs.map(e => String(e.longMessage || e.message || '')).join(' | ')
-      : String(err.message || 'Unknown error');
-    console.error('my-listings error:', JSON.stringify(err.response?.data ?? err.message));
-    res.status(500).json({ error: detail });
-  }
-});
-
 // ── Account info (policies + locations) ───────────────────────────
 router.get('/account-info', async (req, res) => {
   try {
@@ -3671,26 +3603,6 @@ router.get('/api-usage', async (req, res) => {
   }
 });
 
-// ── Debug: raw Shopping API response ──────────────────────────────────
-router.get('/listing/:id/raw', async (req, res) => {
-  const cleanId = String(req.params.id).replace(/\D/g, '');
-  try {
-    const { data } = await axios.get('https://open.api.ebay.com/shopping', {
-      params: {
-        callname: 'GetSingleItem',
-        responseencoding: 'JSON',
-        appid: process.env.EBAY_APP_ID,
-        version: '967',
-        ItemID: cleanId,
-        IncludeSelector: 'Variations',
-      },
-    });
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message, response: err.response?.data });
-  }
-});
-
 // ── Get live prices for a listing (Trading API GetItem) ───────────────
 router.get('/listing/:id/prices', async (req, res) => {
   const cleanId = String(req.params.id).replace(/\D/g, '');
@@ -3992,7 +3904,9 @@ router.get('/listings/watchers', async (req, res) => {
 });
 
 // Batch endpoint: GET /api/ebay/listings/photo-status?ids=id1,id2,id3
-// Returns { [id]: { hasPhoto: bool, count: int } } — no user auth needed, uses Shopping API
+// Returns { [id]: { hasPhoto: bool, count: int } } — one Trading API GetItem call per
+// uncached id (batched 20 at a time in parallel), since the Shopping API's bulk
+// GetMultipleItems host (open.api.ebay.com) has been retired by eBay and no longer resolves.
 const photoStatusCache = new Map();
 const PHOTO_STATUS_TTL = 30 * 60 * 1000; // 30 min
 
@@ -4012,28 +3926,30 @@ router.get('/listings/photo-status', async (req, res) => {
     }
   }
 
-  for (let i = 0; i < uncached.length; i += 20) {
-    const batch = uncached.slice(i, i + 20);
-    try {
-      const { data } = await axios.get('https://open.api.ebay.com/shopping', {
-        params: {
-          callname: 'GetMultipleItems',
-          responseencoding: 'JSON',
-          appid: process.env.EBAY_APP_ID,
-          version: '967',
-          ItemID: batch.join(','),
-          IncludeSelector: 'Details',
-        },
-        timeout: 10000,
-      });
-      (data.Item || []).forEach(item => {
-        const pics = item.PictureURL || [];
-        const entry = { hasPhoto: pics.length > 0, count: pics.length };
-        result[item.ItemID] = entry;
-        photoStatusCache.set(item.ItemID, { ...entry, expiresAt: Date.now() + PHOTO_STATUS_TTL });
-      });
-    } catch { /* skip batch on error */ }
-    batch.forEach(id => { if (!result[id]) result[id] = { hasPhoto: null, count: 0 }; });
+  if (uncached.length) {
+    const token = await getAccessToken();
+    const creds = `<RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials>`;
+
+    for (let i = 0; i < uncached.length; i += 20) {
+      const batch = uncached.slice(i, i + 20);
+      await Promise.all(batch.map(async id => {
+        try {
+          const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+            `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${id}</ItemID><IncludeSelector>Details</IncludeSelector></GetItemRequest>`,
+            { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' }, timeout: 10000 }
+          );
+          // Scope to the top-level gallery only — GetItem includes per-variation
+          // <VariationSpecificPictureSet> blocks too, which would inflate this count.
+          const pictureDetails = xml.match(/<PictureDetails>([\s\S]*?)<\/PictureDetails>/)?.[1] || '';
+          const count = (pictureDetails.match(/<PictureURL>/g) || []).length;
+          const entry = { hasPhoto: count > 0, count };
+          result[id] = entry;
+          photoStatusCache.set(id, { ...entry, expiresAt: Date.now() + PHOTO_STATUS_TTL });
+        } catch {
+          result[id] = { hasPhoto: null, count: 0 };
+        }
+      }));
+    }
   }
 
   res.json(result);
