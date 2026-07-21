@@ -39,7 +39,7 @@ const episodeSchema = new mongoose.Schema(
     // advances it to the next status. See that file for exactly what each step does.
     status: {
       type: String,
-      enum: ["pending", "script", "sprites", "backgrounds", "tts", "review", "rendering", "uploading", "publishing", "done", "error"],
+      enum: ["pending", "script", "sprites", "backgrounds", "tts", "review", "rendering", "rendered", "uploading", "publishing", "done", "error"],
       default: "pending",
       index: true,
     },

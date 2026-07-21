@@ -69,7 +69,7 @@ async function stepScript(episode) {
 // "sleepy" would come up.
 const EXPRESSION_DETAILS = {
   neutral: "calm relaxed neutral face, soft gentle closed-mouth expression, relaxed shoulders",
-  happy: "huge joyful open-mouth smile, eyes crinkled shut with happiness, rosy cheeks, both arms raised in excitement, bouncy cheerful body language",
+  happy: "huge joyful open-mouth smile, eyes crinkled shut with happiness, rosy cheeks, relaxed shoulders",
   sad: "big exaggerated frown, downturned mouth, glassy teary eyes, eyebrows angled up in sorrow, shoulders slumped and drooping, head hung low",
   surprised: "eyes wide open like saucers, eyebrows shot up high, mouth open in a shocked round gasp, hands jumped up near face, body leaning back in surprise",
   angry: "furious scowl, furrowed angry eyebrows pressed down, gritted clenched teeth, clenched fists raised, red angry cheeks, aggressive leaning-forward posture",
@@ -208,6 +208,18 @@ async function stepSprites(episode) {
   episode.statusDetail = "";
 }
 
+// Pollinations' documented GET endpoint has no negative-prompt param (see buildSpritePrompt's
+// comment above) — a single trailing "no characters, no people" was too weak a signal, and scenes
+// routinely came back with people baked into the scenery itself, which then stay on screen for the
+// whole scene regardless of who's actually speaking (the Scene.tsx portrait-overlay logic only
+// controls the separate circular speaker portrait — it has no way to remove figures the background
+// image itself already contains). Same fix as sprites: repeat the "empty, uninhabited" constraint
+// several times, in different words, front and back of the prompt.
+function buildBackgroundPrompt(scene, series) {
+  const styleSuffix = series.artStyle ? `, ${series.artStyle}` : "";
+  return `empty background scenery, uninhabited location, nobody present, vacant${styleSuffix}, ${scene.backgroundPrompt}, wide establishing shot of the location only, no characters, no people, no person, no human figures, no silhouettes, no crowd, background art only, scenery without any inhabitants`;
+}
+
 // sprites -> backgrounds: one image per scene, using the series' shared artStyle suffix so every
 // scene (and every episode) looks like the same visual world.
 async function stepBackgrounds(episode) {
@@ -217,7 +229,7 @@ async function stepBackgrounds(episode) {
     episode.statusDetail = `background for scene ${scene.order + 1}/${episode.scenes.length}`;
     await episode.save();
     await emit(episode);
-    const prompt = `${scene.backgroundPrompt}${series.artStyle ? `, ${series.artStyle}` : ""}, no characters, no people`;
+    const prompt = buildBackgroundPrompt(scene, series);
     const buffer = await generateImage(prompt, { width: 1280, height: 720 });
     scene.backgroundUrl = await uploadToB2(
       buffer,
@@ -228,6 +240,31 @@ async function stepBackgrounds(episode) {
   }
   episode.status = "backgrounds";
   episode.statusDetail = "";
+}
+
+// Redo a single scene's background art using its already-saved backgroundPrompt, without touching
+// any other scene or requiring the prompt text itself to have changed — the review panel's
+// standalone "reroll this background" button, as opposed to stepBackgrounds' initial per-scene
+// generation. Uses a fresh random seed (stepBackgrounds passes none) and a seed-tagged B2 key so
+// re-running the same prompt gets a new image rather than reproducing (or being served a cached
+// copy of) the same unwanted one — same reasoning as regenerateCharacterSprite above.
+async function regenerateSceneBackground(episode, scene) {
+  const series = await Series.findById(episode.series);
+  const seed = Math.floor(Math.random() * 1e9);
+  const prompt = buildBackgroundPrompt(scene, series);
+  const buffer = await generateImage(prompt, { width: 1280, height: 720, seed });
+  const oldUrl = scene.backgroundUrl;
+  scene.backgroundUrl = await uploadToB2(
+    buffer,
+    `youtube/episodes/${episode._id}/scene${scene.order}-bg-${seed}.jpg`,
+    "image/jpeg"
+  );
+  episode.markModified("scenes");
+  await episode.save();
+
+  // Best-effort — an old file surviving as an orphan is harmless, so a delete failure here
+  // shouldn't affect the (already-successful) regeneration result.
+  if (oldUrl) await deleteB2File(b2KeyFromUrl(oldUrl)).catch(() => {});
 }
 
 // backgrounds -> review: one audio file per dialogue line, then STOPS at "review" instead of
@@ -296,10 +333,13 @@ function buildDialogueProps(scene, byId) {
   });
 }
 
-// review -> uploading: renders the MP4 (via the Remotion subprocess) and uploads it to B2, in one
-// step rather than persisting an intermediate "rendered but not uploaded" state — if this is
-// interrupted, retrying just re-renders from the already-cached background/sprite/audio URLs
-// above (no repeated Pollinations/TTS calls, so it's cheap and safe to redo).
+// review -> rendered: renders the MP4 (via the Remotion subprocess) and uploads it to B2, then
+// STOPS at "rendered" instead of continuing straight to YouTube — gives a human a chance to
+// preview the actual rendered video (via the player on the episode card) and decide to publish it,
+// rather than every render silently going live on the channel the moment it finishes. If this is
+// interrupted before reaching "rendered", retrying just re-renders from the already-cached
+// background/sprite/audio URLs above (no repeated Pollinations/TTS calls, so it's cheap and safe
+// to redo).
 async function stepRenderAndUpload(episode) {
   const characterIds = [
     ...new Set(episode.scenes.flatMap((s) => s.charactersOnScreen.map(String))),
@@ -329,7 +369,7 @@ async function stepRenderAndUpload(episode) {
   await emit(episode);
 
   episode.videoUrl = await uploadToB2(mp4Buffer, `youtube/episodes/${episode._id}/final.mp4`, "video/mp4");
-  episode.status = "uploading";
+  episode.status = "rendered";
   episode.statusDetail = "";
 }
 
@@ -337,6 +377,10 @@ async function stepRenderAndUpload(episode) {
 // (videos.insert), as a private upload — a human still reviews and flips visibility in YouTube
 // Studio before it goes public. Re-fetches the buffer from B2 (rather than threading it through
 // from stepRenderAndUpload) since each step reloads the episode fresh from Mongo on its own tick.
+// Only reached via the explicit POST /episodes/:id/upload-youtube route below (same "momentary
+// handoff" trick as approve-render uses with "tts": that route sets status to "uploading" and
+// triggers the scheduler, which dispatches straight to this handler) — never automatically, since
+// "rendered" itself has no STEP_HANDLERS entry.
 async function stepPublishToYoutube(episode) {
   const series = await Series.findById(episode.series);
   episode.statusDetail = "uploading to YouTube";
@@ -431,4 +475,4 @@ async function triggerNow(episodeId) {
   if (episode) await processOne(episode);
 }
 
-module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites };
+module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneBackground };

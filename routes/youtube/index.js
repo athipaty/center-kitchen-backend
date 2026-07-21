@@ -319,6 +319,29 @@ router.put("/episodes/:id/scenes", async (req, res) => {
   }
 });
 
+// Redo a single scene's background image using its already-saved prompt — no text edit required,
+// for when the same prompt might come out looking better on a different roll. Only allowed at
+// "review" (same restriction as editing scenes above) since regenerating art after the final MP4
+// already exists wouldn't change anything already baked into the render.
+router.post("/episodes/:id/scenes/:order/regenerate-background", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (episode.status !== "review") {
+      return res.status(409).json({ error: "This episode isn't awaiting review right now." });
+    }
+    const order = Number(req.params.order);
+    const scene = episode.scenes.find((s) => s.order === order);
+    if (!scene) return res.status(404).json({ error: "Scene not found" });
+
+    await scheduler.regenerateSceneBackground(episode, scene);
+    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName");
+    res.json(fresh);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Approves an episode paused at "review" and kicks off the actual render/upload/publish chain.
 // Sets status to "tts" only as a momentary internal handoff — STEP_HANDLERS.tts (stepRenderAndUpload)
 // picks it up immediately via triggerNow, so it's never visibly stuck there.
@@ -330,6 +353,28 @@ router.post("/episodes/:id/approve-render", async (req, res) => {
       return res.status(409).json({ error: "This episode isn't awaiting review right now." });
     }
     episode.status = "tts";
+    await episode.save();
+    scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
+    res.json(episode);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Kicks off the actual YouTube publish for an episode paused at "rendered" — split out from the
+// render step (see stepRenderAndUpload's comment) so a human can watch the B2-hosted MP4 in the
+// episode card's player and confirm it's good before it goes to the channel, instead of every
+// render publishing automatically the moment it finishes. Same "momentary handoff" pattern as
+// approve-render: sets status to "uploading" and triggers the scheduler, which dispatches straight
+// to stepPublishToYoutube.
+router.post("/episodes/:id/upload-youtube", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (episode.status !== "rendered") {
+      return res.status(409).json({ error: "This episode isn't ready to upload yet." });
+    }
+    episode.status = "uploading";
     await episode.save();
     scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     res.json(episode);
