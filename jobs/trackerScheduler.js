@@ -909,7 +909,7 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
 // eBay expects tracking uploaded within this many hours of payment (handling time) —
 // past this it's a late shipment against seller performance metrics. deadlineAlertsSent
 // tracks which tier already fired per order so this doesn't re-alert every 15 minutes.
-const SHIP_DEADLINE_HOURS = 48;
+const SHIP_DEADLINE_HOURS = 72;
 
 // Ordered most-urgent-first. When a check finds hoursLeft has dropped past more than
 // one threshold at once (e.g. after the server was down a while), it sends only the

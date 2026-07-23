@@ -828,7 +828,7 @@ router.post('/create-listing', async (req, res) => {
       sku, title, price, currency = 'USD', quantity = 1,
       condition = 'NEW', categoryId,
       imageUrl, imageUrls: imageUrlsRaw, upc, specs = {},
-      shipping = { free: true, carrier: 'USPSFirstClass', handlingDays: 2 },
+      shipping = { free: true, carrier: 'USPSFirstClass', handlingDays: 3 },
       returns = { accepted: true, days: 30, buyerPays: true },
       zipCode = '10001',
     } = req.body;
@@ -1163,7 +1163,7 @@ router.post('/create-group-listing', async (req, res) => {
       categoryId,
       variants,           // [{ sku, label, image, quantity }]
       specs = {},
-      shipping = { free: true, carrier: 'USPSFirstClass', handlingDays: 2 },
+      shipping = { free: true, carrier: 'USPSFirstClass', handlingDays: 3 },
       returns = { accepted: true, days: 30, buyerPays: true },
       zipCode = '10001',
     } = req.body;
@@ -3150,7 +3150,7 @@ router.post('/trading-create-listing', async (req, res) => {
       imageUrls = [], upc, specs = {}, bullets = [], description,
       variants, // [{ label, price, quantity }] for multi-variation
       variantDimension = 'Color', // e.g. 'Color', 'Size', 'Style'
-      shipping = { free: true, carrier: 'FedExStandardOvernight', handlingDays: 2 },
+      shipping = { free: true, carrier: 'FedExStandardOvernight', handlingDays: 3 },
       returns = { accepted: true, days: 30, buyerPays: true },
       // Seller location — defaults match account registered location
       sellerCountry = 'TH',
@@ -4034,7 +4034,7 @@ router.post('/fix-policies', async (req, res) => {
       const returnsAccepted = xml.match(/<ReturnsAcceptedOption>(.*?)<\/ReturnsAcceptedOption>/)?.[1] || '';
       const returnsWithin   = xml.match(/<ReturnsWithinOption>(.*?)<\/ReturnsWithinOption>/)?.[1] || '';
 
-      const needsHandlingFix = dispatch > 2;
+      const needsHandlingFix = dispatch > 3;
       const needsReturnFix   = returnsAccepted !== 'ReturnsAccepted' || !['Days_30', 'Days_60'].includes(returnsWithin);
 
       if (!needsHandlingFix && !needsReturnFix) {
@@ -4042,7 +4042,7 @@ router.post('/fix-policies', async (req, res) => {
       }
 
       // 2. Fix
-      const newDispatch = needsHandlingFix ? 2 : dispatch;
+      const newDispatch = needsHandlingFix ? 3 : dispatch;
       const reviseBody = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
         ${creds}
         <Item>
