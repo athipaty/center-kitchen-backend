@@ -57,10 +57,18 @@ ${continuityText}
 
 This episode's premise: ${premise}
 
-Write a short episode as 3-5 scenes. Each scene has a background description, which characters
-are on screen, and a short sequence of dialogue/narration lines. Keep total dialogue brief enough
-for a short video (roughly 4-8 lines total across all scenes). A line with no character speaking
-(pure narration) is allowed — use character "Narrator" for those.
+Write a longer episode as 8-12 scenes. Each scene has a background description, which characters
+are on screen, and a sequence of dialogue/narration lines (roughly 3-6 lines per scene). Total
+dialogue should run long enough for a 3-5 minute video — aim for roughly 550-750 words of
+dialogue/narration across the whole episode, not the handful of lines a short clip would use. A
+line with no character speaking (pure narration) is allowed — use character "Narrator" for those.
+
+Somewhere in the episode, include one "curiosity beat": a character notices something (an animal,
+object, or place) and asks a genuine, kid-friendly "why" or "how" question about it. Another
+character answers first with a silly, made-up, non-sequitur guess, for a laugh — then the first
+character (or whichever character would naturally know) gives the real answer in 1-2 simple
+sentences: a small, accurate, age-appropriate fact, not a lecture. Keep it fun and brief, matching
+the rest of the episode's tone.
 
 Write the title and every dialogue/narration line in ${scriptLanguage}, regardless of what
 language the premise above happens to be written in — the narrator voice can only read
@@ -83,7 +91,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
 
   const msg = await anthropic.messages.create({
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 4096,
+    max_tokens: 8000,
     messages: [{ role: "user", content: prompt }],
   });
 
