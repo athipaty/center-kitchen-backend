@@ -25,6 +25,10 @@ const DEFAULT_NARRATOR_VOICE = "en-US-AndrewNeural";
 // deliberately sequential (never Promise.all) and pauses between calls rather than trying to
 // parallelize, which would just trade a clean 429 for one that's harder to reason about.
 const POLLINATIONS_DELAY_MS = 16000;
+// edge-tts-universal has no documented rate limit, but firing dozens of lines back-to-back with
+// zero spacing (now that episodes run 8-12 scenes instead of 3-5) is what made NoAudioReceived
+// start showing up — a small gap between lines costs little next to the render step's own runtime.
+const TTS_DELAY_MS = 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function emit(episode, extra = {}) {
@@ -293,6 +297,7 @@ async function stepTts(episode) {
         "audio/mpeg"
       );
       line.durationMs = durationMs;
+      await sleep(TTS_DELAY_MS);
     }
   }
   episode.status = "review";
