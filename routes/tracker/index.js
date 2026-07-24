@@ -143,9 +143,8 @@ function _qtyVariants(variations) {
 }
 
 // Source ASINs = recently sold orders + highest-viewed tracked listings, mapped back to
-// Amazon ASINs via the tracker's own Product records. Shared by /search-similar (up to 20,
-// as Keepa candidate seeds) and /search-related (capped at 5 — each one costs a live
-// per-product ScraperAPI render, so it stays cheap).
+// Amazon ASINs via the tracker's own Product records. Used by /search-similar as Keepa
+// candidate seeds (up to 20).
 async function _pickSourceAsins(limit) {
   const recentOrders = await Order.find().sort({ createdAt: -1 }).limit(15).select("ebayItemId").lean();
   const soldListingIds = recentOrders.map(o => o.ebayItemId).filter(Boolean);
@@ -289,48 +288,10 @@ async function _enrichWithKeepa(candidates) {
   }
 }
 
-// GET find new products from the "Products related to this item" carousel on 5 of your source
-// products' own Amazon pages (same sold/viewed sourcing as /search-similar, capped lower since
-// each source costs a live ScraperAPI render — expect ~10-30s per product, run sequentially so
-// 5 back-to-back page loads don't read as a bot burst). Hard-filtered to under $30 only —
-// Amazon's Choice is NOT a hard filter here (dropped after live testing: the badge itself
-// rarely survives scraping even when the item genuinely carries it — same failure mode as the
-// now-removed Amazon's Choice filter on /search-similar). hasAmazonChoice still rides along
-// per-candidate and pushes matches to the top of the sort when it IS detected.
-router.get("/search-related", async (req, res) => {
-  try {
-    if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
-
-    const sourceAsins = await _pickSourceAsins(5);
-    if (!sourceAsins.length) return res.json({ deals: [], note: "No sold orders or viewed listings yet to base this on." });
-
-    const seen = new Map(); // asin -> first-seen candidate
-    for (const asin of sourceAsins) {
-      const related = await _fetchRelatedSponsored(asin);
-      for (const r of related) {
-        if (!sourceAsins.includes(r.asin) && !seen.has(r.asin)) seen.set(r.asin, r);
-      }
-      await new Promise(r => setTimeout(r, 2000));
-    }
-
-    const enriched = await _enrichWithKeepa([...seen.values()]);
-    const deals = enriched
-      .filter(d => d.price != null && d.price < 30)
-      .sort((a, b) => (b.hasAmazonChoice - a.hasAmazonChoice) || (b.rating || 0) - (a.rating || 0) || a.price - b.price)
-      .slice(0, 25);
-
-    console.log(`search-related: sources=${sourceAsins.length} candidates=${seen.size} deals=${deals.length}`);
-    res.json({ deals, sourcesChecked: sourceAsins.length });
-  } catch (err) {
-    res.status(502).json({ error: err.message });
-  }
-});
-
-// GET the same "Products related to this item" check as /search-related, but for a single
-// ASIN — one live ScraperAPI render instead of 5, so this is cheap enough to run inline right
-// after pasting a URL in the Track Price flow (the ASIN you're about to track, not a sold/
-// viewed source list). Same filter as /search-related: under $30 only, Amazon's Choice sorts
-// first when detected but isn't required.
+// GET the "Products related to this item" carousel for a single ASIN — one live ScraperAPI
+// render, cheap enough to run inline right after pasting a URL in the Track Price flow (the
+// ASIN you're about to track). Hard-filtered to under $30 only; Amazon's Choice sorts first
+// when detected but isn't required.
 router.get("/related-for/:asin", async (req, res) => {
   try {
     if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
@@ -475,6 +436,72 @@ router.get("/search-similar", async (req, res) => {
       .slice(0, 25);
 
     console.log(`search-similar (${category || "auto"}): sources=${sourceAsins.length} candidates=${candidateAsins.length} deals=${deals.length}`);
+    res.json({ deals });
+  } catch (err) {
+    if (err.response?.status === 429)
+      return res.status(503).json({ error: "Rate limit — try again shortly." });
+    res.status(502).json({ error: err.response?.data?.message || err.message });
+  }
+});
+
+// GET one best-selling, single-listing product per Amazon category — deliberately excludes
+// anything with a parentAsin (i.e. a color/size/pack-size variant of a bigger listing), unlike
+// /search-similar which ranks multi-variant products higher. Walks each category's Keepa Best
+// Sellers list (already rank-ordered) and returns the first ASIN that both has no parent AND
+// clears the same bar as /search-similar (Prime, rating >=4.0 when rated, $60 or less) — so one
+// winner per category, 17 categories, one Best Sellers + one batched product call each.
+router.get("/best-sellers-by-category", async (req, res) => {
+  try {
+    if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
+    const keepaKey = process.env.KEEPA_API_KEY;
+
+    const deals = [];
+    for (const [category, categoryId] of Object.entries(KEEPA_CATEGORY_IDS)) {
+      try {
+        const { data: bsData } = await axios.get("https://api.keepa.com/bestsellers", {
+          params: { key: keepaKey, domain: 1, category: categoryId },
+          timeout: 30000,
+        });
+        const rankedAsins = (bsData.bestSellersList?.asinList || []).slice(0, 40);
+        if (!rankedAsins.length) continue;
+
+        const { data: prodData } = await axios.get("https://api.keepa.com/product", {
+          params: { key: keepaKey, asin: rankedAsins.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
+          timeout: 60000,
+        });
+        const byAsin = new Map((prodData.products || []).map(p => [p.asin, p]));
+
+        for (const asin of rankedAsins) {
+          const p = byAsin.get(asin);
+          if (!p || p.parentAsin) continue; // skip anything that's one variant among many
+
+          const price = _kCents(p.stats?.buyBoxPrice);
+          const isPrime = p.stats?.buyBoxIsPrimeEligible === true;
+          const ratingRaw = _lastCsvValue(p.csv, 16);
+          const rating = ratingRaw > 0 ? ratingRaw / 10 : null;
+          if (price == null || price > 60 || !isPrime || (rating != null && rating < 4.0)) continue;
+
+          deals.push({
+            category,
+            asin: p.asin,
+            title: p.title || "",
+            image: _keepaImageUrl(p),
+            url: `https://www.amazon.com/dp/${p.asin}`,
+            price,
+            currency: "$",
+            rating,
+            reviewCount: _lastCsvValue(p.csv, 17) || 0,
+            monthlySold: p.monthlySold > 0 ? p.monthlySold : null,
+            isPrime,
+          });
+          break; // first passing ASIN in rank order = this category's winner
+        }
+      } catch (e) {
+        console.error(`best-sellers-by-category (${category}):`, e.message);
+      }
+    }
+
+    console.log(`best-sellers-by-category: categories=${Object.keys(KEEPA_CATEGORY_IDS).length} deals=${deals.length}`);
     res.json({ deals });
   } catch (err) {
     if (err.response?.status === 429)
