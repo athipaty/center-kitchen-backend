@@ -57,11 +57,15 @@ ${continuityText}
 
 This episode's premise: ${premise}
 
-Write a longer episode as 8-12 scenes. Each scene has a background description, which characters
-are on screen, and a sequence of dialogue/narration lines (roughly 3-6 lines per scene). Total
-dialogue should run long enough for a 3-5 minute video — aim for roughly 550-750 words of
-dialogue/narration across the whole episode, not the handful of lines a short clip would use. A
-line with no character speaking (pure narration) is allowed — use character "Narrator" for those.
+Write a longer episode as 10-14 scenes. Each scene has a background description, which characters
+are on screen, and a sequence of dialogue/narration lines — a hard minimum of 5 lines per scene,
+never fewer. The finished video must run AT LEAST 3 minutes, which at natural narration pace means
+the total dialogue/narration across the whole script must be AT LEAST 900 words — treat this as a
+strict floor, not a suggestion, and aim past it (1000-1200 words) for safety margin. Undershooting
+this — writing a handful of short scenes — is the single most common mistake; if you're unsure,
+add more scenes and more lines per scene rather than fewer. A line with no character speaking
+(pure narration) is allowed — use character "Narrator" for those, and they still count toward the
+word-count floor.
 
 Somewhere in the episode, include one "curiosity beat": a character notices something (an animal,
 object, or place) and asks a genuine, kid-friendly "why" or "how" question about it. Another
@@ -91,7 +95,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
 
   const msg = await anthropic.messages.create({
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 8000,
+    max_tokens: 12000,
     messages: [{ role: "user", content: prompt }],
   });
 

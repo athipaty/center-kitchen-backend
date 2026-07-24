@@ -219,8 +219,13 @@ async function stepSprites(episode) {
 // controls the separate circular speaker portrait — it has no way to remove figures the background
 // image itself already contains). Same fix as sprites: repeat the "empty, uninhabited" constraint
 // several times, in different words, front and back of the prompt.
+// Falls back to a photorealistic look when a series hasn't set its own artStyle — tested directly
+// against Pollinations (see conversation), and a plain unstyled prompt reads as cartoon/illustrated
+// by default, which isn't what most of these series actually want for their backgrounds.
+const DEFAULT_BACKGROUND_STYLE = "photorealistic, realistic photography, natural lighting, high detail";
+
 function buildBackgroundPrompt(scene, series) {
-  const styleSuffix = series.artStyle ? `, ${series.artStyle}` : "";
+  const styleSuffix = `, ${series.artStyle || DEFAULT_BACKGROUND_STYLE}`;
   return `empty background scenery, uninhabited location, nobody present, vacant${styleSuffix}, ${scene.backgroundPrompt}, wide establishing shot of the location only, no characters, no people, no person, no human figures, no silhouettes, no crowd, background art only, scenery without any inhabitants`;
 }
 
