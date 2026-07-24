@@ -1,6 +1,7 @@
 import { AbsoluteFill, Audio, Img, Sequence, useVideoConfig } from "remotion";
 import { KenBurnsImage } from "./KenBurnsImage";
 import { CaptionOverlay } from "./CaptionOverlay";
+import { SpeechBubble } from "./SpeechBubble";
 import type { SceneProps } from "./types";
 
 const msToFrames = (ms: number, fps: number) => Math.max(1, Math.round((ms / 1000) * fps));
@@ -10,10 +11,15 @@ const msToFrames = (ms: number, fps: number) => Math.max(1, Math.round((ms / 100
 // puts character 0 near the left edge and character 1 near the right edge, line to line, rather
 // than the portrait re-centering itself each time the speaker changes.
 const EDGE_MARGIN_PCT = 7;
-const PORTRAIT_SIZE_PCT = 26;
+const PORTRAIT_SIZE_PCT = 13;
 
-function slotToLeftPct(slot: number, totalSlots: number): number {
-  if (totalSlots <= 1) return 50;
+function slotToLeftPct(slot: number, totalSlots: number, name: string): number {
+  if (totalSlots <= 1) {
+    // A lone speaker still shouldn't sit dead-center — pick left or right edge, stable per
+    // character name so the same character always speaks from the same side scene to scene.
+    const hash = [...name].reduce((h, c) => h + c.charCodeAt(0), 0);
+    return hash % 2 === 0 ? EDGE_MARGIN_PCT : 100 - EDGE_MARGIN_PCT;
+  }
   return EDGE_MARGIN_PCT + (slot / (totalSlots - 1)) * (100 - 2 * EDGE_MARGIN_PCT);
 }
 
@@ -36,7 +42,7 @@ export const Scene: React.FC<SceneProps & { durationInFrames: number }> = ({
         // Only the character currently speaking gets a portrait — a listening character's sprite
         // sitting on screen unchanged read as clutter, not as "this person is in the scene".
         const speaking = line.characters.find((c) => c.name === line.speaker);
-        const leftPct = speaking ? slotToLeftPct(speaking.slot, line.characters.length) : 50;
+        const leftPct = speaking ? slotToLeftPct(speaking.slot, line.characters.length, speaking.name) : 50;
         return (
           <Sequence key={i} from={from} durationInFrames={lineFrames} layout="none">
             <Audio src={line.audioUrl} />
@@ -53,12 +59,17 @@ export const Scene: React.FC<SceneProps & { durationInFrames: number }> = ({
                   overflow: "hidden",
                   border: "4px solid rgba(255,255,255,0.9)",
                   boxShadow: "0 6px 20px rgba(0,0,0,0.3)",
+                  opacity: 0.8,
                 }}
               >
                 <Img src={speaking.spriteUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               </div>
             )}
-            <CaptionOverlay text={line.text} speaker={line.speaker} />
+            {speaking ? (
+              <SpeechBubble text={line.text} leftPct={leftPct} portraitSizePct={PORTRAIT_SIZE_PCT} />
+            ) : (
+              <CaptionOverlay text={line.text} speaker={line.speaker} />
+            )}
           </Sequence>
         );
       })}

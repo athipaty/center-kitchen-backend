@@ -17,7 +17,7 @@ export const CaptionOverlay: React.FC<{ text: string; speaker: string | null }> 
         <div
           style={{
             display: "inline-block",
-            background: "#8b5cf6",
+            background: "rgba(139, 92, 246, 0.85)",
             color: "white",
             fontWeight: 700,
             fontSize: 22,
@@ -31,7 +31,7 @@ export const CaptionOverlay: React.FC<{ text: string; speaker: string | null }> 
       )}
       <div
         style={{
-          background: "rgba(15, 23, 42, 0.75)",
+          background: "rgba(15, 23, 42, 0.5)",
           color: "white",
           fontWeight: 600,
           fontSize: 34,
