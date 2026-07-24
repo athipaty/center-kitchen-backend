@@ -286,11 +286,11 @@ router.get("/related-for/:asin", async (req, res) => {
   }
 });
 
-// GET the single best-selling, single-listing product for one Amazon category — deliberately
-// excludes anything with a parentAsin (i.e. a color/size/pack-size variant of a bigger listing).
-// Walks that category's Keepa Best Sellers list (already rank-ordered) and returns the first
-// ASIN that both has no parent AND clears the filter bar (Prime, rating >=4.0 when rated, $60 or
-// less) — one Best Sellers call + one batched product call.
+// GET best-selling, single-listing products for one Amazon category — deliberately excludes
+// anything with a parentAsin (i.e. a color/size/pack-size variant of a bigger listing). Walks
+// that category's Keepa Best Sellers list (already rank-ordered) and returns every ASIN that
+// both has no parent AND clears the filter bar (Prime, rating >=4.0 when rated, $60 or less),
+// in rank order — one Best Sellers call + one batched product call.
 router.get("/best-sellers-by-category", async (req, res) => {
   try {
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
@@ -305,7 +305,7 @@ router.get("/best-sellers-by-category", async (req, res) => {
       timeout: 30000,
     });
     const rankedAsins = (bsData.bestSellersList?.asinList || []).slice(0, 40);
-    if (!rankedAsins.length) return res.json({ deal: null, note: `No best-sellers data for "${category}".` });
+    if (!rankedAsins.length) return res.json({ deals: [], note: `No best-sellers data for "${category}".` });
 
     const { data: prodData } = await axios.get("https://api.keepa.com/product", {
       params: { key: keepaKey, asin: rankedAsins.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
@@ -313,7 +313,7 @@ router.get("/best-sellers-by-category", async (req, res) => {
     });
     const byAsin = new Map((prodData.products || []).map(p => [p.asin, p]));
 
-    let deal = null;
+    const deals = [];
     for (const asin of rankedAsins) {
       const p = byAsin.get(asin);
       if (!p || p.parentAsin) continue; // skip anything that's one variant among many
@@ -324,7 +324,7 @@ router.get("/best-sellers-by-category", async (req, res) => {
       const rating = ratingRaw > 0 ? ratingRaw / 10 : null;
       if (price == null || price > 60 || !isPrime || (rating != null && rating < 4.0)) continue;
 
-      deal = {
+      deals.push({
         category,
         asin: p.asin,
         title: p.title || "",
@@ -336,12 +336,12 @@ router.get("/best-sellers-by-category", async (req, res) => {
         reviewCount: _lastCsvValue(p.csv, 17) || 0,
         monthlySold: p.monthlySold > 0 ? p.monthlySold : null,
         isPrime,
-      };
-      break; // first passing ASIN in rank order = the winner
+      });
+      if (deals.length >= 25) break;
     }
 
-    console.log(`best-sellers-by-category (${category}): candidates=${rankedAsins.length} found=${!!deal}`);
-    res.json({ deal, note: deal ? null : `No single-listing best seller in "${category}" cleared the filters.` });
+    console.log(`best-sellers-by-category (${category}): candidates=${rankedAsins.length} deals=${deals.length}`);
+    res.json({ deals, note: deals.length ? null : `No single-listing best sellers in "${category}" cleared the filters.` });
   } catch (err) {
     if (err.response?.status === 429)
       return res.status(503).json({ error: "Rate limit — try again shortly." });
