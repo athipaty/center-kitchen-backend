@@ -405,16 +405,18 @@ router.post("/episodes/:id/retry", async (req, res) => {
   }
 });
 
-// DELETE an episode. Only allowed once it's settled (done or error) — the scheduler's 30s tick
-// holds an in-memory copy of an in-progress episode and calls episode.save() on it after each
-// step; deleting out from under that would make that save() throw (doc no longer exists), and
-// that throw happens inside processOne's own catch block with nothing above it to catch a
-// second failure, which can bring down the whole scheduler tick.
+// DELETE an episode. Only allowed once it's settled (done, error, or rendered) — the scheduler's
+// 30s tick holds an in-memory copy of an in-progress episode and calls episode.save() on it after
+// each step; deleting out from under that would make that save() throw (doc no longer exists), and
+// that throw happens inside processOne's own catch block with nothing above it to catch a second
+// failure, which can bring down the whole scheduler tick. "rendered" is safe to include here too —
+// it has no STEP_HANDLERS entry (see youtubeEpisodeScheduler.js), so the tick no-ops on it instead
+// of holding an in-memory copy to save later.
 router.delete("/episodes/:id", async (req, res) => {
   try {
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
-    if (!["done", "error"].includes(episode.status)) {
+    if (!["done", "error", "rendered"].includes(episode.status)) {
       return res.status(409).json({ error: "This episode is still being generated — wait for it to finish or error out first." });
     }
     await Episode.findByIdAndDelete(req.params.id);
