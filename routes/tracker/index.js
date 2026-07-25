@@ -324,7 +324,12 @@ router.get("/best-sellers-by-category", async (req, res) => {
       params: { key: keepaKey, domain: 1, category: KEEPA_CATEGORY_IDS[category] },
       timeout: 30000,
     });
-    const rankedAsins = (bsData.bestSellersList?.asinList || []).slice(0, 40);
+    // Best-seller lists skew heavily toward multi-variant listings (a top seller almost always
+    // has color/size options), which the no-variant filter below eliminates before Prime/rating/
+    // price even apply — 40 candidates was leaving some categories with 0-1 survivors. 100 is
+    // Keepa's per-request ASIN cap for /product, so this is the largest pool obtainable in one
+    // batched call (costs proportionally more Keepa tokens per search, ~2.5x vs. 40).
+    const rankedAsins = (bsData.bestSellersList?.asinList || []).slice(0, 100);
     if (!rankedAsins.length) return res.json({ deals: [], note: `No best-sellers data for "${category}".` });
 
     const { data: prodData } = await axios.get("https://api.keepa.com/product", {
