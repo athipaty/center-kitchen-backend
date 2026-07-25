@@ -288,6 +288,24 @@ router.get("/related-for/:asin", async (req, res) => {
   }
 });
 
+// GET on-demand Amazon fulfillment lookup for one candidate — backs the "Check shipping" button
+// in the product-search panels (best-sellers-by-category, related-items). Deliberately a
+// per-click lookup rather than enriching every search result automatically: a category search
+// can return up to 25 candidates, and eagerly autoparse-ing all of them would both burn 25
+// ScraperAPI credits per search and mean firing that many scrapes back-to-back — the codebase's
+// existing image-scrape queue (queueImageUpload) already treats concurrent Amazon page fetches
+// as a bot-detection risk worth avoiding, so this stays opt-in per item instead.
+router.get("/fulfillment", async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: "url is required" });
+    const fulfillment = await fetchFulfillment(cleanUrl(url));
+    res.json(fulfillment);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // GET best-selling, single-listing products for one Amazon category — deliberately excludes
 // anything with a parentAsin (i.e. a color/size/pack-size variant of a bigger listing). Walks
 // that category's Keepa Best Sellers list (already rank-ordered) and returns every ASIN that
