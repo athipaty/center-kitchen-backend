@@ -47,6 +47,12 @@ const productSchema = new mongoose.Schema(
     // Set when a zero-view listing gets an automatic retitle rescue attempt — gives it
     // a 7-day second-chance window before auto-end-zero-views actually ends it.
     zeroViewRescueAt: { type: Date, default: null },
+    // Amazon's "Ships from" / "Sold by" at the time this product was added — isAmazonFulfilled
+    // flags FBA (Amazon warehouse ships it, even for 3rd-party brands), which is the source of
+    // eBay-unvalidatable TBA/Amazon-Logistics tracking numbers. null = unknown (fetch failed).
+    shipsFrom: { type: String, default: null },
+    soldBy: { type: String, default: null },
+    isAmazonFulfilled: { type: Boolean, default: null },
   },
   { timestamps: true }
 );

@@ -56,11 +56,13 @@ router.post("/preview", async (req, res) => {
       url: `${baseDomain}/dp/${v.asin}`,
     }));
     const groupId = extractAsin(cleanedUrl);
+    const fulfillment = await fetchFulfillment(cleanedUrl);
     res.json({
       title: info.title, price: info.price, currency: info.currency, image: info.image,
       isPrime: info.isPrime || false, upc: info.upc || null, variants, groupId,
       specs: info.specs || {}, bullets: info.bullets || [], images: info.images || [],
       listPrice: info.listPrice ?? null, rating: info.rating ?? null, reviewCount: info.reviewCount ?? 0,
+      fulfillment,
     });
   } catch (err) {
     res.status(502).json({ error: err.message });
@@ -352,7 +354,7 @@ router.get("/best-sellers-by-category", async (req, res) => {
 // POST add a product to track
 router.post("/", async (req, res) => {
   try {
-    const { url, groupId } = req.body;
+    const { url, groupId, fulfillment } = req.body;
     if (!url) return res.status(400).json({ error: "url is required" });
 
     const cleanedUrl = cleanUrl(url);
@@ -378,6 +380,11 @@ router.post("/", async (req, res) => {
       groupId: groupId || null,
       specs: info.specs || {},
       bullets: info.bullets || [],
+      // Reuses the fulfillment lookup already done during /preview instead of paying for
+      // another ScraperAPI call — see fetchFulfillment. Absent/malformed body just leaves these null.
+      shipsFrom: fulfillment?.shipsFrom ?? null,
+      soldBy: fulfillment?.soldBy ?? null,
+      isAmazonFulfilled: typeof fulfillment?.isAmazonFulfilled === 'boolean' ? fulfillment.isAmazonFulfilled : null,
     });
 
     scheduler.scheduleNew(product);
@@ -644,6 +651,35 @@ async function scraperApiAutoparse(amazonUrl) {
     console.warn(`scraperApiAutoparse failed for ${amazonUrl}: ${e.message}`);
     return null;
   }
+}
+
+// ScraperAPI's autoparse ships_from/sold_by come back as messy duplicated-whitespace DOM text
+// (e.g. "Amazon \n     Amazon     Ships from     Amazon") rather than a clean string — collapsing
+// to the set of distinct words (minus the "Ships from" label) sidesteps the duplication and just
+// asks "is the only merchant name mentioned literally 'Amazon'?". A real 3rd-party self-ship
+// seller's name (e.g. "Garden Girl") survives this as its own multi-word distinct set.
+function isAmazonFulfilled(shipsFrom) {
+  if (!shipsFrom) return null;
+  const words = String(shipsFrom)
+    .replace(/ships\s*from/gi, '')
+    .split(/\s+/)
+    .map(w => w.trim())
+    .filter(Boolean);
+  if (!words.length) return null;
+  return words.every(w => /^amazon(\.com)?$/i.test(w));
+}
+
+// Best-effort "who actually ships this" lookup for the Add-product flow — lets a seller see,
+// before they commit to tracking a product, whether it's Fulfilled-by-Amazon (which is where
+// eBay-unvalidatable TBA/Amazon-Logistics tracking numbers come from) or merchant-shipped
+// (which ships via a real carrier the seller picks, almost always eBay-validatable). Never
+// throws — a failed lookup just means the badge doesn't render, not a broken preview.
+async function fetchFulfillment(amazonUrl) {
+  const parsed = await scraperApiAutoparse(amazonUrl);
+  if (!parsed) return { shipsFrom: null, soldBy: null, isAmazonFulfilled: null };
+  const shipsFrom = parsed.ships_from || null;
+  const soldBy = parsed.sold_by || null;
+  return { shipsFrom, soldBy, isAmazonFulfilled: isAmazonFulfilled(shipsFrom) };
 }
 
 // Amazon sometimes cross-links closely related listings (e.g. a single-pack and a multi-pack
