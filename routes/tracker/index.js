@@ -676,15 +676,25 @@ async function scraperApiAutoparse(amazonUrl) {
 // to the set of distinct words (minus the "Ships from" label) sidesteps the duplication and just
 // asks "is the only merchant name mentioned literally 'Amazon'?". A real 3rd-party self-ship
 // seller's name (e.g. "Garden Girl") survives this as its own multi-word distinct set.
-function isAmazonFulfilled(shipsFrom) {
-  if (!shipsFrom) return null;
-  const words = String(shipsFrom)
-    .replace(/ships\s*from/gi, '')
-    .split(/\s+/)
-    .map(w => w.trim())
-    .filter(Boolean);
-  if (!words.length) return null;
-  return words.every(w => /^amazon(\.com)?$/i.test(w));
+//
+// ships_from is sometimes missing entirely rather than duplicated — verified live on a listing
+// sold directly by Amazon.com (B000KL1LDE): autoparse returned soldBy:"Amazon.com" but
+// shipsFrom:null. When Amazon is both seller and shipper the page apparently doesn't always
+// render a separate "Ships from" line, so soldBy is checked as a fallback rather than leaving
+// an unambiguous case as "unknown".
+const _isAmazonWord = w => /^amazon(\.com)?$/i.test(String(w || '').trim());
+
+function isAmazonFulfilled(shipsFrom, soldBy) {
+  if (shipsFrom) {
+    const words = String(shipsFrom)
+      .replace(/ships\s*from/gi, '')
+      .split(/\s+/)
+      .map(w => w.trim())
+      .filter(Boolean);
+    if (words.length) return words.every(w => /^amazon(\.com)?$/i.test(w));
+  }
+  if (soldBy && _isAmazonWord(soldBy)) return true;
+  return null;
 }
 
 // Best-effort "who actually ships this" lookup for the Add-product flow — lets a seller see,
@@ -697,7 +707,7 @@ async function fetchFulfillment(amazonUrl) {
   if (!parsed) return { shipsFrom: null, soldBy: null, isAmazonFulfilled: null };
   const shipsFrom = parsed.ships_from || null;
   const soldBy = parsed.sold_by || null;
-  return { shipsFrom, soldBy, isAmazonFulfilled: isAmazonFulfilled(shipsFrom) };
+  return { shipsFrom, soldBy, isAmazonFulfilled: isAmazonFulfilled(shipsFrom, soldBy) };
 }
 
 // Amazon sometimes cross-links closely related listings (e.g. a single-pack and a multi-pack

@@ -34,15 +34,21 @@ async function scraperApiAutoparse(amazonUrl) {
   }
 }
 
-function isAmazonFulfilled(shipsFrom) {
-  if (!shipsFrom) return null;
-  const words = String(shipsFrom)
-    .replace(/ships\s*from/gi, '')
-    .split(/\s+/)
-    .map(w => w.trim())
-    .filter(Boolean);
-  if (!words.length) return null;
-  return words.every(w => /^amazon(\.com)?$/i.test(w));
+// Kept in sync with the copy in routes/tracker/index.js — soldBy fallback added after
+// B000KL1LDE (sold directly by Amazon.com) came back shipsFrom:null on autoparse.
+const _isAmazonWord = w => /^amazon(\.com)?$/i.test(String(w || '').trim());
+
+function isAmazonFulfilled(shipsFrom, soldBy) {
+  if (shipsFrom) {
+    const words = String(shipsFrom)
+      .replace(/ships\s*from/gi, '')
+      .split(/\s+/)
+      .map(w => w.trim())
+      .filter(Boolean);
+    if (words.length) return words.every(w => /^amazon(\.com)?$/i.test(w));
+  }
+  if (soldBy && _isAmazonWord(soldBy)) return true;
+  return null;
 }
 
 async function main() {
@@ -64,7 +70,7 @@ async function main() {
     const parsed = await scraperApiAutoparse(p.url);
     const shipsFrom = parsed?.ships_from || null;
     const soldBy = parsed?.sold_by || null;
-    const flag = isAmazonFulfilled(shipsFrom);
+    const flag = isAmazonFulfilled(shipsFrom, soldBy);
 
     await Product.updateOne({ _id: p._id }, { $set: { shipsFrom, soldBy, isAmazonFulfilled: flag } });
 
