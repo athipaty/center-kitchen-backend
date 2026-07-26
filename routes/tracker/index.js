@@ -85,7 +85,7 @@ function _keepaImageUrl(p) {
   return `https://m.media-amazon.com/images/I/${img.l || img.m}`;
 }
 // Amazon browse-node IDs that Keepa uses for category filtering (matches Amazon's native IDs).
-// Used by /best-sellers-by-category.
+// Used by /new-releases-by-category.
 const KEEPA_CATEGORY_IDS = {
   'Electronics':              172282,
   'Home & Kitchen':           1055398,
@@ -289,9 +289,9 @@ router.get("/related-for/:asin", async (req, res) => {
 });
 
 // GET on-demand Amazon fulfillment lookup for one candidate — backs the "Check shipping" button
-// in the product-search panels (best-sellers-by-category, related-items). Deliberately a
+// in the product-search panels (new-releases-by-category, related-items). Deliberately a
 // per-click lookup rather than enriching every search result automatically: a category search
-// can return up to 25 candidates, and eagerly autoparse-ing all of them would both burn 25
+// can return up to 50 candidates, and eagerly autoparse-ing all of them would both burn 50
 // ScraperAPI credits per search and mean firing that many scrapes back-to-back — the codebase's
 // existing image-scrape queue (queueImageUpload) already treats concurrent Amazon page fetches
 // as a bot-detection risk worth avoiding, so this stays opt-in per item instead.
@@ -306,67 +306,102 @@ router.get("/fulfillment", async (req, res) => {
   }
 });
 
-// GET best-selling, single-listing products for one Amazon category — deliberately excludes
-// anything with a parentAsin (i.e. a color/size/pack-size variant of a bigger listing). Walks
-// that category's Keepa Best Sellers list (already rank-ordered) and returns every ASIN that
-// both has no parent AND clears the filter bar (Prime, rating >=4.0 when rated, $60 or less),
-// in rank order — one Best Sellers call + one batched product call.
-router.get("/best-sellers-by-category", async (req, res) => {
+// Scrapes Amazon's own category search, sorted "Newest Arrivals" (s=date-desc-rank), for
+// candidate ASINs in newest-first order. Keepa's API has no dedicated New Releases endpoint —
+// only Best Sellers by category node (verified against Keepa's own request builder) — so this
+// goes straight to Amazon instead. Verified live: the bare category URL (rh=n:{nodeId}, no sort)
+// renders a JS department landing page with zero parseable data-asin cards, but adding
+// s=date-desc-rank returns a normal server-rendered results grid — no render:true needed, one
+// credit per page. Paginates until enough raw candidates exist for the no-variant/Prime/rating/
+// price filter downstream to have a real shot at 50 survivors — verified live on Home & Kitchen:
+// ~83% of "Newest Arrivals" candidates carry a parentAsin (brand-new listings launch with
+// color/size options far more often than established best-sellers do), for an overall yield
+// around 6%, so the target pool has to run much bigger than the old 100-candidate best-seller
+// pool did to reliably clear 50.
+async function _fetchNewReleaseAsins(nodeId, { maxPages = 25, targetCandidates = 900 } = {}) {
+  if (!process.env.SCRAPER_API_KEY) return [];
+  const seen = new Set();
+  const asins = [];
+  for (let page = 1; page <= maxPages && asins.length < targetCandidates; page++) {
+    try {
+      const { data: html } = await axios.get("http://api.scraperapi.com/", {
+        params: {
+          api_key: process.env.SCRAPER_API_KEY,
+          url: `https://www.amazon.com/s?rh=n%3A${nodeId}&s=date-desc-rank&page=${page}`,
+        },
+        timeout: 60000,
+      });
+      if (typeof html !== "string") break;
+      const pageAsins = [...html.matchAll(/data-asin="([A-Z0-9]{10})"/g)].map(m => m[1]);
+      if (!pageAsins.length) break; // out of pages, or blocked — stop rather than keep burning credits
+      for (const asin of pageAsins) {
+        if (!seen.has(asin)) { seen.add(asin); asins.push(asin); }
+      }
+    } catch (e) {
+      console.error(`_fetchNewReleaseAsins(${nodeId}, page ${page}):`, e.message);
+      break;
+    }
+  }
+  return asins;
+}
+
+// GET newest-released, single-listing products for one Amazon category — deliberately excludes
+// anything with a parentAsin (i.e. a color/size/pack-size variant of a bigger listing). Sources
+// candidate ASINs from Amazon's own "Newest Arrivals" category sort (see
+// _fetchNewReleaseAsins), then returns every ASIN that both has no parent AND clears the filter
+// bar (Prime, rating >=4.0 when rated, $60 or less), in newest-first order, up to 50 — walking
+// Keepa /product in 100-ASIN chunks and stopping as soon as 50 deals clear.
+router.get("/new-releases-by-category", async (req, res) => {
   try {
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
+    if (!process.env.SCRAPER_API_KEY) return res.status(500).json({ error: "SCRAPER_API_KEY not set" });
     const keepaKey = process.env.KEEPA_API_KEY;
 
     const category = (req.query.category || "").trim();
     if (!category || !KEEPA_CATEGORY_IDS[category])
       return res.status(400).json({ error: `category is required and must be one of: ${Object.keys(KEEPA_CATEGORY_IDS).join(', ')}` });
 
-    const { data: bsData } = await axios.get("https://api.keepa.com/bestsellers", {
-      params: { key: keepaKey, domain: 1, category: KEEPA_CATEGORY_IDS[category] },
-      timeout: 30000,
-    });
-    // Best-seller lists skew heavily toward multi-variant listings (a top seller almost always
-    // has color/size options), which the no-variant filter below eliminates before Prime/rating/
-    // price even apply — 40 candidates was leaving some categories with 0-1 survivors. 100 is
-    // Keepa's per-request ASIN cap for /product, so this is the largest pool obtainable in one
-    // batched call (costs proportionally more Keepa tokens per search, ~2.5x vs. 40).
-    const rankedAsins = (bsData.bestSellersList?.asinList || []).slice(0, 100);
-    if (!rankedAsins.length) return res.json({ deals: [], note: `No best-sellers data for "${category}".` });
-
-    const { data: prodData } = await axios.get("https://api.keepa.com/product", {
-      params: { key: keepaKey, asin: rankedAsins.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
-      timeout: 60000,
-    });
-    const byAsin = new Map((prodData.products || []).map(p => [p.asin, p]));
+    const candidateAsins = await _fetchNewReleaseAsins(KEEPA_CATEGORY_IDS[category]);
+    if (!candidateAsins.length) return res.json({ deals: [], note: `No new-releases data for "${category}".` });
 
     const deals = [];
-    for (const asin of rankedAsins) {
-      const p = byAsin.get(asin);
-      if (!p || p.parentAsin) continue; // skip anything that's one variant among many
-
-      const price = _kCents(p.stats?.buyBoxPrice);
-      const isPrime = p.stats?.buyBoxIsPrimeEligible === true;
-      const ratingRaw = _lastCsvValue(p.csv, 16);
-      const rating = ratingRaw > 0 ? ratingRaw / 10 : null;
-      if (price == null || price > 60 || !isPrime || (rating != null && rating < 4.0)) continue;
-
-      deals.push({
-        category,
-        asin: p.asin,
-        title: p.title || "",
-        image: _keepaImageUrl(p),
-        url: `https://www.amazon.com/dp/${p.asin}`,
-        price,
-        currency: "$",
-        rating,
-        reviewCount: _lastCsvValue(p.csv, 17) || 0,
-        monthlySold: p.monthlySold > 0 ? p.monthlySold : null,
-        isPrime,
+    for (let i = 0; i < candidateAsins.length && deals.length < 50; i += 100) {
+      const chunk = candidateAsins.slice(i, i + 100);
+      const { data: prodData } = await axios.get("https://api.keepa.com/product", {
+        params: { key: keepaKey, asin: chunk.join(","), domain: 1, stats: 1, buybox: 1, rating: 1 },
+        timeout: 60000,
       });
-      if (deals.length >= 25) break;
+      const byAsin = new Map((prodData.products || []).map(p => [p.asin, p]));
+
+      for (const asin of chunk) {
+        if (deals.length >= 50) break;
+        const p = byAsin.get(asin);
+        if (!p || p.parentAsin) continue; // skip anything that's one variant among many
+
+        const price = _kCents(p.stats?.buyBoxPrice);
+        const isPrime = p.stats?.buyBoxIsPrimeEligible === true;
+        const ratingRaw = _lastCsvValue(p.csv, 16);
+        const rating = ratingRaw > 0 ? ratingRaw / 10 : null;
+        if (price == null || price > 60 || !isPrime || (rating != null && rating < 4.0)) continue;
+
+        deals.push({
+          category,
+          asin: p.asin,
+          title: p.title || "",
+          image: _keepaImageUrl(p),
+          url: `https://www.amazon.com/dp/${p.asin}`,
+          price,
+          currency: "$",
+          rating,
+          reviewCount: _lastCsvValue(p.csv, 17) || 0,
+          monthlySold: p.monthlySold > 0 ? p.monthlySold : null,
+          isPrime,
+        });
+      }
     }
 
-    console.log(`best-sellers-by-category (${category}): candidates=${rankedAsins.length} deals=${deals.length}`);
-    res.json({ deals, note: deals.length ? null : `No single-listing best sellers in "${category}" cleared the filters.` });
+    console.log(`new-releases-by-category (${category}): candidates=${candidateAsins.length} deals=${deals.length}`);
+    res.json({ deals, note: deals.length ? null : `No single-listing new releases in "${category}" cleared the filters.` });
   } catch (err) {
     if (err.response?.status === 429)
       return res.status(503).json({ error: "Rate limit — try again shortly." });
