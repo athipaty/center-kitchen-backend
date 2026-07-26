@@ -312,12 +312,8 @@ router.get("/fulfillment", async (req, res) => {
 // goes straight to Amazon instead. Verified live: the bare category URL (rh=n:{nodeId}, no sort)
 // renders a JS department landing page with zero parseable data-asin cards, but adding
 // s=date-desc-rank returns a normal server-rendered results grid — no render:true needed, one
-// credit per page. Paginates until enough raw candidates exist for the no-variant/Prime/rating/
-// price filter downstream to have a real shot at 50 survivors — verified live on Home & Kitchen:
-// ~83% of "Newest Arrivals" candidates carry a parentAsin (brand-new listings launch with
-// color/size options far more often than established best-sellers do), for an overall yield
-// around 6%, so the target pool has to run much bigger than the old 100-candidate best-seller
-// pool did to reliably clear 50.
+// credit per page. Paginates until enough raw candidates exist for the Prime/rating/price
+// filter downstream to have a real shot at 50 survivors.
 async function _fetchNewReleaseAsins(nodeId, { maxPages = 25, targetCandidates = 900 } = {}) {
   if (!process.env.SCRAPER_API_KEY) return [];
   const seen = new Set();
@@ -345,12 +341,10 @@ async function _fetchNewReleaseAsins(nodeId, { maxPages = 25, targetCandidates =
   return asins;
 }
 
-// GET newest-released, single-listing products for one Amazon category — deliberately excludes
-// anything with a parentAsin (i.e. a color/size/pack-size variant of a bigger listing). Sources
-// candidate ASINs from Amazon's own "Newest Arrivals" category sort (see
-// _fetchNewReleaseAsins), then returns every ASIN that both has no parent AND clears the filter
-// bar (Prime, rating >=4.0 when rated, $60 or less), in newest-first order, up to 50 — walking
-// Keepa /product in 100-ASIN chunks and stopping as soon as 50 deals clear.
+// GET newest-released products for one Amazon category. Sources candidate ASINs from Amazon's
+// own "Newest Arrivals" category sort (see _fetchNewReleaseAsins), then returns every ASIN that
+// clears the filter bar (Prime, rating >=4.0 when rated, $60 or less), in newest-first order,
+// up to 50 — walking Keepa /product in 100-ASIN chunks and stopping as soon as 50 deals clear.
 router.get("/new-releases-by-category", async (req, res) => {
   try {
     if (!process.env.KEEPA_API_KEY) return res.status(500).json({ error: "KEEPA_API_KEY not set" });
@@ -376,7 +370,7 @@ router.get("/new-releases-by-category", async (req, res) => {
       for (const asin of chunk) {
         if (deals.length >= 50) break;
         const p = byAsin.get(asin);
-        if (!p || p.parentAsin) continue; // skip anything that's one variant among many
+        if (!p) continue;
 
         const price = _kCents(p.stats?.buyBoxPrice);
         const isPrime = p.stats?.buyBoxIsPrimeEligible === true;
@@ -401,7 +395,7 @@ router.get("/new-releases-by-category", async (req, res) => {
     }
 
     console.log(`new-releases-by-category (${category}): candidates=${candidateAsins.length} deals=${deals.length}`);
-    res.json({ deals, note: deals.length ? null : `No single-listing new releases in "${category}" cleared the filters.` });
+    res.json({ deals, note: deals.length ? null : `No new releases in "${category}" cleared the filters.` });
   } catch (err) {
     if (err.response?.status === 429)
       return res.status(503).json({ error: "Rate limit — try again shortly." });
