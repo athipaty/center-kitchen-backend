@@ -128,6 +128,18 @@ function decodeEntities(str) {
   return (str || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
+// Extracts a <Variation> block's full label by joining every dimension's <Value> in document
+// order (e.g. "Grey / 8" for Color=Grey, PackageQuantity=8) — matching the " / "-joined format
+// Product.variant is stored in. A naive single-<Value> match (previously used here) only ever
+// captures the FIRST dimension for a 2-dimension (Color + PackageQuantity/Size) listing, making
+// every quantity of the same color look identical — confirmed live on listing 358852561875,
+// where this collapsed price syncing so all quantities of a color shared one price (whichever
+// DB variant happened to win the ambiguous single-color match).
+function extractVariationLabel(block) {
+  const values = [...block.matchAll(/<NameValueList>[\s\S]*?<Value>([\s\S]*?)<\/Value>/g)].map(m => m[1]);
+  return values.join(' / ');
+}
+
 function labelMatch(blockVal, label) {
   const v = decodeEntities(blockVal).toLowerCase().trim();
   const l = (label || '').toLowerCase().trim();
@@ -173,13 +185,18 @@ async function buildMissingVariationXml(cleanId, varBlocks) {
   const tracked = await Product.find({ ebayListingId: cleanId }, 'variant status current').lean();
   if (tracked.length <= varBlocks.length) return '';
 
-  const liveLabels = varBlocks.map(b => decodeEntities(b.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '').toLowerCase().trim());
+  const liveLabels = varBlocks.map(b => decodeEntities(extractVariationLabel(b)).toLowerCase().trim());
   // Only re-add variants that are currently 'active' — re-adding an out-of-stock/unavailable
   // variant would immediately fight the next OOS check (which can't safely zero it back out,
   // since eBay deletes zero-quantity variations rather than marking them OOS).
   const missing = tracked.filter(p => p.variant && p.status === 'active' && !liveLabels.includes(p.variant.toLowerCase().trim()));
   if (!missing.length) return '';
 
+  // NOTE: only rebuilds a single dimension (known limitation) — a 2-dimension listing
+  // (e.g. Color + PackageQuantity) re-added here would come back missing its second
+  // NameValueList. This self-heal path is a rare fallback (a variant fully vanishing from
+  // eBay), not the common case, so it's left as-is for now rather than plumbing through
+  // Product.attributes to rebuild both dimensions.
   const dimName = varBlocks[0].match(/<NameValueList>[\s\S]*?<Name>([\s\S]*?)<\/Name>/)?.[1] || 'Style';
   const siblingFallbackPrice = varBlocks[0].match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] || '0.00';
 
@@ -225,8 +242,7 @@ async function syncEbayQty(listingId, variantLabel, qty) {
     const soldM = block.match(/<QuantitySold>(\d+)<\/QuantitySold>/);
     const currentSold = soldM ? parseInt(soldM[1], 10) : 0;
 
-    const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
-    const varVal = valueMatch?.[1] || '';
+    const varVal = extractVariationLabel(block);
     // No label = update all variations; with label = match only the target variant
     const isMatch = !label || labelMatch(varVal, label);
 
@@ -280,8 +296,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
     const dbVariants = await Product.find({ ebayListingId: cleanId }).lean();
 
     const variationXml = varBlocks.map(block => {
-      const valueMatch = block.match(/<Value>([\s\S]*?)<\/Value>/i);
-      const ebayLabel = valueMatch?.[1] || '';
+      const ebayLabel = extractVariationLabel(block);
       const currentPriceM = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
       const currentPrice = currentPriceM ? parseFloat(currentPriceM[1]).toFixed(2) : priceStr;
 
@@ -309,7 +324,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
     // in the UI but price syncs silently do nothing for it.
     // Log a warning immediately; auto-clear ebayListingId once the variant goes unavailable.
     const liveLabels = varBlocks
-      .map(b => decodeEntities(b.match(/<Value>([\s\S]*?)<\/Value>/i)?.[1] || '').toLowerCase().trim())
+      .map(b => decodeEntities(extractVariationLabel(b)).toLowerCase().trim())
       .filter(Boolean);
     for (const dbv of dbVariants) {
       const dbl = (dbv.variant || '').toLowerCase().trim();
