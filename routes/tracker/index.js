@@ -429,6 +429,7 @@ router.post("/", async (req, res) => {
       history: [{ price: info.price }],
       isPrime: info.isPrime || false,
       variant: info.variant || null,
+      attributes: info.attributes || [],
       groupId: groupId || null,
       specs: info.specs || {},
       bullets: info.bullets || [],

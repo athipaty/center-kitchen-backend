@@ -264,7 +264,7 @@ async function fetchProduct(url, { priceOnly = false, skipVariants = false, forc
     return {
       title: null, price, currency: "$",
       image: null, images: [], upc: null,
-      variants: [], isPrime: null, variant: null, specs: {},
+      variants: [], isPrime: null, variant: null, attributes: [], specs: {},
     };
   }
 
@@ -280,12 +280,16 @@ async function fetchProduct(url, { priceOnly = false, skipVariants = false, forc
   const isNewRelease = false;
 
   // Variant label: find this ASIN in the variations list (most reliable source)
-  let variant = null;
+  let variant = null, attributes = [];
   if (Array.isArray(product.variations)) {
     const self = product.variations.find(v => v.asin === product.asin);
-    if (self) variant = labelFromAttrs(self.attributes);
+    if (self) {
+      variant = labelFromAttrs(self.attributes);
+      attributes = Array.isArray(self.attributes) ? self.attributes : [];
+    }
   }
-  // Fallback: product's own color/size fields
+  // Fallback: product's own color/size fields — leaves `attributes` empty, which is the
+  // intended "no structured dimension data available" signal for eBay listing creation.
   if (!variant) {
     const parts = [product.color, product.size].filter(Boolean);
     if (parts.length) variant = parts.join(' / ');
@@ -317,7 +321,7 @@ async function fetchProduct(url, { priceOnly = false, skipVariants = false, forc
   // Pass cachedParent so fetchVariants reuses it if we already fetched it above.
   const variants = skipVariants ? [] : await fetchVariants(product, baseDomain, parentProduct);
 
-  return { title, price, currency: "$", listPrice, image, images, upc, variants, isPrime, variant, specs, bullets, rating, reviewCount, isNewRelease };
+  return { title, price, currency: "$", listPrice, image, images, upc, variants, isPrime, variant, attributes, specs, bullets, rating, reviewCount, isNewRelease };
 }
 
 module.exports = { cleanUrl, extractAsin, fetchProduct };

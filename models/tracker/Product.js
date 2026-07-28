@@ -22,6 +22,11 @@ const productSchema = new mongoose.Schema(
     nextCheck: { type: Date, default: () => new Date() },
     isPrime: { type: Boolean, default: false },
     variant: { type: String, default: null },
+    // Structured per-dimension breakdown of `variant` (e.g. [{dimension:"Color",value:"Grey"},
+    // {dimension:"PackageQuantity",value:"24"}]) — populated when Keepa exposes >=1 variation
+    // axis for this ASIN. Lets eBay listing creation build true multi-dimension variations
+    // instead of guessing a single dimension from the flattened `variant` string.
+    attributes: { type: [{ dimension: String, value: String, _id: false }], default: [] },
     groupId: { type: String, default: null, index: true },
     specs: { type: mongoose.Schema.Types.Mixed, default: {} },
     bullets: { type: [String], default: [] },

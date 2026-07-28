@@ -3148,8 +3148,9 @@ router.post('/trading-create-listing', async (req, res) => {
       title, price: _price, currency = 'USD', quantity = 1,
       condition = 'NEW', categoryId,
       imageUrls = [], upc, specs = {}, bullets = [], description,
-      variants, // [{ label, price, quantity }] for multi-variation
-      variantDimension = 'Color', // e.g. 'Color', 'Size', 'Style'
+      variants, // [{ label, price, quantity, specifics: [{name,value}] }] for multi-variation
+      variantDimension = 'Color', // legacy single-dimension callers, e.g. 'Color', 'Size', 'Style'
+      dimensions: dimensionsParam = [], // preferred: up to 2 dimension names, e.g. ['Color','PackageQuantity']
       shipping = { free: true, carrier: 'FedExStandardOvernight', handlingDays: 2 },
       returns = { accepted: true, days: 30, buyerPays: true },
       // Seller location — defaults match account registered location
@@ -3184,23 +3185,40 @@ router.post('/trading-create-listing', async (req, res) => {
     const variantLabels = (variants || []).map(v => v.label).filter(Boolean);
     await enrichAspectsWithAI(catId, aspects, safeTitle, specs, bullets, variantLabels);
 
-    // For multi-variation listings, the variantDimension (Color/Size/Style) MUST NOT appear
-    // in ItemSpecifics — eBay error 21916626 fires if the same name appears in both.
-    // Exception: single-variant listings have no variation conflict, so keep the dimension
-    // as an item specific (e.g. Size="9 Months" on a single-size baby shirt).
-    // Save the value first: if eBay rejects this dimension (21920061) and we switch to another,
-    // the saved value gets restored as a required item specific on the retry.
     // Single-variant products must NOT use multi-SKU format — eBay requires 2+ variations.
     // List them as plain single items; include the variant label as a Style item specific.
     const isMultiVariation = (variants?.length || 0) > 1;
-    console.log(`trading-create-listing: variants=${variants?.length || 0} isMultiVariation=${isMultiVariation}`);
+    // Up to 2 real eBay variation dimensions (e.g. Color + PackageQuantity). Falls back to the
+    // legacy single `variantDimension` string when the caller doesn't send the `dimensions` array
+    // — keeps older frontend builds working unchanged during a partial deploy.
+    let dimensions = (dimensionsParam.length ? dimensionsParam : [variantDimension]).filter(Boolean).slice(0, 2);
+    console.log(`trading-create-listing: variants=${variants?.length || 0} isMultiVariation=${isMultiVariation} dimensions=${dimensions.join('+')}`);
     if ((variants?.length || 0) === 1 && variants[0]?.label) {
       aspects['Style'] = [variants[0].label];
       if (variants[0].price) price = String(Number(variants[0].price).toFixed(2));
     }
 
-    const savedVarDimAspect = (isMultiVariation && variantDimension) ? (aspects[variantDimension] || null) : null;
-    if (isMultiVariation && variantDimension) delete aspects[variantDimension];
+    // Per-variant { name, value } specifics, one per dimension. Falls back to the legacy
+    // single-dimension shape (`{ name: dimensions[0], value: v.label }`) when a variant wasn't
+    // given a `specifics` array — keeps older frontend builds working unchanged.
+    function specificsFor(v) {
+      if (Array.isArray(v.specifics) && v.specifics.length) return v.specifics.filter(s => s.value);
+      return [{ name: dimensions[0], value: v.label }];
+    }
+
+    // For multi-variation listings, each variation dimension name (Color/Size/PackageQuantity/...)
+    // MUST NOT appear in ItemSpecifics — eBay error 21916626 fires if the same name appears in
+    // both. Exception: single-variant listings have no variation conflict, so keep the dimension
+    // as an item specific (e.g. Size="9 Months" on a single-size baby shirt).
+    // Save each value first: if eBay rejects a dimension (21920061) and we switch to another,
+    // the saved value gets restored as a required item specific on the retry.
+    const savedVarDimAspects = {};
+    if (isMultiVariation) {
+      for (const dim of dimensions) {
+        if (aspects[dim]) savedVarDimAspects[dim] = aspects[dim];
+        delete aspects[dim];
+      }
+    }
 
     const buildSpecXml = (asp) => Object.entries(asp)
       .map(([name, vals]) => `<NameValueList><Name>${escXml(name)}</Name>${vals.map(v => `<Value>${escXml(String(v))}</Value>`).join('')}</NameValueList>`)
@@ -3281,17 +3299,20 @@ router.post('/trading-create-listing', async (req, res) => {
       );
     }
 
-    // Multi-variation XML block (built once, reused in buildBody)
-    let varSpecsXml = '';
-    if (isMultiVariation) {
+    // Builds the full <Variations> block for a given set of 1-2 dimension names — shared by the
+    // initial build below and every fallback retry branch (21920061, 21919303) that swaps a
+    // rejected/conflicting dimension name for another.
+    function buildVariationsXml(dims) {
+      if (!variants?.length) return '';
       const variationsXml = variants.map(v => {
         const varPrice = v.price || price;
+        const nvXml = specificsFor(v)
+          .map(s => `<NameValueList><Name>${escXml(s.name)}</Name><Value>${escXml(s.value)}</Value></NameValueList>`)
+          .join('');
         return `<Variation>
           <StartPrice currencyID="USD">${Number(varPrice).toFixed(2)}</StartPrice>
           <Quantity>${Number(v.quantity) || 1}</Quantity>
-          <VariationSpecifics>
-            <NameValueList><Name>${escXml(variantDimension)}</Name><Value>${escXml(v.label)}</Value></NameValueList>
-          </VariationSpecifics>
+          <VariationSpecifics>${nvXml}</VariationSpecifics>
         </Variation>`;
       }).join('');
 
@@ -3299,27 +3320,32 @@ router.post('/trading-create-listing', async (req, res) => {
       const variantsWithImages = variants.filter(v => v.images?.length || v.image);
       const variationPicturesXml = variantsWithImages.length ? `
         <Pictures>
-          <VariationSpecificName>${escXml(variantDimension)}</VariationSpecificName>
+          ${dims.map(dim => `<VariationSpecificName>${escXml(dim)}</VariationSpecificName>`).join('')}
           ${variantsWithImages.map(v => {
             const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []);
+            const specs = specificsFor(v);
+            const valuesXml = dims.map(dim => `<VariationSpecificValue>${escXml(specs.find(s => s.name === dim)?.value || '')}</VariationSpecificValue>`).join('');
             return `<VariationSpecificPictureSet>
-            <VariationSpecificValue>${escXml(v.label)}</VariationSpecificValue>
+            ${valuesXml}
             ${imgs.map(img => `<PictureURL>${escXml(img)}</PictureURL>`).join('')}
           </VariationSpecificPictureSet>`;
           }).join('')}
         </Pictures>` : '';
 
-      varSpecsXml = `<Variations>
+      const specsSetXml = dims.map(dim => {
+        const vals = [...new Set(variants.map(v => specificsFor(v).find(s => s.name === dim)?.value).filter(Boolean))];
+        return `<NameValueList><Name>${escXml(dim)}</Name>${vals.map(val => `<Value>${escXml(val)}</Value>`).join('')}</NameValueList>`;
+      }).join('');
+
+      return `<Variations>
         ${variationsXml}
-        <VariationSpecificsSet>
-          <NameValueList>
-            <Name>${escXml(variantDimension)}</Name>
-            ${variants.map(v => `<Value>${escXml(v.label)}</Value>`).join('')}
-          </NameValueList>
-        </VariationSpecificsSet>
+        <VariationSpecificsSet>${specsSetXml}</VariationSpecificsSet>
         ${variationPicturesXml}
       </Variations>`;
     }
+
+    // Multi-variation XML block (built once, reused in buildBody)
+    let varSpecsXml = isMultiVariation ? buildVariationsXml(dimensions) : '';
 
     // Build AddFixedPriceItem body — accepts current item specifics so we can retry
     const buildBody = (iSpecXml) => {
@@ -3375,46 +3401,37 @@ router.post('/trading-create-listing', async (req, res) => {
       }
     };
 
-    // Helper to rebuild varSpecsXml with a different dimension name (used for 21920061 fallback)
-    function rebuildVarSpecsXml(dim) {
-      if (!variants?.length) return '';
-      const varXml = variants.map(v => {
-        const varPrice = v.price || price;
-        return `<Variation>
-          <StartPrice currencyID="USD">${Number(varPrice).toFixed(2)}</StartPrice>
-          <Quantity>${Number(v.quantity) || 1}</Quantity>
-          <VariationSpecifics>
-            <NameValueList><Name>${escXml(dim)}</Name><Value>${escXml(v.label)}</Value></NameValueList>
-          </VariationSpecifics>
-        </Variation>`;
-      }).join('');
-      const withImgs = variants.filter(v => v.images?.length || v.image);
-      const picXml = withImgs.length ? `<Pictures>
-        <VariationSpecificName>${escXml(dim)}</VariationSpecificName>
-        ${withImgs.map(v => { const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []); return `<VariationSpecificPictureSet><VariationSpecificValue>${escXml(v.label)}</VariationSpecificValue>${imgs.map(img => `<PictureURL>${escXml(img)}</PictureURL>`).join('')}</VariationSpecificPictureSet>`; }).join('')}
-      </Pictures>` : '';
-      return `<Variations>${varXml}<VariationSpecificsSet><NameValueList><Name>${escXml(dim)}</Name>${variants.map(v => `<Value>${escXml(v.label)}</Value>`).join('')}</NameValueList></VariationSpecificsSet>${picXml}</Variations>`;
-    }
-
     // First attempt
     let xml;
-    let activeDimension = variantDimension; // tracks the dimension currently in varSpecsXml
     ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
 
-    // 21920061 — this dimension is not allowed as a variation specific for this category.
-    // Fall back through Color → Size until eBay accepts one.
+    // 21920061 — one of the variation dimensions is not allowed as a variation specific for
+    // this category. Identify which dimension eBay rejected from the error's ErrorParameters
+    // (falls back to the first dimension if that can't be parsed — matches the pre-2D behavior
+    // of always retrying the active dimension) and swap only that one for an unused fallback
+    // name. With 2 real dimensions already occupying 2 of the 3 pool slots, only 1 fallback name
+    // is available for 2D groups — if that also gets rejected, the loop ends naturally here and
+    // falls through to the next retry stage (21916564 single-item strip) or the final error.
     if (!/<ItemID>\d+<\/ItemID>/.test(xml) && /<ErrorCode>21920061<\/ErrorCode>/.test(xml) && isMultiVariation) {
-      const fallbacks = ['Color', 'Size', 'Style'].filter(d => d !== activeDimension);
-      for (const fallbackDim of fallbacks) {
-        console.log(`trading-create-listing: 21920061 — "${activeDimension}" not allowed for cat ${catId}, retrying with "${fallbackDim}"`);
-        varSpecsXml = rebuildVarSpecsXml(fallbackDim);
+      const parseRejectedDim = (x) => {
+        const errBlock = x.match(/<Errors>([\s\S]*?21920061[\s\S]*?)<\/Errors>/)?.[1] || '';
+        const param = errBlock.match(/<ErrorParameters[^>]*>\s*<Value>([^<]+)<\/Value>/)?.[1];
+        return dimensions.find(d => d === param) || dimensions[0];
+      };
+      let rejectedDim = parseRejectedDim(xml);
+      const fallbackPool = ['Color', 'Size', 'Style'].filter(d => !dimensions.includes(d));
+      for (const fallbackDim of fallbackPool) {
+        console.log(`trading-create-listing: 21920061 — "${rejectedDim}" not allowed for cat ${catId}, retrying with "${fallbackDim}"`);
+        const newDims = dimensions.map(d => d === rejectedDim ? fallbackDim : d);
+        varSpecsXml = buildVariationsXml(newDims);
         // Restore the old dimension's value as a required item specific now that it's no
-        // longer the variation dim (e.g. Style="Sun Hat" for a hats category listing).
-        if (savedVarDimAspect) aspects[variantDimension] = savedVarDimAspect;
+        // longer a variation dim (e.g. Style="Sun Hat" for a hats category listing).
+        if (savedVarDimAspects[rejectedDim]) aspects[rejectedDim] = savedVarDimAspects[rejectedDim];
         delete aspects[fallbackDim]; // prevent new dim from appearing in item specifics
-        activeDimension = fallbackDim;
+        dimensions = newDims;
         ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
         if (/<ItemID>\d+<\/ItemID>/.test(xml) || !/<ErrorCode>21920061<\/ErrorCode>/.test(xml)) break;
+        rejectedDim = parseRejectedDim(xml); // re-derive in case a different dimension is now the problem
       }
     }
 
@@ -3485,21 +3502,32 @@ router.post('/trading-create-listing', async (req, res) => {
             if (!aspects[f]) aspects[f] = ['Other'];
           }
         }
-        // If the variantDimension is also a required item specific, we have a conflict:
-        // eBay requires it in ItemSpecifics but also forbids it there when it's the variation dim.
-        // Resolve by switching the variation to a different dimension so the item specific can stay.
-        if (isMultiVariation && variantDimension) {
-          if (missingFields.includes(variantDimension)) {
-            const altDim = ['Color', 'Size', 'Style'].find(d => d !== variantDimension);
-            if (altDim) {
-              console.log(`trading-create-listing: "${variantDimension}" is both a required item specific and the variation dim — switching variation to "${altDim}"`);
-              varSpecsXml = rebuildVarSpecsXml(altDim);
-              delete aspects[altDim];
+        // If any variation dimension is also a required item specific, we have a conflict: eBay
+        // requires it in ItemSpecifics but also forbids it there when it's a variation dim.
+        // Resolve by switching each conflicting dimension to an unused fallback name so the item
+        // specific can stay; both dimension names are excluded from ItemSpecifics regardless.
+        if (isMultiVariation && dimensions.length) {
+          const conflicting = dimensions.filter(d => missingFields.includes(d));
+          if (conflicting.length) {
+            let newDims = [...dimensions];
+            for (const conflictDim of conflicting) {
+              const altDim = ['Color', 'Size', 'Style'].find(d => !newDims.includes(d));
+              if (altDim) {
+                console.log(`trading-create-listing: "${conflictDim}" is both a required item specific and a variation dim — switching to "${altDim}"`);
+                newDims = newDims.map(d => d === conflictDim ? altDim : d);
+                delete aspects[altDim];
+                // Keep aspects[conflictDim] — it stays as a required item specific
+              }
+              // else: no unused fallback name available — conflictDim stays as the variation dim
+              // and gets excluded from ItemSpecifics below; eBay may still reject it, which is a
+              // real (rare) edge case surfaced via the final error response rather than silently eaten.
             }
-            // Keep aspects[variantDimension] — it stays as a required item specific
-          } else {
-            delete aspects[variantDimension];
+            if (newDims.join('|') !== dimensions.join('|')) {
+              varSpecsXml = buildVariationsXml(newDims);
+              dimensions = newDims;
+            }
           }
+          for (const dim of dimensions) delete aspects[dim];
         }
         console.log('trading-create-listing: retry specifics:', JSON.stringify(Object.fromEntries(missingFields.map(f => [f, aspects[f]]))));
         ({ data: xml } = await tradingPost('AddFixedPriceItem', buildBody(buildSpecXml(aspects))));
@@ -4152,7 +4180,7 @@ router.post('/auto-restock', async (req, res) => {
   }
 });
 
-// ── Manual trigger: auto-end listings 7+ days old with 0 views ────────
+// ── Manual trigger: auto-end dead listings (zero-view retitle rescue, 10-day low-view, 20-day stale) ──
 router.post('/auto-end-zero-views', async (req, res) => {
   try {
     const { autoEndZeroViews } = require('../jobs/trackerScheduler');
