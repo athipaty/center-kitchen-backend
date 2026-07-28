@@ -2428,10 +2428,20 @@ router.post('/listing/variation-photos', async (req, res) => {
     const withImages = variants.filter(v => v.images?.length || v.image);
     if (!withImages.length) return res.status(400).json({ error: 'No variant images provided' });
 
-    // Build map of incoming images by lowercase label
+    // For 2D groups, each variant carries structured `specifics` ([{name,value}]) — key images
+    // by the value matching this listing's actual photo dimension (dimName, e.g. "Color"), not
+    // the flattened `label` ("Grey / 8"), which would never match eBay's single-dimension photo
+    // values (just "Grey") and would silently pollute the Pictures block with unmatched entries.
+    // Falls back to `label` for legacy single-dimension callers that don't send `specifics`.
+    function photoValueFor(v) {
+      const match = Array.isArray(v.specifics) ? v.specifics.find(s => s.name === dimName) : null;
+      return match?.value || v.label || '';
+    }
+
+    // Build map of incoming images by lowercase photo-dimension value
     const incomingMap = {};
     for (const v of withImages) {
-      incomingMap[(v.label || '').toLowerCase()] = v.images?.length ? v.images : (v.image ? [v.image] : []);
+      incomingMap[photoValueFor(v).toLowerCase()] = v.images?.length ? v.images : (v.image ? [v.image] : []);
     }
 
     // Merge: use incoming images where provided; fall back to existing eBay photos for the rest.
@@ -2439,12 +2449,12 @@ router.post('/listing/variation-photos', async (req, res) => {
     const allLabels = new Set([
       ...Object.keys(ebayLabelMap),
       ...Object.keys(existingPicMap),
-      ...withImages.map(v => (v.label || '').toLowerCase()),
+      ...withImages.map(v => photoValueFor(v).toLowerCase()),
     ]);
 
     const pictureSets = [...allLabels].map(lowerLabel => {
       const exactLabel = ebayLabelMap[lowerLabel] || existingPicMap[lowerLabel]?.label
-        || withImages.find(v => v.label?.toLowerCase() === lowerLabel)?.label || lowerLabel;
+        || photoValueFor(withImages.find(v => photoValueFor(v).toLowerCase() === lowerLabel) || {}) || lowerLabel;
       const imgs = incomingMap[lowerLabel] || existingPicMap[lowerLabel]?.pics || [];
       if (!imgs.length) return '';
       return `<VariationSpecificPictureSet>
