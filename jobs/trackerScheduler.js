@@ -488,7 +488,7 @@ async function runOrphanCleanup() {
 // Auto-end three kinds of dead listings, then fill freed slots:
 //  1. 3+ days old, 0 views AND 0 watchers — gets a retitle rescue first, ends 3 days later if still zero (6 days total)
 //  2. 10+ days old, exactly 1 view, 0 watchers, 0 sold — ends immediately, no rescue
-//  3. 20+ days old, fewer than 4 views, 0 watchers, 0 sold — ends immediately, no rescue
+//  3. 20+ days old, fewer than 6 views, 0 watchers, 0 sold — ends immediately, no rescue
 async function runAutoEndZeroViews() {
   try {
     const { getAccessToken } = require('./ebayPriceSync');
@@ -631,18 +631,18 @@ async function runAutoEndZeroViews() {
       console.log('auto-end-zero-views: no low-view (1 view/10+ days) listings found');
     }
 
-    // Stale-demand listings: 20+ days old with fewer than 4 total views, no watchers, no
+    // Stale-demand listings: 20+ days old with fewer than 6 total views, no watchers, no
     // sales — 20 days of visibility is plenty to judge real demand, so no retitle rescue.
     // Excludes anything already ended above (toEnd/lowViewIds) to avoid a duplicate end call.
     const alreadyEnded = new Set([...zeroViewEndedIds, ...lowViewIds]);
     const staleIds = twentyPlusDayListings.filter(id =>
-      !alreadyEnded.has(id) && (viewCounts[id] || 0) < 4 && (watchCounts[id] || 0) === 0 && (soldCounts[id] || 0) === 0
+      !alreadyEnded.has(id) && (viewCounts[id] || 0) < 6 && (watchCounts[id] || 0) === 0 && (soldCounts[id] || 0) === 0
     );
     if (staleIds.length) {
-      console.log(`auto-end-zero-views: ${staleIds.length} listing(s) 20+ days old with <4 views, no watch, no sold → ending: ${staleIds.join(', ')}`);
-      await endAndCleanup(staleIds, '<4 views in 20+ days, no watch, no sold');
+      console.log(`auto-end-zero-views: ${staleIds.length} listing(s) 20+ days old with <6 views, no watch, no sold → ending: ${staleIds.join(', ')}`);
+      await endAndCleanup(staleIds, '<6 views in 20+ days, no watch, no sold');
     } else {
-      console.log('auto-end-zero-views: no stale (<4 views/20+ days) listings found');
+      console.log('auto-end-zero-views: no stale (<6 views/20+ days) listings found');
     }
   } catch (e) {
     console.error('auto-end-zero-views: error:', e.message);
@@ -1061,7 +1061,7 @@ function start(socketIo) {
   cron.schedule("15 3 * * 0", runWeeklyVariationSync);
   // Zero-view listings (3+ days old): retitle once as a rescue attempt, only end them if
   // still zero-view 3 days after that (6 days total). Also ends listings 10+ days old with
-  // exactly 1 view, and listings 20+ days old with fewer than 4 views — 0 watchers, 0 sold,
+  // exactly 1 view, and listings 20+ days old with fewer than 6 views — 0 watchers, 0 sold,
   // no rescue for either. Daily at 19:00 Singapore time.
   cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
   // Auto-restock sold listings back to qty 1 — runs every 30 minutes (was 15, halves GetOrders calls)
