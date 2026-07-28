@@ -54,6 +54,7 @@ app.use(
       "https://puthailand.vercel.app",
       "https://egp-steel.vercel.app",
       "https://youtube-tan-sigma.vercel.app",
+      "https://modu-high-1pde.vercel.app",
     ],
     credentials: true,
   }),
