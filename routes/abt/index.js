@@ -586,6 +586,39 @@ router.get('/egp-rss', async (req, res) => {
   setImmediate(() => bgFetchEgp(anounceType).catch(() => {}))
 })
 
+// Proxies an e-GP announcement link server-side for the frontend's inline preview iframe.
+// gprocurement.go.th pages are session/JS-gated (an onload script auto-submits a form to
+// finish loading) — embedding the live URL directly in a cross-origin iframe comes back
+// blank, since the browser sandboxes third-party frame navigation and the site's own script
+// doesn't behave the same way when framed. Fetching here (same approach as enrichAnnouncement)
+// and stripping <script> tags before serving removes the broken auto-redirect while leaving
+// the actual Thai announcement text — already present directly in the HTML body — intact and
+// safe to render. Raw PDFs (some agencies serve those instead) stream through unmodified.
+router.get('/egp-proxy', async (req, res) => {
+  try {
+    const { url } = req.query
+    if (!url || !/^https:\/\/[a-z0-9.-]+\.gprocurement\.go\.th\//i.test(url)) {
+      return res.status(400).send('invalid url')
+    }
+    const { data: buf } = await require('axios').get(url, {
+      responseType: 'arraybuffer', timeout: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' },
+    })
+    const isPdf = buf.length >= 4 && Buffer.from(buf).slice(0, 4).toString('latin1') === '%PDF'
+    if (isPdf) {
+      res.set('Content-Type', 'application/pdf')
+      return res.send(Buffer.from(buf))
+    }
+    const html = new TextDecoder('windows-874').decode(buf)
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<meta[^>]*charset[^>]*>/gi, '')
+    res.set('Content-Type', 'text/html; charset=utf-8')
+    res.send(`<meta charset="utf-8">${html}`)
+  } catch {
+    res.status(502).send('ไม่สามารถโหลดเอกสารได้')
+  }
+})
+
 async function bgEnrichNational(links) {
   for (const link of links) {
     try {
