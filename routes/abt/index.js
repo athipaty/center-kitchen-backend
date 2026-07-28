@@ -597,7 +597,8 @@ router.get('/egp-rss', async (req, res) => {
 router.get('/egp-proxy', async (req, res) => {
   try {
     const { url } = req.query
-    if (!url || !/^https:\/\/[a-z0-9.-]+\.gprocurement\.go\.th\//i.test(url)) {
+    // Real RSS entries use plain http:// (not https) — restrict by domain only, not scheme.
+    if (!url || !/^https?:\/\/[a-z0-9.-]+\.gprocurement\.go\.th\//i.test(url)) {
       return res.status(400).send('invalid url')
     }
     const { data: buf } = await require('axios').get(url, {
