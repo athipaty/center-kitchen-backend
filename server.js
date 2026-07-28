@@ -97,6 +97,12 @@ app.use('/api/inventory-filter',require('./routes/inventory/filter'));
 app.use('/api/recipes',     require('./routes/recipe/recipes'));
 app.use('/api/ingredients', require('./routes/recipe/ingredients'));
 
+// --- Modu High (second outlet — same app as Recipe, independent data) ---
+app.use('/api/modu-high/recipes',          require('./routes/moduHigh/recipes'));
+app.use('/api/modu-high/ingredients',      require('./routes/moduHigh/ingredients'));
+app.use('/api/modu-high/inventory-filter', require('./routes/moduHigh/inventoryFilter'));
+app.use('/api/modu-high/auth',             require('./routes/moduHigh/auth'));
+
 // --- Shared ---
 app.use('/auth', require('./routes/shared/auth'));
 
