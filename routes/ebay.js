@@ -3316,20 +3316,32 @@ router.post('/trading-create-listing', async (req, res) => {
         </Variation>`;
       }).join('');
 
-      // Per-variant pictures — all images per variant, changes on selection
-      const variantsWithImages = variants.filter(v => v.images?.length || v.image);
-      const variationPicturesXml = variantsWithImages.length ? `
+      // Per-variant pictures — eBay's Trading API only supports ONE VariationSpecificName for
+      // photo differentiation, even on a listing with 2 real variation dimensions (confirmed
+      // against a live GetItem response: sending 2 VariationSpecificName/Value entries silently
+      // collapsed to just the last one sent, colliding photo sets across mismatched colors that
+      // happened to share the same second-dimension value, e.g. all "PackageQuantity=8" variants
+      // sharing one photo regardless of Color). Pick Color when present — buyers associate photos
+      // with color, not quantity/size — else the first dimension, and dedupe to one picture set
+      // per distinct value of THAT dimension only (first variant with images wins per value).
+      const photoDim = dims.includes('Color') ? 'Color' : dims[0];
+      const seenPhotoVals = new Set();
+      const picsByValue = [];
+      for (const v of variants) {
+        const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []);
+        if (!imgs.length) continue;
+        const val = specificsFor(v).find(s => s.name === photoDim)?.value;
+        if (!val || seenPhotoVals.has(val)) continue;
+        seenPhotoVals.add(val);
+        picsByValue.push({ val, imgs });
+      }
+      const variationPicturesXml = picsByValue.length ? `
         <Pictures>
-          ${dims.map(dim => `<VariationSpecificName>${escXml(dim)}</VariationSpecificName>`).join('')}
-          ${variantsWithImages.map(v => {
-            const imgs = v.images?.length ? v.images : (v.image ? [v.image] : []);
-            const specs = specificsFor(v);
-            const valuesXml = dims.map(dim => `<VariationSpecificValue>${escXml(specs.find(s => s.name === dim)?.value || '')}</VariationSpecificValue>`).join('');
-            return `<VariationSpecificPictureSet>
-            ${valuesXml}
+          <VariationSpecificName>${escXml(photoDim)}</VariationSpecificName>
+          ${picsByValue.map(({ val, imgs }) => `<VariationSpecificPictureSet>
+            <VariationSpecificValue>${escXml(val)}</VariationSpecificValue>
             ${imgs.map(img => `<PictureURL>${escXml(img)}</PictureURL>`).join('')}
-          </VariationSpecificPictureSet>`;
-          }).join('')}
+          </VariationSpecificPictureSet>`).join('')}
         </Pictures>` : '';
 
       const specsSetXml = dims.map(dim => {
