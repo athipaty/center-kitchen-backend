@@ -13,7 +13,7 @@ const SHIP_DEADLINE_HOURS = 48;
 // Delivered/notified orders drop off the page this long after delivery — the DB record
 // stays (Remove is still manual/explicit), this just keeps the list from filling up with
 // fully-handled orders. Falls back to updatedAt for orders delivered before deliveredAt existed.
-const DELIVERED_RETENTION_DAYS = 3;
+const DELIVERED_RETENTION_DAYS = 1;
 
 // GET all orders — orders still needing tracking sort by closest-to-deadline first
 // (overdue ones on top), so what needs action is always at the top of the list.
