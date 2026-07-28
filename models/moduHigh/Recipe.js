@@ -13,7 +13,6 @@ const recipeSchema = new mongoose.Schema(
     image: { type: String, default: "" },
     ingredients: [ingredientSchema],
     method: { type: String, default: "" },
-    active: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
