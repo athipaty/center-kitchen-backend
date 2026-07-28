@@ -40,6 +40,17 @@ router.put("/:id", async (req, res) => {
   }
 });
 
+// DELETE recipe
+router.delete("/:id", async (req, res) => {
+  try {
+    const recipe = await Recipe.findByIdAndDelete(req.params.id);
+    if (!recipe) return res.status(404).json({ error: "Recipe not found" });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST upload image
 router.post("/upload-image", (req, res) => {
   upload.single("image")(req, res, async (err) => {
