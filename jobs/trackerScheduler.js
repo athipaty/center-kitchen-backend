@@ -485,9 +485,10 @@ async function runOrphanCleanup() {
   }
 }
 
-// Auto-end two kinds of dead listings, then fill freed slots:
-//  1. 4+ days old, 0 views AND 0 watchers — gets a retitle rescue first, ends 3 days later if still zero
+// Auto-end three kinds of dead listings, then fill freed slots:
+//  1. 3+ days old, 0 views AND 0 watchers — gets a retitle rescue first, ends 3 days later if still zero (6 days total)
 //  2. 10+ days old, exactly 1 view, 0 watchers, 0 sold — ends immediately, no rescue
+//  3. 20+ days old, fewer than 4 views, 0 watchers, 0 sold — ends immediately, no rescue
 async function runAutoEndZeroViews() {
   try {
     const { getAccessToken } = require('./ebayPriceSync');
@@ -499,10 +500,12 @@ async function runAutoEndZeroViews() {
       { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
     );
 
-    const fourDaysAgo = Date.now() - 4 * 24 * 60 * 60 * 1000;
+    const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
     const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
+    const twentyDaysAgo = Date.now() - 20 * 24 * 60 * 60 * 1000;
     const oldListings = [];
     const tenPlusDayListings = [];
+    const twentyPlusDayListings = [];
     const watchCounts = {};
     const soldCounts = {};
     const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
@@ -516,11 +519,12 @@ async function runAutoEndZeroViews() {
       // QuantitySold rides along on this same call — no extra API cost.
       soldCounts[itemId] = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
       const startMs = new Date(startTime).getTime();
-      if (startMs <= fourDaysAgo) oldListings.push(itemId);
+      if (startMs <= threeDaysAgo) oldListings.push(itemId);
       if (startMs <= tenDaysAgo) tenPlusDayListings.push(itemId);
+      if (startMs <= twentyDaysAgo) twentyPlusDayListings.push(itemId);
     }
 
-    console.log(`auto-end-zero-views: ${oldListings.length} listings are 4+ days old`);
+    console.log(`auto-end-zero-views: ${oldListings.length} listings are 3+ days old`);
     if (!oldListings.length) return;
 
     const now = new Date();
@@ -572,6 +576,7 @@ async function runAutoEndZeroViews() {
       }
     }
 
+    const zeroViewEndedIds = [];
     if (zeroViewIds.length) {
       // A zero-view listing gets one retitle rescue attempt before it's ever ended — a bad
       // title is a more common cause of zero views than genuinely no demand. Only actually
@@ -586,7 +591,7 @@ async function runAutoEndZeroViews() {
 
       const RESCUE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
       const toRescue = [];
-      const toEnd = [];
+      const toEnd = zeroViewEndedIds;
       for (const id of zeroViewIds) {
         const rescuedAt = rescuedAtByListing[id];
         if (!rescuedAt) toRescue.push(id);
@@ -624,6 +629,20 @@ async function runAutoEndZeroViews() {
       await endAndCleanup(lowViewIds, '1 view in 10+ days, no watch, no sold');
     } else {
       console.log('auto-end-zero-views: no low-view (1 view/10+ days) listings found');
+    }
+
+    // Stale-demand listings: 20+ days old with fewer than 4 total views, no watchers, no
+    // sales — 20 days of visibility is plenty to judge real demand, so no retitle rescue.
+    // Excludes anything already ended above (toEnd/lowViewIds) to avoid a duplicate end call.
+    const alreadyEnded = new Set([...zeroViewEndedIds, ...lowViewIds]);
+    const staleIds = twentyPlusDayListings.filter(id =>
+      !alreadyEnded.has(id) && (viewCounts[id] || 0) < 4 && (watchCounts[id] || 0) === 0 && (soldCounts[id] || 0) === 0
+    );
+    if (staleIds.length) {
+      console.log(`auto-end-zero-views: ${staleIds.length} listing(s) 20+ days old with <4 views, no watch, no sold → ending: ${staleIds.join(', ')}`);
+      await endAndCleanup(staleIds, '<4 views in 20+ days, no watch, no sold');
+    } else {
+      console.log('auto-end-zero-views: no stale (<4 views/20+ days) listings found');
     }
   } catch (e) {
     console.error('auto-end-zero-views: error:', e.message);
@@ -1040,9 +1059,10 @@ function start(socketIo) {
   cron.schedule("0 3 * * 0", runWeeklyOptimize);
   // Variation sync: remove eBay variations not in tracker — Sunday 3:15am (after optimize)
   cron.schedule("15 3 * * 0", runWeeklyVariationSync);
-  // Zero-view listings (4+ days old): retitle once as a rescue attempt, only end them if
-  // still zero-view 3 days after that. Also ends listings 10+ days old with exactly 1
-  // view, 0 watchers, 0 sold — no rescue for those. Daily at 19:00 Singapore time.
+  // Zero-view listings (3+ days old): retitle once as a rescue attempt, only end them if
+  // still zero-view 3 days after that (6 days total). Also ends listings 10+ days old with
+  // exactly 1 view, and listings 20+ days old with fewer than 4 views — 0 watchers, 0 sold,
+  // no rescue for either. Daily at 19:00 Singapore time.
   cron.schedule("0 19 * * *", runAutoEndZeroViews, { timezone: "Asia/Singapore" });
   // Auto-restock sold listings back to qty 1 — runs every 30 minutes (was 15, halves GetOrders calls)
   cron.schedule("*/30 * * * *", () => runAutoRestock());
