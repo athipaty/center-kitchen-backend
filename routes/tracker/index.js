@@ -829,9 +829,15 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
     const parsed = await getParsedPage(product);
     if (parsed) {
       const forceHiRes = u => String(u).replace(/\._AC_(?:US\d+|SX\d+|SY\d+|SS\d+)?_?(?=\.jpg)/i, '._AC_SL1500_');
+      // Capped to 11 (+1 for the color swatch prepended below = 12) — eBay's own listing/
+      // variation picture cap is 12, and this gallery gets reused verbatim for every sibling
+      // in the group, so uploading more than that per variant is pure wasted B2/queue time.
+      // Large multi-dimension groups (e.g. Color x PackageQuantity, 50+ variants) made this
+      // wasted time add up to a serialized queue backlog of 40+ minutes before this cap.
       let hiRes = (parsed.highResImages || [])
         .map(img => forceHiRes(typeof img === 'string' ? img : (img.link || img.url || '')))
-        .filter(u => u.includes('media-amazon') || u.includes('ssl-images-amazon'));
+        .filter(u => u.includes('media-amazon') || u.includes('ssl-images-amazon'))
+        .slice(0, 11);
 
       if (hiRes.length && productAsin) {
         // Pull in sibling group members' persisted hero IDs too — the in-memory registry
