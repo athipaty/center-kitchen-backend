@@ -98,14 +98,16 @@ router.get("/series/:id", async (req, res) => {
 });
 
 // DELETE a whole series — cascades to every character and episode still under it (same
-// mid-pipeline guard as the single-episode delete below: refuses if any episode isn't
-// done/error yet), cleaning up each one's B2 folder along the way.
+// mid-pipeline guard as the single-episode delete below: refuses if any episode is somewhere the
+// scheduler is actively advancing it — "review" and "rendered" both pause for a human action and
+// have no STEP_HANDLERS entry in youtubeEpisodeScheduler.js, so nothing is "still generating"
+// there and deleting is safe), cleaning up each one's B2 folder along the way.
 router.delete("/series/:id", async (req, res) => {
   try {
     const series = await Series.findById(req.params.id);
     if (!series) return res.status(404).json({ error: "Series not found" });
 
-    const inFlight = await Episode.exists({ series: series._id, status: { $nin: ["done", "error"] } });
+    const inFlight = await Episode.exists({ series: series._id, status: { $nin: ["done", "error", "review", "rendered"] } });
     if (inFlight) {
       return res.status(409).json({ error: "An episode in this series is still being generated — wait for it to finish or error out first." });
     }
@@ -243,15 +245,16 @@ router.post("/characters/:id/backfill-sprites", async (req, res) => {
   }
 });
 
-// DELETE a character. Blocked while it's on-screen in an episode that's still mid-pipeline
-// (not done/error) — deleting mid-render would leave that render looking up a sprite that no
-// longer exists. Already-finished episodes keep referencing the character's _id harmlessly
-// (their scenes/dialogue are already baked, nothing re-reads the Character doc after 'done').
+// DELETE a character. Blocked while it's on-screen in an episode that still needs to look its
+// sprites up — stepRenderAndUpload re-fetches Character docs by id at render time, so an episode
+// paused at "review" (not yet rendered) still needs this character to exist. "rendered" is safe
+// to allow, same reasoning as the episode-delete route below: the render already happened, sprite
+// URLs are already baked into the finished MP4, and nothing re-reads the Character doc after that.
 router.delete("/characters/:id", async (req, res) => {
   try {
     const inFlight = await Episode.exists({
       "scenes.charactersOnScreen": req.params.id,
-      status: { $nin: ["done", "error"] },
+      status: { $nin: ["done", "error", "rendered"] },
     });
     if (inFlight) {
       return res.status(409).json({ error: "This character is on screen in an episode that's still rendering — wait for it to finish first." });
