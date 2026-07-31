@@ -28,6 +28,20 @@ const SCRIPT_LANGUAGE_BY_LOCALE = {
 };
 const DEFAULT_SCRIPT_LANGUAGE = "English";
 
+// Locale-specific character voice pool, gender-mapped. Deliberately small and hardcoded — edge-
+// tts-universal has no stable published voice list (see edgeTts.js's own comment on this), so
+// outline generation picks from voices already confirmed to work rather than letting Claude
+// invent a voiceName that might not exist and silently break narration later.
+const CHARACTER_VOICES_BY_LOCALE = {
+  "en-US": { male: "en-US-AndrewNeural", female: "en-US-AvaNeural" },
+  "th-TH": { male: "th-TH-NiwatNeural", female: "th-TH-PremwadeeNeural" },
+};
+const DEFAULT_CHARACTER_VOICES = CHARACTER_VOICES_BY_LOCALE["en-US"];
+
+// ~150 spoken words/minute at natural narration pace — matches the word-count floor
+// generateScript above already assumes (900 words -> "at least 3 minutes").
+const WORDS_PER_MINUTE = 150;
+
 // Writes the next episode's scene-by-scene script. Fed the series' continuity log so the plot
 // doesn't drift or contradict itself — this is the entire mechanism that makes it feel like a
 // continuing series instead of one-off unrelated clips.
@@ -197,4 +211,93 @@ Return ONLY a raw JSON object (no markdown fences):
   };
 }
 
-module.exports = { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS, CAMERA_MOVES };
+// Plans a whole story before any Series/Character/Episode exists: given a one-line idea, drafts
+// the show identity, splits the story into short episodes sized to a target runtime, and proposes
+// ONLY the characters the story actually needs. Deliberately asked to keep the cast small — every
+// extra character is a whole locked sprite set (5-10 generated images) plus its own voice, and
+// reusing one character across episodes is both cheaper and more visually consistent than
+// inventing a new one per scene. Nothing is persisted here; the caller (POST /outline) just
+// returns this draft for the user to review/edit before committing it via POST /outline/commit.
+async function generateStoryOutline({ idea, voiceLocale = "en-US", targetEpisodeMinutes = 2 }) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const scriptLanguage = SCRIPT_LANGUAGE_BY_LOCALE[voiceLocale] || DEFAULT_SCRIPT_LANGUAGE;
+  const targetWords = Math.round(targetEpisodeMinutes * WORDS_PER_MINUTE);
+
+  const prompt = `You are a children's story planner and show creator, writing a "นิทาน"
+(bedtime/children's story) as a narrated motion-comic video series for kids.
+
+The creator's idea: ${idea}
+
+Plan the WHOLE story before any single episode gets written. Decide:
+
+1. A show identity: title, one-paragraph premise, genre, tone (kid-appropriate — warm, gentle,
+   age 3-8 friendly, no scary or violent content), and a short art-style description for a
+   consistent illustrated look (e.g. "soft flat vector illustration, pastel colors, rounded
+   friendly shapes").
+2. How many episodes the story needs and what happens in each one, in story order. Each episode
+   should be a self-contained chunk of the overall arc, roughly ${targetWords} spoken words long
+   (about ${targetEpisodeMinutes} minutes of narration at natural pace) — split the story into as
+   many episodes as it naturally needs to tell it well at that length, not one arbitrary number.
+   Give each episode a short title and a 1-3 sentence premise of what happens in it.
+3. The cast: list ONLY the characters who actually appear with a real role somewhere in the story
+   — do not invent side characters "for flavor". A character only earns a spot if they have real
+   dialogue and an emotional beat in at least one episode. Prefer reusing one character across
+   multiple episodes over introducing a new one for a single scene. For each character give: a
+   short name, a locked visual description specific enough to draw the exact same way every time
+   (species/type, age, build, colors, one or two distinctive features — no vague adjectives), their
+   role in the story in one short phrase, and "gender": "male" or "female" (used to pick a
+   matching narration voice).
+
+Write the show title, episode titles/premises, and character names/descriptions/roles in
+${scriptLanguage}, regardless of what language the idea above was typed in.
+
+Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
+{
+  "title": "show title",
+  "premise": "one-paragraph pitch for the whole series",
+  "genre": "short genre label",
+  "tone": "short tone description",
+  "artStyle": "art style description",
+  "episodes": [
+    { "title": "episode title", "premise": "1-3 sentences describing what happens in this episode" }
+  ],
+  "characters": [
+    { "name": "character name", "description": "locked visual description", "role": "their role in the story, one short phrase", "gender": "male or female" }
+  ]
+}`;
+
+  const msg = await anthropic.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 4096,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const parsed = parseJsonResponse(msg);
+  const voicePool = CHARACTER_VOICES_BY_LOCALE[voiceLocale] || DEFAULT_CHARACTER_VOICES;
+
+  const characters = (parsed.characters || []).map((c) => ({
+    name: c.name || "Character",
+    description: c.description || "",
+    role: c.role || "",
+    voiceName: c.gender === "female" ? voicePool.female : voicePool.male,
+  }));
+
+  const episodes = (parsed.episodes || []).map((e, i) => ({
+    episodeNumber: i + 1,
+    title: e.title || `Episode ${i + 1}`,
+    premise: e.premise || "",
+  }));
+
+  return {
+    title: parsed.title || idea.slice(0, 60),
+    premise: parsed.premise || idea,
+    genre: parsed.genre || "",
+    tone: parsed.tone || "",
+    artStyle: parsed.artStyle || "",
+    voiceLocale,
+    episodes,
+    characters,
+  };
+}
+
+module.exports = { generateScript, summarizeEpisode, generateYoutubeMetadata, generateStoryOutline, EXPRESSIONS, CAMERA_MOVES };

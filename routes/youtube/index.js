@@ -5,6 +5,54 @@ const Character = require("../../models/youtube/Character");
 const Episode = require("../../models/youtube/Episode");
 const scheduler = require("../../jobs/youtubeEpisodeScheduler");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
+const { generateStoryOutline } = require("../../utils/youtube/claudeScript");
+
+// ── Story outline (AI-assisted planning) ───────────────────────────
+// Drafts a whole series (identity + episode breakdown + cast) from a one-line idea before
+// anything is persisted, so the user can review/edit the plan in the UI first. Nothing touches
+// the DB until POST /outline/commit — abandoning a draft costs nothing.
+router.post("/outline", async (req, res) => {
+  try {
+    const { idea, voiceLocale, targetEpisodeMinutes } = req.body;
+    if (!idea || !idea.trim()) return res.status(400).json({ error: "idea is required" });
+    const outline = await generateStoryOutline({ idea: idea.trim(), voiceLocale, targetEpisodeMinutes });
+    res.json(outline);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Persists a (possibly user-edited) outline: creates the Series, its Characters, and every
+// Episode in one shot, then kicks off episode 1 immediately — episodes 2+ get picked up by the
+// scheduler's 30s sweep once episode 1 finishes, same as if they'd been created one at a time.
+router.post("/outline/commit", async (req, res) => {
+  try {
+    const { title, premise, genre, tone, artStyle, voiceLocale, episodes, characters } = req.body;
+    if (!title || !premise) return res.status(400).json({ error: "title and premise are required" });
+    if (!Array.isArray(episodes) || !episodes.length) return res.status(400).json({ error: "at least one episode is required" });
+    if (!Array.isArray(characters) || !characters.length) return res.status(400).json({ error: "at least one character is required" });
+
+    const series = await Series.create({ title, premise, genre, tone, artStyle, voiceLocale });
+
+    const createdCharacters = await Character.insertMany(
+      characters.map((c) => ({ series: series._id, name: c.name, description: c.description, voiceName: c.voiceName }))
+    );
+
+    const createdEpisodes = [];
+    for (let i = 0; i < episodes.length; i++) {
+      const e = episodes[i];
+      createdEpisodes.push(await Episode.create({ series: series._id, episodeNumber: i + 1, title: e.title || "", premise: e.premise }));
+    }
+
+    if (createdEpisodes[0]) {
+      scheduler.triggerNow(createdEpisodes[0]._id).catch((e) => console.error("outline commit triggerNow failed:", e.message));
+    }
+
+    res.json({ series, characters: createdCharacters, episodes: createdEpisodes });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── Series ──────────────────────────────────────────────────────────
 router.post("/series", async (req, res) => {
