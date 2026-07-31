@@ -13,8 +13,11 @@ const axios = require("axios");
 // Throttling now lives here instead, as one process-wide serialized queue every caller shares —
 // however many callers are "concurrently" generating, actual HTTP calls to Pollinations always go
 // out one at a time, at least RATE_LIMIT_MS apart, regardless of which episode/character/loop
-// asked for it.
-const RATE_LIMIT_MS = 16000;
+// asked for it. Set above the documented ~15s floor as extra margin — the actual 429 that exposed
+// this was very likely just the missing serialization above, but Pollinations is an unauthenticated
+// free tier with no SLA and no guarantee its real limit doesn't vary, so a bit of slack is cheap
+// insurance against a slower, flakier failure mode than "generation takes longer."
+const RATE_LIMIT_MS = 20000;
 let queue = Promise.resolve();
 
 function throttled(fn) {

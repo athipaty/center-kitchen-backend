@@ -129,9 +129,15 @@ async function generateCharacterSprites(character, onProgress, expressions = EXP
   await character.save();
   for (const expression of expressions) {
     if (onProgress) await onProgress(expression);
+    // A fresh random seed per expression, not a shared fixed one — diffusion models mostly
+    // determine composition/pose from the seed, so reusing the same seed across every expression
+    // in a batch produced near-identical-looking sprites regardless of how different the
+    // expression wording in the prompt was (the exact failure regenerateCharacterSprite below
+    // was already written to avoid, just never applied to this initial batch).
+    const seed = Math.floor(Math.random() * 1e9);
     try {
-      const url = await generateSpriteImage(character, expression, 1);
-      character.sprites.push({ expression, imageUrl: url, seed: 1 });
+      const url = await generateSpriteImage(character, expression, seed);
+      character.sprites.push({ expression, imageUrl: url, seed });
     } catch (e) {
       character.status = "error";
       character.spriteError = e.message;
@@ -483,10 +489,21 @@ async function runDueTick() {
   if (_tickRunning) return; // concurrency guard — same reasoning as trackerScheduler's _dueChecksRunning
   _tickRunning = true;
   try {
-    const due = await Episode.find({ status: { $nin: ["done", "error"] } });
-    // Sequential, not Promise.all — every step ultimately bottlenecks on the same rate-limited
-    // Pollinations calls, so running episodes concurrently wouldn't actually go faster.
-    for (const episode of due) await processOne(episode);
+    const due = await Episode.find({ status: { $nin: ["done", "error"] } }).sort({ series: 1, episodeNumber: 1 });
+    // One episode per series per tick — the earliest (lowest episodeNumber) not-yet-done one.
+    // Outline-commit creates every episode in a series up front, so without this every one of
+    // them shows up "due" from the very first tick and they'd all creep forward one step per
+    // tick in lockstep, all mid-pipeline simultaneously. Skipping every later sibling here means
+    // episode 2 never gets a single step processed until episode 1 actually reaches done/error —
+    // true one-at-a-time generation, not just "sequential within a tick" (which still let every
+    // episode advance one step every 30s).
+    const startedSeries = new Set();
+    for (const episode of due) {
+      const seriesKey = String(episode.series);
+      if (startedSeries.has(seriesKey)) continue;
+      startedSeries.add(seriesKey);
+      await processOne(episode);
+    }
   } finally {
     _tickRunning = false;
   }
