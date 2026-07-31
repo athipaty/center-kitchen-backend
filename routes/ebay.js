@@ -3619,6 +3619,7 @@ router.post('/trading-create-listing', async (req, res) => {
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
+    console.error('trading-create-listing: unhandled error:', err.response?.data || err.stack || err.message);
     res.status(500).json({ error: err.message || 'Failed to create listing' });
   }
 });
