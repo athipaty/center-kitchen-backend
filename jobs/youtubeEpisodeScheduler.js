@@ -469,6 +469,15 @@ const STEP_HANDLERS = {
 // output MP4 — one process deleting/overwriting what the other was still reading/writing).
 const inFlightEpisodes = new Set();
 
+// The actual real-time answer to "is this episode being worked on right now" — unlike its status
+// field, which can now sit at a non-terminal value (e.g. "sprites") indefinitely while genuinely
+// untouched, since runDueTick only ever advances the earliest unfinished episode per series and
+// leaves later siblings frozen behind it. Delete routes use this instead of guessing "safe to
+// delete" from status, since status alone can no longer tell queued-and-idle apart from mid-write.
+function isEpisodeInFlight(episodeId) {
+  return inFlightEpisodes.has(String(episodeId));
+}
+
 async function processOne(episode) {
   const id = String(episode._id);
   if (inFlightEpisodes.has(id)) return;
@@ -528,4 +537,4 @@ async function triggerNow(episodeId) {
   if (episode) await processOne(episode);
 }
 
-module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneBackground };
+module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneBackground, isEpisodeInFlight };

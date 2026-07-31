@@ -98,16 +98,19 @@ router.get("/series/:id", async (req, res) => {
 });
 
 // DELETE a whole series — cascades to every character and episode still under it (same
-// mid-pipeline guard as the single-episode delete below: refuses if any episode is somewhere the
-// scheduler is actively advancing it — "review" and "rendered" both pause for a human action and
-// have no STEP_HANDLERS entry in youtubeEpisodeScheduler.js, so nothing is "still generating"
-// there and deleting is safe), cleaning up each one's B2 folder along the way.
+// mid-pipeline guard as the single-episode delete below: refuses only if the scheduler is
+// literally mid-step on one of its episodes right now. Status alone can't tell "safe to delete"
+// from "actively being written to" anymore — runDueTick only ever advances the earliest unfinished
+// episode per series, so a later sibling can sit at a non-terminal status (e.g. "sprites")
+// indefinitely, genuinely untouched, while waiting behind it. isEpisodeInFlight checks the
+// scheduler's real in-memory in-progress set instead of guessing from the stored status.
 router.delete("/series/:id", async (req, res) => {
   try {
     const series = await Series.findById(req.params.id);
     if (!series) return res.status(404).json({ error: "Series not found" });
 
-    const inFlight = await Episode.exists({ series: series._id, status: { $nin: ["done", "error", "review", "rendered"] } });
+    const seriesEpisodes = await Episode.find({ series: series._id }, "_id").lean();
+    const inFlight = seriesEpisodes.some((e) => scheduler.isEpisodeInFlight(e._id));
     if (inFlight) {
       return res.status(409).json({ error: "An episode in this series is still being generated — wait for it to finish or error out first." });
     }
@@ -468,18 +471,19 @@ router.post("/episodes/:id/retry", async (req, res) => {
   }
 });
 
-// DELETE an episode. Only allowed once it's settled (done, error, or rendered) — the scheduler's
+// DELETE an episode. Blocked only while the scheduler is literally mid-step on it right now — the
 // 30s tick holds an in-memory copy of an in-progress episode and calls episode.save() on it after
 // each step; deleting out from under that would make that save() throw (doc no longer exists), and
 // that throw happens inside processOne's own catch block with nothing above it to catch a second
-// failure, which can bring down the whole scheduler tick. "rendered" is safe to include here too —
-// it has no STEP_HANDLERS entry (see youtubeEpisodeScheduler.js), so the tick no-ops on it instead
-// of holding an in-memory copy to save later.
+// failure, which can bring down the whole scheduler tick. Status alone can't identify that anymore
+// — runDueTick only advances the earliest unfinished episode per series, so a later sibling can
+// sit at a non-terminal status indefinitely, genuinely idle, while waiting its turn — so this
+// checks the scheduler's real in-progress set instead of guessing safe statuses from a list.
 router.delete("/episodes/:id", async (req, res) => {
   try {
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
-    if (!["done", "error", "rendered"].includes(episode.status)) {
+    if (scheduler.isEpisodeInFlight(episode._id)) {
       return res.status(409).json({ error: "This episode is still being generated — wait for it to finish or error out first." });
     }
     await Episode.findByIdAndDelete(req.params.id);
