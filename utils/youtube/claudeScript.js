@@ -211,6 +211,36 @@ Return ONLY a raw JSON object (no markdown fences):
   };
 }
 
+// Suggests a single one-line children's-story idea to seed the outline wizard's idea box — for
+// the "🎲 Suggest an idea" button, so a user with no idea yet has something to start from (and can
+// click again for a different one). Deliberately cheap/fast (short prompt, small max_tokens) since
+// this is just a starting point the user will edit or feed into generateStoryOutline next, not the
+// final output. A nonce-style temperature-free "give me something different each time" instruction
+// is enough in practice since each call is a fresh, independent request with no shared history.
+async function suggestStoryIdea({ voiceLocale = "en-US" } = {}) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const scriptLanguage = SCRIPT_LANGUAGE_BY_LOCALE[voiceLocale] || DEFAULT_SCRIPT_LANGUAGE;
+
+  const prompt = `Suggest ONE original one-sentence idea for a children's bedtime story ("นิทาน"),
+for kids age 3-8. It should center a small relatable emotional struggle (fear, shyness, jealousy,
+feeling left out, etc.) that gets resolved through friendship, courage, or kindness — gentle and
+warm, never scary or violent. Pick a fresh animal or character and situation, different from
+generic "rabbit afraid of the dark" or "tortoise and the hare" ideas.
+
+Write it in ${scriptLanguage}, as a single flowing sentence (not a title, not a list).
+
+Return ONLY a raw JSON object (no markdown fences): { "idea": "..." }`;
+
+  const msg = await anthropic.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 300,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const parsed = parseJsonResponse(msg);
+  return parsed.idea || "";
+}
+
 // Plans a whole story before any Series/Character/Episode exists: given a one-line idea, drafts
 // the show identity, splits the story into short episodes sized to a target runtime, and proposes
 // ONLY the characters the story actually needs. Deliberately asked to keep the cast small — every
@@ -300,4 +330,4 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
   };
 }
 
-module.exports = { generateScript, summarizeEpisode, generateYoutubeMetadata, generateStoryOutline, EXPRESSIONS, CAMERA_MOVES };
+module.exports = { generateScript, summarizeEpisode, generateYoutubeMetadata, generateStoryOutline, suggestStoryIdea, EXPRESSIONS, CAMERA_MOVES };

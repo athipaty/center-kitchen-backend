@@ -5,9 +5,21 @@ const Character = require("../../models/youtube/Character");
 const Episode = require("../../models/youtube/Episode");
 const scheduler = require("../../jobs/youtubeEpisodeScheduler");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
-const { generateStoryOutline } = require("../../utils/youtube/claudeScript");
+const { generateStoryOutline, suggestStoryIdea } = require("../../utils/youtube/claudeScript");
 
 // ── Story outline (AI-assisted planning) ───────────────────────────
+// Suggests a one-line idea to seed the outline wizard's idea box — the "🎲 Suggest an idea"
+// button. Stateless and cheap; click again for a different one.
+router.post("/outline/idea", async (req, res) => {
+  try {
+    const { voiceLocale } = req.body;
+    const idea = await suggestStoryIdea({ voiceLocale });
+    res.json({ idea });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Drafts a whole series (identity + episode breakdown + cast) from a one-line idea before
 // anything is persisted, so the user can review/edit the plan in the UI first. Nothing touches
 // the DB until POST /outline/commit — abandoning a draft costs nothing.
