@@ -119,12 +119,16 @@ async function generateSpriteImage(character, expression, seed) {
   return uploadToB2(buffer, `youtube/characters/${character._id}/${expression}-${seed}.jpg`, "image/jpeg");
 }
 
-async function generateCharacterSprites(character, onProgress) {
+// `expressions` defaults to the full palette (used by the manual "Generate sprites" button on the
+// Series page, where there's no episode/script context yet to know what's actually needed) but
+// stepSprites below passes just the subset a specific episode's script actually uses, so a new
+// character's first batch is sized to the story instead of always paying for all of EXPRESSIONS.
+async function generateCharacterSprites(character, onProgress, expressions = EXPRESSIONS) {
   const oldSprites = character.sprites; // deleted from B2 below once the new batch is safely saved
   character.status = "generating_sprites";
   character.sprites = [];
   await character.save();
-  for (const expression of EXPRESSIONS) {
+  for (const expression of expressions) {
     if (onProgress) await onProgress(expression);
     try {
       const url = await generateSpriteImage(character, expression, 1);
@@ -175,13 +179,15 @@ async function regenerateCharacterSprite(character, expression) {
   if (oldSprite) await deleteB2File(b2KeyFromUrl(oldSprite.imageUrl)).catch(() => {});
 }
 
-// Generates only the expressions a character doesn't have yet — for when EXPRESSIONS grows
-// (e.g. adding "curious"/"excited"/etc. to an existing 5) and already-'ready' characters need
-// the new ones added on top, without regenerating (and losing seed continuity on) the sprites
-// that already exist. Each missing expression reuses regenerateCharacterSprite's push-if-absent
-// behavior one at a time, same throttling as the initial batch generation.
-async function backfillMissingSprites(character, onProgress) {
-  const missing = EXPRESSIONS.filter((e) => !character.sprites.some((s) => s.expression === e));
+// Generates only the expressions a character doesn't have yet, out of `expressions` (defaults to
+// the full palette — for when EXPRESSIONS grows and an already-'ready' character needs the new
+// ones added on top). stepSprites below passes just the specific expressions a later episode's
+// script newly needs from a character that's already 'ready' from an earlier episode, so a
+// character only ever grows the exact sprites its story has actually asked for, not the whole set.
+// Each missing expression reuses regenerateCharacterSprite's push-if-absent behavior one at a
+// time, same throttling as the initial batch generation.
+async function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS) {
+  const missing = expressions.filter((e) => !character.sprites.some((s) => s.expression === e));
   for (const expression of missing) {
     if (onProgress) await onProgress(expression);
     await regenerateCharacterSprite(character, expression);
@@ -190,22 +196,40 @@ async function backfillMissingSprites(character, onProgress) {
   return missing;
 }
 
-// script -> sprites: generates sprite sets for any NEW character this episode references (skips
-// characters already status:'ready' — the entire point of generating sprites once and reusing
-// them forever).
+// script -> sprites: generates sprite sets for any NEW character this episode references, and
+// backfills any NEW expression an already-'ready' reused character needs that it doesn't have yet
+// — in both cases scoped to only the expressions this episode's script actually assigned to that
+// character (plus "neutral" as a guaranteed fallback), not the full EXPRESSIONS palette. The
+// script (written in the previous step) already picked an expression per dialogue line from that
+// palette, so by this point the story has already told us exactly which emotions each character
+// needs — generating all 10 regardless would be paying for sprites this story never uses.
 async function stepSprites(episode) {
   const characterIds = [
     ...new Set(episode.scenes.flatMap((s) => s.charactersOnScreen.map(String))),
   ];
   const characters = await Character.find({ _id: { $in: characterIds } });
-  const needSprites = characters.filter((c) => c.status !== "ready");
 
-  for (const character of needSprites) {
-    await generateCharacterSprites(character, async (expression) => {
+  for (const character of characters) {
+    const neededExpressions = [...new Set(
+      episode.scenes
+        .flatMap((s) => s.dialogue)
+        .filter((d) => d.character && String(d.character) === String(character._id))
+        .map((d) => d.expression)
+    )];
+    if (!neededExpressions.includes("neutral")) neededExpressions.push("neutral");
+
+    const onProgress = async (expression) => {
       episode.statusDetail = `${character.name} sprite: ${expression}`;
       await episode.save();
       await emit(episode);
-    });
+    };
+
+    if (character.status !== "ready") {
+      await generateCharacterSprites(character, onProgress, neededExpressions);
+    } else {
+      const missing = neededExpressions.filter((e) => !character.sprites.some((s) => s.expression === e));
+      if (missing.length) await backfillMissingSprites(character, onProgress, neededExpressions);
+    }
   }
 
   episode.status = "sprites";
