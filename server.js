@@ -55,6 +55,7 @@ app.use(
       "https://egp-steel.vercel.app",
       "https://youtube-tan-sigma.vercel.app",
       "https://modu-high-1pde.vercel.app",
+      "https://profile-kappa-sand.vercel.app",
     ],
     credentials: true,
   }),
@@ -128,6 +129,9 @@ mongoose.connection.once('open', () => ebayRouter.setIo(io));
 
 // --- Youtube (motion-comic series generator) ---
 app.use('/api/youtube', require('./routes/youtube'));
+
+// --- Profile (portfolio site binary assets: photo, certificate) ---
+app.use('/api/profile', require('./routes/profile'));
 
 /* =====================
    DATABASE
