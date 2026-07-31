@@ -21,10 +21,9 @@ const NARRATOR_VOICE_BY_LOCALE = {
 };
 const DEFAULT_NARRATOR_VOICE = "en-US-AndrewNeural";
 
-// Pollinations' anonymous tier is rate-limited to ~1 request/15s — every loop below is
-// deliberately sequential (never Promise.all) and pauses between calls rather than trying to
-// parallelize, which would just trade a clean 429 for one that's harder to reason about.
-const POLLINATIONS_DELAY_MS = 16000;
+// Pollinations' anonymous-tier rate limit (~1 request/15s) is now enforced globally inside
+// generateImage() itself (see utils/youtube/pollinations.js) — every call, from any concurrently-
+// running episode, waits its turn through one shared queue, so nothing here needs its own delay.
 // edge-tts-universal has no documented rate limit, but firing dozens of lines back-to-back with
 // zero spacing (now that episodes run 8-12 scenes instead of 3-5) is what made NoAudioReceived
 // start showing up — a small gap between lines costs little next to the render step's own runtime.
@@ -139,7 +138,6 @@ async function generateCharacterSprites(character, onProgress, expressions = EXP
       await character.save();
       throw new Error(`sprite generation failed for ${character.name} (${expression}): ${e.message}`);
     }
-    await sleep(POLLINATIONS_DELAY_MS);
   }
   character.status = "ready";
   await character.save();
@@ -191,7 +189,6 @@ async function backfillMissingSprites(character, onProgress, expressions = EXPRE
   for (const expression of missing) {
     if (onProgress) await onProgress(expression);
     await regenerateCharacterSprite(character, expression);
-    await sleep(POLLINATIONS_DELAY_MS);
   }
   return missing;
 }
@@ -269,7 +266,6 @@ async function stepBackgrounds(episode) {
       `youtube/episodes/${episode._id}/scene${scene.order}-bg.jpg`,
       "image/jpeg"
     );
-    await sleep(POLLINATIONS_DELAY_MS);
   }
   episode.status = "backgrounds";
   episode.statusDetail = "";
