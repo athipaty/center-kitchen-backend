@@ -265,8 +265,14 @@ async function stepBackgrounds(episode) {
     episode.statusDetail = `background for scene ${scene.order + 1}/${episode.scenes.length}`;
     await episode.save();
     await emit(episode);
+    // A fresh random seed per scene — passing none left Pollinations to fall back to whatever it
+    // defaults to when omitted, which produced near-identical-looking backgrounds across scenes
+    // regardless of how different scene.backgroundPrompt actually was. Same fix, same reasoning,
+    // as generateCharacterSprites' seed=1 bug above; regenerateSceneBackground below already did
+    // this correctly for one-off reroll requests, just never applied to the initial batch either.
+    const seed = Math.floor(Math.random() * 1e9);
     const prompt = buildBackgroundPrompt(scene, series);
-    const buffer = await generateImage(prompt, { width: 1280, height: 720 });
+    const buffer = await generateImage(prompt, { width: 1280, height: 720, seed });
     scene.backgroundUrl = await uploadToB2(
       buffer,
       `youtube/episodes/${episode._id}/scene${scene.order}-bg.jpg`,
@@ -280,9 +286,9 @@ async function stepBackgrounds(episode) {
 // Redo a single scene's background art using its already-saved backgroundPrompt, without touching
 // any other scene or requiring the prompt text itself to have changed — the review panel's
 // standalone "reroll this background" button, as opposed to stepBackgrounds' initial per-scene
-// generation. Uses a fresh random seed (stepBackgrounds passes none) and a seed-tagged B2 key so
-// re-running the same prompt gets a new image rather than reproducing (or being served a cached
-// copy of) the same unwanted one — same reasoning as regenerateCharacterSprite above.
+// generation. Uses its own fresh random seed and a seed-tagged B2 key so re-running the same
+// prompt gets a new image rather than reproducing (or being served a cached copy of) the same
+// unwanted one — same reasoning as regenerateCharacterSprite above.
 async function regenerateSceneBackground(episode, scene) {
   const series = await Series.findById(episode.series);
   const seed = Math.floor(Math.random() * 1e9);
