@@ -95,8 +95,11 @@ router.post('/upload-images', async (req, res) => {
       const url = imageUrls[i];
       const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
       try {
-        // If source is already a B2 tracker-images file, server-side copy — no download cost
-        const isB2TrackerUrl = url.includes('backblazeb2.com') && url.includes('/tracker-images/');
+        // If source is already a B2 tracker-images file, server-side copy — no download cost.
+        // Checks both the raw B2 domain and the CDN host (B2_CDN_HOST) images are actually
+        // served through — matching only the raw domain meant this never fired and every
+        // re-upload took the slow download-through-CDN-then-reupload path instead.
+        const isB2TrackerUrl = (url.includes('backblazeb2.com') || (process.env.B2_CDN_HOST && url.includes(process.env.B2_CDN_HOST))) && url.includes('/tracker-images/');
         if (isB2TrackerUrl) {
           const srcKey = url.replace(/^https?:\/\/[^/]+\/file\/[^/]+\//, '');
           const newUrl = await copyB2File(srcKey, fileKey);
