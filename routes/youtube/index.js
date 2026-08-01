@@ -35,8 +35,8 @@ router.post("/outline", async (req, res) => {
 });
 
 // Persists a (possibly user-edited) outline: creates the Series, its Characters, and every
-// Episode in one shot, then kicks off episode 1 immediately — episodes 2+ get picked up by the
-// scheduler's 30s sweep once episode 1 finishes, same as if they'd been created one at a time.
+// Episode in one shot. Nothing is auto-started — every episode (including #1) sits at "pending"
+// until a manual POST /episodes/:id/advance click, same as an episode created one at a time.
 router.post("/outline/commit", async (req, res) => {
   try {
     const { title, premise, genre, tone, artStyle, voiceLocale, episodes, characters } = req.body;
@@ -54,10 +54,6 @@ router.post("/outline/commit", async (req, res) => {
     for (let i = 0; i < episodes.length; i++) {
       const e = episodes[i];
       createdEpisodes.push(await Episode.create({ series: series._id, episodeNumber: i + 1, title: e.title || "", premise: e.premise }));
-    }
-
-    if (createdEpisodes[0]) {
-      scheduler.triggerNow(createdEpisodes[0]._id).catch((e) => console.error("outline commit triggerNow failed:", e.message));
     }
 
     res.json({ series, characters: createdCharacters, episodes: createdEpisodes });
@@ -280,14 +276,37 @@ router.delete("/characters/:id", async (req, res) => {
 });
 
 // ── Episodes ────────────────────────────────────────────────────────
+// Creates the episode at "pending" only — nothing starts automatically. The first pipeline step
+// (script generation) only runs once someone hits POST /episodes/:id/advance below.
 router.post("/episodes", async (req, res) => {
   try {
     const { seriesId, premise } = req.body;
     if (!seriesId || !premise) return res.status(400).json({ error: "seriesId and premise are required" });
     const episodeNumber = (await Episode.countDocuments({ series: seriesId })) + 1;
     const episode = await Episode.create({ series: seriesId, episodeNumber, premise });
-    scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     res.json(episode);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Runs exactly one pipeline step (script, sprites, backgrounds, or narration — whichever matches
+// the episode's current status) and stops, waiting for the next manual click. Mirrors the
+// character sprite-generation route below: acks immediately with 202 since a step can take well
+// over a minute (sprite/background generation especially), and the actual progress/completion
+// arrives over the 'episode:progress'/'episode:error' sockets already emitted by every step.
+router.post("/episodes/:id/advance", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (!["pending", "script", "sprites", "backgrounds"].includes(episode.status)) {
+      return res.status(409).json({ error: "This episode isn't waiting on a manual step right now." });
+    }
+    if (scheduler.isEpisodeInFlight(episode._id)) {
+      return res.status(409).json({ error: "This step is already running." });
+    }
+    scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
+    res.status(202).json({ started: true, episode });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -301,7 +320,8 @@ router.get("/episodes", async (req, res) => {
     // line without a second round-trip per character.
     const episodes = await Episode.find(filter)
       .sort({ episodeNumber: -1 })
-      .populate("scenes.dialogue.character", "name voiceName voiceOptions");
+      .populate("scenes.dialogue.character", "name voiceName voiceOptions")
+      .populate("scenes.charactersOnScreen", "name sprites");
     res.json(episodes);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -310,7 +330,8 @@ router.get("/episodes", async (req, res) => {
 
 router.get("/episodes/:id", async (req, res) => {
   try {
-    const episode = await Episode.findById(req.params.id).populate("scenes.dialogue.character", "name voiceName voiceOptions");
+    const episode = await Episode.findById(req.params.id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
+      .populate("scenes.charactersOnScreen", "name sprites");
     if (!episode) return res.status(404).json({ error: "Episode not found" });
     res.json(episode);
   } catch (err) {
@@ -386,7 +407,8 @@ router.put("/episodes/:id/scenes", async (req, res) => {
     if (needsBackgrounds || needsTts) {
       scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     }
-    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions");
+    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
+      .populate("scenes.charactersOnScreen", "name sprites");
     res.json(fresh);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -409,7 +431,8 @@ router.post("/episodes/:id/scenes/:order/regenerate-background", async (req, res
     if (!scene) return res.status(404).json({ error: "Scene not found" });
 
     await scheduler.regenerateSceneBackground(episode, scene);
-    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions");
+    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
+      .populate("scenes.charactersOnScreen", "name sprites");
     res.json(fresh);
   } catch (err) {
     res.status(500).json({ error: err.message });

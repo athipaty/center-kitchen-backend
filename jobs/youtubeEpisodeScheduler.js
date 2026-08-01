@@ -1,4 +1,3 @@
-const cron = require("node-cron");
 const sharp = require("sharp");
 const axios = require("axios");
 const Series = require("../models/youtube/Series");
@@ -499,14 +498,20 @@ async function stepRenderAndUpload(episode) {
   episode.statusDetail = "";
 }
 
-// uploading -> publishing: pushes the B2-hosted MP4 to the actual YouTube channel via the Data API
+// uploading -> done: pushes the B2-hosted MP4 to the actual YouTube channel via the Data API
 // (videos.insert), as a private upload — a human still reviews and flips visibility in YouTube
-// Studio before it goes public. Re-fetches the buffer from B2 (rather than threading it through
-// from stepRenderAndUpload) since each step reloads the episode fresh from Mongo on its own tick.
-// Only reached via the explicit POST /episodes/:id/upload-youtube route below (same "momentary
-// handoff" trick as approve-render uses with "tts": that route sets status to "uploading" and
-// triggers the scheduler, which dispatches straight to this handler) — never automatically, since
-// "rendered" itself has no STEP_HANDLERS entry.
+// Studio before it goes public — then immediately summarizes the episode into the series'
+// continuity log so the NEXT episode's script prompt remembers what happened here. Used to be two
+// separate steps (uploading -> publishing -> done) chained by the old 30s cron sweep; now that
+// every earlier stage is a manual click with no background sweep to catch a leftover "publishing"
+// episode, there's no reason to pause between them — same one-call-does-several-hops reasoning as
+// stepRenderAndUpload chaining rendering -> uploading -> rendered below. Re-fetches the video
+// buffer from B2 (rather than threading it through from stepRenderAndUpload) since each step
+// reloads the episode fresh from Mongo. Only reached via the explicit POST
+// /episodes/:id/upload-youtube route below (same "momentary handoff" trick as approve-render uses
+// with "tts": that route sets status to "uploading" and triggers the scheduler, which dispatches
+// straight to this handler) — never automatically, since "rendered" itself has no STEP_HANDLERS
+// entry.
 async function stepPublishToYoutube(episode) {
   const series = await Series.findById(episode.series);
   episode.statusDetail = "uploading to YouTube";
@@ -518,14 +523,10 @@ async function stepPublishToYoutube(episode) {
   const { videoId, url } = await uploadVideoToYoutube(Buffer.from(mp4Buffer), meta);
   episode.youtubeVideoId = videoId;
   episode.youtubeUrl = url;
-  episode.status = "publishing";
   episode.statusDetail = "";
-}
+  await episode.save();
+  await emit(episode);
 
-// publishing -> done: summarizes the episode into the series' continuity log so the NEXT episode's
-// script prompt remembers what happened here.
-async function stepDone(episode) {
-  const series = await Series.findById(episode.series);
   const summary = await summarizeEpisode(series, episode);
   series.continuityLog.push({ episodeNumber: episode.episodeNumber, summary });
   await series.save();
@@ -540,24 +541,24 @@ const STEP_HANDLERS = {
   backgrounds: stepTts,
   tts: stepRenderAndUpload,
   rendering: stepRenderAndUpload, // safe to redo — see stepRenderAndUpload's comment
-  uploading: stepPublishToYoutube,
-  publishing: stepDone,
+  uploading: stepPublishToYoutube, // goes straight to "done" — see its comment
 };
 
-// Guards a single episode against being processed by two callers at once — the 30s cron sweep
-// (runDueTick) and an explicit triggerNow() (called right after episode creation, retry,
-// approve-render, and the review edit-cascade) are otherwise completely unsynchronized, and a
-// step like stepRenderAndUpload legitimately takes well over 30s. Without this, the cron tick can
-// fire mid-render and start a second concurrent render of the same episode, and the two runs stomp
-// on each other's identically-named temp files in remotionRender.js (surfaced as an ENOENT on the
-// output MP4 — one process deleting/overwriting what the other was still reading/writing).
+// Guards a single episode against being processed by two callers at once — every step is now only
+// ever kicked off by an explicit triggerNow() (episode creation used to auto-chain through a 30s
+// cron sweep; each stage is a manual click now, see routes/youtube/index.js's /advance), but two
+// of those clicks can still race (e.g. a double-click, or /advance and /retry firing close
+// together), and a step like stepRenderAndUpload legitimately takes well over any such gap.
+// Without this, two concurrent runs of the same episode would stomp on each other's
+// identically-named temp files in remotionRender.js (surfaced as an ENOENT on the output MP4 —
+// one process deleting/overwriting what the other was still reading/writing).
 const inFlightEpisodes = new Set();
 
 // The actual real-time answer to "is this episode being worked on right now" — unlike its status
 // field, which can now sit at a non-terminal value (e.g. "sprites") indefinitely while genuinely
-// untouched, since runDueTick only ever advances the earliest unfinished episode per series and
-// leaves later siblings frozen behind it. Delete routes use this instead of guessing "safe to
-// delete" from status, since status alone can no longer tell queued-and-idle apart from mid-write.
+// idle, waiting on the next manual /advance click. Delete routes use this instead of guessing
+// "safe to delete" from status, since status alone can no longer tell idle-and-waiting apart from
+// mid-write.
 function isEpisodeInFlight(episodeId) {
   return inFlightEpisodes.has(String(episodeId));
 }
@@ -583,37 +584,13 @@ async function processOne(episode) {
   }
 }
 
-let _tickRunning = false;
-async function runDueTick() {
-  if (_tickRunning) return; // concurrency guard — same reasoning as trackerScheduler's _dueChecksRunning
-  _tickRunning = true;
-  try {
-    const due = await Episode.find({ status: { $nin: ["done", "error"] } }).sort({ series: 1, episodeNumber: 1 });
-    // One episode per series per tick — the earliest (lowest episodeNumber) not-yet-done one.
-    // Outline-commit creates every episode in a series up front, so without this every one of
-    // them shows up "due" from the very first tick and they'd all creep forward one step per
-    // tick in lockstep, all mid-pipeline simultaneously. Skipping every later sibling here means
-    // episode 2 never gets a single step processed until episode 1 actually reaches done/error —
-    // true one-at-a-time generation, not just "sequential within a tick" (which still let every
-    // episode advance one step every 30s).
-    const startedSeries = new Set();
-    for (const episode of due) {
-      const seriesKey = String(episode.series);
-      if (startedSeries.has(seriesKey)) continue;
-      startedSeries.add(seriesKey);
-      await processOne(episode);
-    }
-  } finally {
-    _tickRunning = false;
-  }
-}
-
 function start(socketIo) {
   io = socketIo;
-  // There's no natural "due" timestamp here (unlike trackerScheduler's nextCheck) — the real
-  // trigger path is triggerNow(), called immediately after episode creation. This sweep is only
-  // a safety net for recovering anything left mid-pipeline by a server restart.
-  cron.schedule("*/30 * * * * *", runDueTick);
+  // No background sweep here on purpose — every stage (script, sprites, backgrounds, narration,
+  // approve-render, upload) only ever runs when a human explicitly triggers it (a button click
+  // hitting triggerNow via routes/youtube/index.js), one step at a time. A server restart mid-step
+  // just leaves that episode idle at its last-saved status until the next manual click resumes it
+  // — safe, since every step already skips whatever it finds already generated.
 }
 
 async function triggerNow(episodeId) {
