@@ -118,11 +118,40 @@ async function generateSpriteImage(character, expression, seed) {
   return uploadToB2(buffer, `youtube/characters/${character._id}/${expression}-${seed}.jpg`, "image/jpeg");
 }
 
+// Per-character mutex: generateCharacterSprites/regenerateCharacterSprite/backfillMissingSprites
+// each load a character, mutate its in-memory `sprites` array, and .save() it — but nothing
+// serialized that read-modify-write cycle across concurrent callers. Several episodes can be in
+// flight at once (see pollinations.js) and can share a character, or the episode pipeline can race
+// a manual click on the Series page. When that happened, each caller started from its own already-
+// stale snapshot of `sprites`, so whichever .save() landed second silently clobbered or duplicated
+// whatever the first one wrote — the actual cause of duplicate sprite entries (Pollinations' rate
+// limit above only serializes the HTTP calls, not this). Routing every mutation through a
+// per-character queue, and re-reading the character fresh from the DB the moment it gets its turn
+// (never trusting whatever snapshot the caller passed in), closes this: only one read-modify-write
+// cycle for a given character is ever in flight.
+const characterLocks = new Map();
+function withCharacterLock(characterId, fn) {
+  const key = String(characterId);
+  const turn = (characterLocks.get(key) || Promise.resolve()).catch(() => {}).then(fn);
+  characterLocks.set(key, turn);
+  turn.finally(() => {
+    if (characterLocks.get(key) === turn) characterLocks.delete(key);
+  });
+  return turn;
+}
+
+async function refreshCharacterSprites(character) {
+  const fresh = await Character.findById(character._id).select("sprites status spriteError");
+  character.sprites = fresh.sprites;
+  character.status = fresh.status;
+  character.spriteError = fresh.spriteError;
+}
+
 // `expressions` defaults to the full palette (used by the manual "Generate sprites" button on the
 // Series page, where there's no episode/script context yet to know what's actually needed) but
 // stepSprites below passes just the subset a specific episode's script actually uses, so a new
 // character's first batch is sized to the story instead of always paying for all of EXPRESSIONS.
-async function generateCharacterSprites(character, onProgress, expressions = EXPRESSIONS) {
+async function generateCharacterSpritesInternal(character, onProgress, expressions = EXPRESSIONS) {
   const oldSprites = character.sprites; // deleted from B2 below once the new batch is safely saved
   character.status = "generating_sprites";
   character.sprites = [];
@@ -155,11 +184,18 @@ async function generateCharacterSprites(character, onProgress, expressions = EXP
   }
 }
 
+function generateCharacterSprites(character, onProgress, expressions = EXPRESSIONS) {
+  return withCharacterLock(character._id, async () => {
+    await refreshCharacterSprites(character);
+    return generateCharacterSpritesInternal(character, onProgress, expressions);
+  });
+}
+
 // Redo a single expression without touching the other already-approved sprites — the common
 // case is "4 of 5 are fine, just the sad one came out wrong". Uses a fresh random seed (not the
 // batch's fixed seed=1) since re-running the exact same prompt+seed would just reproduce the
 // same unwanted image.
-async function regenerateCharacterSprite(character, expression) {
+async function regenerateCharacterSpriteInternal(character, expression) {
   if (!EXPRESSIONS.includes(expression)) {
     throw new Error(`Unknown expression: ${expression}`);
   }
@@ -183,20 +219,35 @@ async function regenerateCharacterSprite(character, expression) {
   if (oldSprite) await deleteB2File(b2KeyFromUrl(oldSprite.imageUrl)).catch(() => {});
 }
 
+function regenerateCharacterSprite(character, expression) {
+  return withCharacterLock(character._id, async () => {
+    await refreshCharacterSprites(character);
+    return regenerateCharacterSpriteInternal(character, expression);
+  });
+}
+
 // Generates only the expressions a character doesn't have yet, out of `expressions` (defaults to
 // the full palette — for when EXPRESSIONS grows and an already-'ready' character needs the new
 // ones added on top). stepSprites below passes just the specific expressions a later episode's
 // script newly needs from a character that's already 'ready' from an earlier episode, so a
 // character only ever grows the exact sprites its story has actually asked for, not the whole set.
-// Each missing expression reuses regenerateCharacterSprite's push-if-absent behavior one at a
-// time, same throttling as the initial batch generation.
-async function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS) {
+// Each missing expression reuses regenerateCharacterSpriteInternal's push-if-absent behavior one at
+// a time, same throttling as the initial batch generation — all under one lock acquisition so a
+// concurrent caller can't sneak in and see a half-backfilled character.
+async function backfillMissingSpritesInternal(character, onProgress, expressions = EXPRESSIONS) {
   const missing = expressions.filter((e) => !character.sprites.some((s) => s.expression === e));
   for (const expression of missing) {
     if (onProgress) await onProgress(expression);
-    await regenerateCharacterSprite(character, expression);
+    await regenerateCharacterSpriteInternal(character, expression);
   }
   return missing;
+}
+
+function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS) {
+  return withCharacterLock(character._id, async () => {
+    await refreshCharacterSprites(character);
+    return backfillMissingSpritesInternal(character, onProgress, expressions);
+  });
 }
 
 // script -> sprites: generates sprite sets for any NEW character this episode references, and
@@ -227,12 +278,20 @@ async function stepSprites(episode) {
       await emit(episode);
     };
 
-    if (character.status !== "ready") {
-      await generateCharacterSprites(character, onProgress, neededExpressions);
-    } else {
-      const missing = neededExpressions.filter((e) => !character.sprites.some((s) => s.expression === e));
-      if (missing.length) await backfillMissingSprites(character, onProgress, neededExpressions);
-    }
+    // Decide generate-vs-backfill *after* acquiring this character's lock and re-reading its
+    // current status/sprites, not before — otherwise two episodes sharing a character can both
+    // see "not ready yet" at the same time, both queue a full generateCharacterSprites, and the
+    // second one (running once the lock lets it through) throws away and redoes the sprites the
+    // first one just finished.
+    await withCharacterLock(character._id, async () => {
+      await refreshCharacterSprites(character);
+      if (character.status !== "ready") {
+        await generateCharacterSpritesInternal(character, onProgress, neededExpressions);
+      } else {
+        const missing = neededExpressions.filter((e) => !character.sprites.some((s) => s.expression === e));
+        if (missing.length) await backfillMissingSpritesInternal(character, onProgress, neededExpressions);
+      }
+    });
   }
 
   episode.status = "sprites";
