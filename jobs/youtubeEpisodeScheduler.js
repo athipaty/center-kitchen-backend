@@ -4,7 +4,7 @@ const axios = require("axios");
 const Series = require("../models/youtube/Series");
 const Character = require("../models/youtube/Character");
 const Episode = require("../models/youtube/Episode");
-const { generateImage } = require("../utils/youtube/pollinations");
+const { generateImageFlux, generateCharacterImage } = require("../utils/youtube/fal");
 const { synthesize } = require("../utils/youtube/edgeTts");
 const { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS } = require("../utils/youtube/claudeScript");
 const { renderEpisodeToBuffer } = require("../utils/youtube/remotionRender");
@@ -21,9 +21,6 @@ const NARRATOR_VOICE_BY_LOCALE = {
 };
 const DEFAULT_NARRATOR_VOICE = "en-US-AndrewNeural";
 
-// Pollinations' anonymous-tier rate limit (~1 request/15s) is now enforced globally inside
-// generateImage() itself (see utils/youtube/pollinations.js) — every call, from any concurrently-
-// running episode, waits its turn through one shared queue, so nothing here needs its own delay.
 // edge-tts-universal has no documented rate limit, but firing dozens of lines back-to-back with
 // zero spacing (now that episodes run 8-12 scenes instead of 3-5) is what made NoAudioReceived
 // start showing up — a small gap between lines costs little next to the render step's own runtime.
@@ -100,14 +97,21 @@ function buildSpritePrompt(character, expression) {
 // model happily drew full legs and feet for any expressive pose (raised arms, running), negation
 // phrasing included, which is a known limitation of prompt-only control. Cropping the output is
 // the only way to *guarantee* upper-body framing regardless of what the model actually drew.
-const UPPER_BODY_CROP_FRACTION = 0.6;
+const UPPER_BODY_CROP_FRACTION = 0.8;
 
 // The seed is baked into the filename so a regenerated sprite gets a brand-new URL — sprite
 // URLs sit behind a CDN (cdn.bidhubthai.com) caching for hours, and reusing the same key would
 // mean the new image never actually reaches viewers regardless of how hard they refresh.
-async function generateSpriteImage(character, expression, seed) {
+//
+// referenceUrl, when given, routes through Instant Character (image-to-image) so the result keeps
+// the same identity as that reference instead of being an independent generation — see callers for
+// how the reference is chosen. Only a character's very first sprite ever (nothing yet to
+// reference) falls back to a plain Flux text-to-image generation.
+async function generateSpriteImage(character, expression, seed, referenceUrl) {
   const prompt = buildSpritePrompt(character, expression);
-  const rawBuffer = await generateImage(prompt, { width: 768, height: 768, seed });
+  const rawBuffer = referenceUrl
+    ? await generateCharacterImage(prompt, referenceUrl, { seed })
+    : await generateImageFlux(prompt, { width: 768, height: 768, seed });
   const meta = await sharp(rawBuffer).metadata();
   const width = meta.width || 768;
   const height = meta.height || 768;
@@ -134,9 +138,15 @@ function withCharacterLock(characterId, fn) {
   const key = String(characterId);
   const turn = (characterLocks.get(key) || Promise.resolve()).catch(() => {}).then(fn);
   characterLocks.set(key, turn);
+  // .finally() returns its own new promise, separate from `turn` — if `turn` rejects, this
+  // discarded one rejects too, and since nothing else holds a reference to it, Node counts it as
+  // an *unhandled* rejection and crashes the whole process regardless of whether the real caller
+  // (below, via the returned `turn`) already caught it. The cleanup itself can't fail, so the only
+  // reason this ever rejects is mirroring `turn` — swallow that here; `turn`'s rejection still
+  // reaches whoever awaits/catches the value this function returns.
   turn.finally(() => {
     if (characterLocks.get(key) === turn) characterLocks.delete(key);
-  });
+  }).catch(() => {});
   return turn;
 }
 
@@ -156,6 +166,10 @@ async function generateCharacterSpritesInternal(character, onProgress, expressio
   character.status = "generating_sprites";
   character.sprites = [];
   await character.save();
+  // The first expression generated in a batch has nothing to reference yet, so it's a plain Flux
+  // generation and becomes the base every other expression in this batch is conditioned on —
+  // anchoring the whole set to one identity instead of each being an independent generation.
+  let baseImageUrl = null;
   for (const expression of expressions) {
     if (onProgress) await onProgress(expression);
     // A fresh random seed per expression, not a shared fixed one — diffusion models mostly
@@ -165,7 +179,8 @@ async function generateCharacterSpritesInternal(character, onProgress, expressio
     // was already written to avoid, just never applied to this initial batch).
     const seed = Math.floor(Math.random() * 1e9);
     try {
-      const url = await generateSpriteImage(character, expression, seed);
+      const url = await generateSpriteImage(character, expression, seed, baseImageUrl);
+      if (!baseImageUrl) baseImageUrl = url;
       character.sprites.push({ expression, imageUrl: url, seed });
     } catch (e) {
       character.status = "error";
@@ -195,12 +210,22 @@ function generateCharacterSprites(character, onProgress, expressions = EXPRESSIO
 // case is "4 of 5 are fine, just the sad one came out wrong". Uses a fresh random seed (not the
 // batch's fixed seed=1) since re-running the exact same prompt+seed would just reproduce the
 // same unwanted image.
+// Prefers the "neutral" sprite as the identity anchor when one exists (most representative,
+// least likely to itself be an exaggerated pose); falls back to whatever sprite happens to exist,
+// or null (a brand-new character with no sprites yet at all) which generateSpriteImage treats as
+// "nothing to reference, do a plain base generation instead".
+function pickReferenceSprite(character) {
+  const neutral = character.sprites.find((s) => s.expression === "neutral");
+  return (neutral || character.sprites[0])?.imageUrl || null;
+}
+
 async function regenerateCharacterSpriteInternal(character, expression) {
   if (!EXPRESSIONS.includes(expression)) {
     throw new Error(`Unknown expression: ${expression}`);
   }
   const seed = Math.floor(Math.random() * 1e9);
-  const url = await generateSpriteImage(character, expression, seed);
+  const referenceUrl = pickReferenceSprite(character);
+  const url = await generateSpriteImage(character, expression, seed, referenceUrl);
   const sprite = { expression, imageUrl: url, seed };
   const idx = character.sprites.findIndex((s) => s.expression === expression);
   const oldSprite = idx >= 0 ? character.sprites[idx] : null;
@@ -331,7 +356,7 @@ async function stepBackgrounds(episode) {
     // this correctly for one-off reroll requests, just never applied to the initial batch either.
     const seed = Math.floor(Math.random() * 1e9);
     const prompt = buildBackgroundPrompt(scene, series);
-    const buffer = await generateImage(prompt, { width: 1280, height: 720, seed });
+    const buffer = await generateImageFlux(prompt, { width: 1280, height: 720, seed });
     scene.backgroundUrl = await uploadToB2(
       buffer,
       `youtube/episodes/${episode._id}/scene${scene.order}-bg.jpg`,
@@ -352,7 +377,7 @@ async function regenerateSceneBackground(episode, scene) {
   const series = await Series.findById(episode.series);
   const seed = Math.floor(Math.random() * 1e9);
   const prompt = buildBackgroundPrompt(scene, series);
-  const buffer = await generateImage(prompt, { width: 1280, height: 720, seed });
+  const buffer = await generateImageFlux(prompt, { width: 1280, height: 720, seed });
   const oldUrl = scene.backgroundUrl;
   scene.backgroundUrl = await uploadToB2(
     buffer,
@@ -386,7 +411,7 @@ async function stepTts(episode) {
       await episode.save();
       await emit(episode);
       const voice = line.character ? byId.get(String(line.character))?.voiceName || narratorVoice : narratorVoice;
-      const { buffer, durationMs } = await synthesize(line.text, voice);
+      const { buffer, durationMs } = await synthesize(line.text, voice, line.expression);
       line.audioUrl = await uploadToB2(
         buffer,
         `youtube/episodes/${episode._id}/scene${scene.order}-line${i}.mp3`,

@@ -136,11 +136,18 @@ router.delete("/series/:id", async (req, res) => {
 // ── Characters ──────────────────────────────────────────────────────
 router.post("/characters", async (req, res) => {
   try {
-    const { seriesId, name, description, voiceName, attrs } = req.body;
+    const { seriesId, name, description, voiceName, voiceOptions, attrs } = req.body;
     if (!seriesId || !name || !description || !voiceName) {
       return res.status(400).json({ error: "seriesId, name, description, and voiceName are required" });
     }
-    const character = await Character.create({ series: seriesId, name, description, voiceName, attrs: attrs || null });
+    const character = await Character.create({
+      series: seriesId,
+      name,
+      description,
+      voiceName,
+      voiceOptions: Array.isArray(voiceOptions) ? voiceOptions : [],
+      attrs: attrs || null,
+    });
     res.json(character);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -163,11 +170,12 @@ router.get("/characters", async (req, res) => {
 // so an edit only affects future generate-sprites/regenerate-sprite calls, not existing images.
 router.patch("/characters/:id", async (req, res) => {
   try {
-    const { name, description, voiceName, attrs } = req.body;
+    const { name, description, voiceName, voiceOptions, attrs } = req.body;
     const update = {};
     if (name !== undefined) update.name = name;
     if (description !== undefined) update.description = description;
     if (voiceName !== undefined) update.voiceName = voiceName;
+    if (voiceOptions !== undefined) update.voiceOptions = Array.isArray(voiceOptions) ? voiceOptions : [];
     if (attrs !== undefined) update.attrs = attrs;
     const character = await Character.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!character) return res.status(404).json({ error: "Character not found" });
@@ -293,7 +301,7 @@ router.get("/episodes", async (req, res) => {
     // line without a second round-trip per character.
     const episodes = await Episode.find(filter)
       .sort({ episodeNumber: -1 })
-      .populate("scenes.dialogue.character", "name voiceName");
+      .populate("scenes.dialogue.character", "name voiceName voiceOptions");
     res.json(episodes);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -302,7 +310,7 @@ router.get("/episodes", async (req, res) => {
 
 router.get("/episodes/:id", async (req, res) => {
   try {
-    const episode = await Episode.findById(req.params.id).populate("scenes.dialogue.character", "name voiceName");
+    const episode = await Episode.findById(req.params.id).populate("scenes.dialogue.character", "name voiceName voiceOptions");
     if (!episode) return res.status(404).json({ error: "Episode not found" });
     res.json(episode);
   } catch (err) {
@@ -378,7 +386,7 @@ router.put("/episodes/:id/scenes", async (req, res) => {
     if (needsBackgrounds || needsTts) {
       scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     }
-    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName");
+    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions");
     res.json(fresh);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -401,7 +409,7 @@ router.post("/episodes/:id/scenes/:order/regenerate-background", async (req, res
     if (!scene) return res.status(404).json({ error: "Scene not found" });
 
     await scheduler.regenerateSceneBackground(episode, scene);
-    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName");
+    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions");
     res.json(fresh);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -441,6 +449,29 @@ router.post("/episodes/:id/upload-youtube", async (req, res) => {
       return res.status(409).json({ error: "This episode isn't ready to upload yet." });
     }
     episode.status = "uploading";
+    await episode.save();
+    scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
+    res.json(episode);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Re-renders an episode that already finished rendering — lets a human re-run the render (e.g.
+// after tweaking a line/voice in review, or just to reroll) without touching the already-generated
+// script/sprites/backgrounds/audio. Same "momentary handoff" pattern as approve-render: sets status
+// to "tts" so STEP_HANDLERS.tts (stepRenderAndUpload) picks it up immediately via triggerNow.
+// Scoped to "rendered" only (not "done"/"uploading"/"publishing") — once an episode has been
+// published, re-rendering would replace the B2 copy but not the video already live on YouTube,
+// which would be confusing rather than useful.
+router.post("/episodes/:id/rerender", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (episode.status !== "rendered") {
+      return res.status(409).json({ error: "This episode isn't in a state that can be re-rendered." });
+    }
+    episode.status = "tts";
     await episode.save();
     scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     res.json(episode);

@@ -27,6 +27,10 @@ const characterSchema = new mongoose.Schema(
     // description manually — the edit form falls back to plain-text editing for those.
     attrs: { type: mongoose.Schema.Types.Mixed, default: null },
     voiceName: { type: String, required: true }, // exact edge-tts voice id, e.g. 'en-US-GuyNeural'
+    // Extra voice ids this character can be quick-switched to (episode review's voice picker,
+    // or a future re-roll) without overwriting `voiceName`, which stays the actual active pick
+    // used by every render until someone explicitly changes it.
+    voiceOptions: { type: [String], default: [] },
     sprites: [spriteSchema], // 5-8 expressions, generated once during the 'sprites' pipeline step
     status: { type: String, enum: ["pending", "generating_sprites", "ready", "error"], default: "pending" },
     spriteError: { type: String, default: null },
