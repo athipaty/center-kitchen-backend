@@ -17,6 +17,7 @@ const AbtAnnouncement = require('../../models/abt/AbtAnnouncement')
 const AbtProcurement = require('../../models/abt/AbtProcurement')
 const AbtStaff = require('../../models/abt/AbtStaff')
 const AbtTravel = require('../../models/abt/AbtTravel')
+const AbtVideo = require('../../models/abt/AbtVideo')
 const AbtProduct = require('../../models/abt/AbtProduct')
 const AbtOIT = require('../../models/abt/AbtOIT')
 const AbtEService = require('../../models/abt/AbtEService')
@@ -826,6 +827,46 @@ router.put('/travel/:id', requireAuth, async (req, res) => {
 router.delete('/travel/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtTravel.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// VIDEOS (YouTube)
+router.get('/videos', async (req, res) => {
+  try {
+    const filter = req.query.all === '1' ? {} : { isActive: true }
+    const items = await AbtVideo.find(filter).sort({ createdAt: -1 })
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/videos', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtVideo.create(req.body)
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/videos/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtVideo.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/videos/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtVideo.findByIdAndDelete(req.params.id)
     if (!item) return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
