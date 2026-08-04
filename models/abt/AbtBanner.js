@@ -8,6 +8,7 @@ const AbtBannerSchema = new mongoose.Schema({
   imageUrl: { type: String, default: '' },
   order:    { type: Number, default: 0 },
   active: { type: Boolean, default: true },
+  animation: { type: String, default: 'both', enum: ['none', 'glow', 'shimmer', 'both'] },
 }, { timestamps: true })
 
 module.exports = mongoose.model('AbtBanner', AbtBannerSchema)
