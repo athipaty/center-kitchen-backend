@@ -69,6 +69,7 @@ function getUploadPdf() {
 }
 
 const uploadExcel = multer({ storage: multer.memoryStorage() })
+const uploadWord  = multer({ storage: multer.memoryStorage() })
 
 // â”€â”€ Auth middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function getClientIp(req) {
@@ -125,6 +126,16 @@ router.post('/upload-excel', requireAuth, uploadExcel.single('excel'), async (re
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   try {
     const url = await uploadToB2(req.file.buffer, `abt-excel/${Date.now()}-${req.file.originalname}`, req.file.mimetype)
+    res.json({ url })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/upload-word', requireAuth, uploadWord.single('word'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  try {
+    const url = await uploadToB2(req.file.buffer, `abt-word/${Date.now()}-${req.file.originalname}`, req.file.mimetype)
     res.json({ url })
   } catch (err) {
     res.status(500).json({ error: err.message })
