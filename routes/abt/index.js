@@ -5,6 +5,7 @@ const multer = require('multer')
 const { S3Client } = require('@aws-sdk/client-s3')
 const multerS3 = require('multer-s3')
 const { uploadToB2, b2PublicUrl } = require('../../utils/b2Utils')
+const { ntfyPush } = require('../../utils/ntfy')
 const { enrichAnnouncement } = require('../../utils/egpEnrich')
 const { buildProjectCards } = require('../../utils/egpPhayaoGroup')
 
@@ -1491,6 +1492,11 @@ router.get('/contact-messages', requireAuth, async (req, res) => {
 router.post('/contact-messages', requireAuth, async (req, res) => {
   try {
     const item = await AbtContactMessage.create(req.body)
+    ntfyPush(
+      '📝 คำขอใหม่จากเว็บ อบต.แม่ใส',
+      item.title + (item.message ? `\n${item.message}` : ''),
+      { priority: 'high', tags: ['memo'] }
+    ).catch(() => {})
     res.status(201).json(item)
   } catch (err) {
     res.status(400).json({ error: err.message })
