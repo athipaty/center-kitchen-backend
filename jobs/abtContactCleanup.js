@@ -16,6 +16,7 @@ async function cleanup() {
   if (result.deletedCount) {
     console.log(`[abtContactCleanup] deleted ${result.deletedCount} request(s) done for ${RETENTION_DAYS}+ days`)
   }
+  return { deletedCount: result.deletedCount, cutoff }
 }
 
 function start() {

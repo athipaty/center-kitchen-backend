@@ -1523,6 +1523,17 @@ router.delete('/contact-messages/:id', requireAuth, async (req, res) => {
   }
 })
 
+// POST trigger the "done" request cleanup now instead of waiting for its daily cron
+router.post('/contact-messages/cleanup', requireAuth, async (req, res) => {
+  try {
+    const { cleanup } = require('../../jobs/abtContactCleanup')
+    const result = await cleanup()
+    res.json(result)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 module.exports = router
 
 
