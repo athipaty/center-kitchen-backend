@@ -32,6 +32,8 @@ const AbtEgpItem         = require('../../models/abt/AbtEgpItem')
 const AbtEgpPdfCache     = require('../../models/abt/AbtEgpPdfCache')
 const AbtEgpPhayaoItem   = require('../../models/abt/AbtEgpPhayaoItem')
 const AbtNotice          = require('../../models/abt/AbtNotice')
+const AbtStockItem        = require('../../models/abt/AbtStockItem')
+const AbtStockTransaction = require('../../models/abt/AbtStockTransaction')
 
 const upload = multer({ storage: multer.memoryStorage() })
 
@@ -932,6 +934,117 @@ router.delete('/products/:id', requireAuth, async (req, res) => {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // SETTINGS
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+router.get('/stock-items', async (req, res) => {
+  try {
+    const filter = req.query.all === '1' ? {} : { isActive: true }
+    const items = await AbtStockItem.find(filter).sort({ code: 1 })
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/stock-items', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtStockItem.create(req.body)
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/stock-items/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtStockItem.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/stock-items/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtStockItem.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    await AbtStockTransaction.deleteMany({ item: item._id })
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.get('/stock-transactions', async (req, res) => {
+  try {
+    const filter = {}
+    if (req.query.itemId) filter.item = req.query.itemId
+    const limit = Math.min(parseInt(req.query.limit) || 500, 2000)
+    const txns = await AbtStockTransaction.find(filter).sort({ date: -1, createdAt: -1 }).limit(limit)
+    res.json(txns)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/stock-transactions', requireAuth, async (req, res) => {
+  try {
+    const { itemId, type, qty, date, party, docNo, note } = req.body
+    if (!itemId || !type || !['รับ', 'จ่าย'].includes(type)) {
+      return res.status(400).json({ error: 'ข้อมูลไม่ครบถ้วน' })
+    }
+    const qtyNum = Number(qty)
+    if (!qtyNum || qtyNum <= 0) return res.status(400).json({ error: 'จำนวนต้องมากกว่า 0' })
+
+    const item = await AbtStockItem.findById(itemId)
+    if (!item) return res.status(404).json({ error: 'ไม่พบวัสดุ' })
+
+    if (type === 'จ่าย' && qtyNum > item.balance) {
+      return res.status(400).json({ error: `วัสดุคงเหลือไม่พอ (คงเหลือ ${item.balance} ${item.unit})` })
+    }
+
+    const newBalance = type === 'รับ' ? item.balance + qtyNum : item.balance - qtyNum
+    item.balance = newBalance
+    await item.save()
+
+    const txn = await AbtStockTransaction.create({
+      item: item._id,
+      itemCode: item.code,
+      itemName: item.name,
+      type,
+      date: date ? new Date(date) : new Date(),
+      party: party || '',
+      docNo: docNo || '',
+      qty: qtyNum,
+      unit: item.unit,
+      unitPrice: item.unitPrice,
+      amount: qtyNum * item.unitPrice,
+      balanceAfter: newBalance,
+      note: note || '',
+    })
+
+    res.status(201).json({ transaction: txn, item })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/stock-transactions/:id', requireAuth, async (req, res) => {
+  try {
+    const txn = await AbtStockTransaction.findById(req.params.id)
+    if (!txn) return res.status(404).json({ error: 'Not found' })
+
+    const item = await AbtStockItem.findById(txn.item)
+    if (item) {
+      item.balance = txn.type === 'รับ' ? item.balance - txn.qty : item.balance + txn.qty
+      await item.save()
+    }
+    await txn.deleteOne()
+    res.json({ success: true, item })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
 router.get('/settings', async (req, res) => {
   try {
