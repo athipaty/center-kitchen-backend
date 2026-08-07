@@ -3158,7 +3158,7 @@ router.post('/trading-create-listing', async (req, res) => {
   try {
     const token = await getAccessToken();
     const {
-      title, price: _price, currency = 'USD', quantity = 1,
+      title, price: _price, currency = 'USD', quantity = 2, // default 2 for single-item listings; multi-variation quantity is set per-variant below
       condition = 'NEW', categoryId,
       imageUrls = [], upc, specs = {}, bullets = [], description,
       variants, // [{ label, price, quantity, specifics: [{name,value}] }] for multi-variation
