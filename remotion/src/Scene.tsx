@@ -1,75 +1,52 @@
 import { AbsoluteFill, Audio, Img, Sequence, useVideoConfig } from "remotion";
-import { KenBurnsImage } from "./KenBurnsImage";
-import { CaptionOverlay } from "./CaptionOverlay";
-import { SpeechBubble } from "./SpeechBubble";
 import type { SceneProps } from "./types";
 
 const msToFrames = (ms: number, fps: number) => Math.max(1, Math.round((ms / 1000) * fps));
 
-// Percent-from-edge margin for a lone speaker's portrait. Positions are driven by each
-// character's fixed `slot`, not how many are currently speaking, so a two-character scene always
-// puts character 0 near the left edge and character 1 near the right edge, line to line, rather
-// than the portrait re-centering itself each time the speaker changes.
-const EDGE_MARGIN_PCT = 7;
-const PORTRAIT_SIZE_PCT = 13;
+// Width of the book-spine divider drawn between the two pages, in pixels at the composition's
+// native 1280x720 — a plain CSS gradient, not something the image model needs to draw itself.
+const SPINE_WIDTH = 8;
 
-function slotToLeftPct(slot: number, totalSlots: number, name: string): number {
-  if (totalSlots <= 1) {
-    // A lone speaker still shouldn't sit dead-center — pick left or right edge, stable per
-    // character name so the same character always speaks from the same side scene to scene.
-    const hash = [...name].reduce((h, c) => h + c.charCodeAt(0), 0);
-    return hash % 2 === 0 ? EDGE_MARGIN_PCT : 100 - EDGE_MARGIN_PCT;
-  }
-  return EDGE_MARGIN_PCT + (slot / (totalSlots - 1)) * (100 - 2 * EDGE_MARGIN_PCT);
-}
-
+// A scene is a static two-page storybook spread — no Ken Burns pan/zoom, no per-line portrait or
+// caption overlay. Motion between scenes comes from the page-flip transition (PageFlip.tsx) at the
+// composition level, not from anything happening within a single scene. The per-line <Audio>
+// Sequence loop is kept unchanged from the old per-line-sprite system — it's still what drives
+// total scene duration and narration sync, it just no longer renders anything visual per line.
 export const Scene: React.FC<SceneProps & { durationInFrames: number }> = ({
-  backgroundUrl,
-  cameraMove,
+  leftPageUrl,
+  rightPageUrl,
   dialogue,
-  durationInFrames,
 }) => {
   const { fps } = useVideoConfig();
   let cursor = 0;
 
   return (
     <AbsoluteFill>
-      <KenBurnsImage src={backgroundUrl} durationInFrames={durationInFrames} move={cameraMove} />
+      <AbsoluteFill style={{ right: "50%" }}>
+        <Img src={leftPageUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      </AbsoluteFill>
+      <AbsoluteFill style={{ left: "50%" }}>
+        <Img src={rightPageUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      </AbsoluteFill>
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          left: "50%",
+          width: SPINE_WIDTH,
+          marginLeft: -SPINE_WIDTH / 2,
+          background: "linear-gradient(to right, rgba(0,0,0,0.35), rgba(0,0,0,0.05), rgba(0,0,0,0.35))",
+          zIndex: 2,
+        }}
+      />
       {dialogue.map((line, i) => {
         const lineFrames = msToFrames(line.durationMs, fps);
         const from = cursor;
         cursor += lineFrames;
-        // Only the character currently speaking gets a portrait — a listening character's sprite
-        // sitting on screen unchanged read as clutter, not as "this person is in the scene".
-        const speaking = line.characters.find((c) => c.name === line.speaker);
-        const leftPct = speaking ? slotToLeftPct(speaking.slot, line.characters.length, speaking.name) : 50;
         return (
           <Sequence key={i} from={from} durationInFrames={lineFrames} layout="none">
             <Audio src={line.audioUrl} />
-            {speaking && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "6%",
-                  left: `${leftPct}%`,
-                  transform: "translateX(-50%)",
-                  width: `${PORTRAIT_SIZE_PCT}%`,
-                  aspectRatio: "1 / 1",
-                  borderRadius: "50%",
-                  overflow: "hidden",
-                  border: "4px solid rgba(255,255,255,0.9)",
-                  boxShadow: "0 6px 20px rgba(0,0,0,0.3)",
-                  opacity: 0.8,
-                }}
-              >
-                <Img src={speaking.spriteUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-              </div>
-            )}
-            {speaking ? (
-              <SpeechBubble text={line.text} leftPct={leftPct} portraitSizePct={PORTRAIT_SIZE_PCT} />
-            ) : (
-              <CaptionOverlay text={line.text} speaker={line.speaker} />
-            )}
           </Sequence>
         );
       })}

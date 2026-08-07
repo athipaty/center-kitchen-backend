@@ -21,6 +21,9 @@ const seriesSchema = new mongoose.Schema(
     // so the whole series looks like one consistent art style, not a new style per generation.
     artStyle: { type: String, default: "" },
     voiceLocale: { type: String, default: "en-US" },
+    // Drives generateScript's word-count target (targetEpisodeMinutes * WORDS_PER_MINUTE, see
+    // claudeScript.js) — set once at outline time, applies to every episode in the series.
+    targetEpisodeMinutes: { type: Number, default: 5 },
     continuityLog: [continuityEntrySchema],
     status: { type: String, enum: ["active", "archived"], default: "active" },
   },

@@ -25,9 +25,9 @@ router.post("/outline/idea", async (req, res) => {
 // the DB until POST /outline/commit — abandoning a draft costs nothing.
 router.post("/outline", async (req, res) => {
   try {
-    const { idea, voiceLocale, targetEpisodeMinutes } = req.body;
+    const { idea, voiceLocale, targetEpisodeMinutes, episodeCount } = req.body;
     if (!idea || !idea.trim()) return res.status(400).json({ error: "idea is required" });
-    const outline = await generateStoryOutline({ idea: idea.trim(), voiceLocale, targetEpisodeMinutes });
+    const outline = await generateStoryOutline({ idea: idea.trim(), voiceLocale, targetEpisodeMinutes, episodeCount });
     res.json(outline);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -39,12 +39,12 @@ router.post("/outline", async (req, res) => {
 // until a manual POST /episodes/:id/advance click, same as an episode created one at a time.
 router.post("/outline/commit", async (req, res) => {
   try {
-    const { title, premise, genre, tone, artStyle, voiceLocale, episodes, characters } = req.body;
+    const { title, premise, genre, tone, artStyle, voiceLocale, targetEpisodeMinutes, episodes, characters } = req.body;
     if (!title || !premise) return res.status(400).json({ error: "title and premise are required" });
     if (!Array.isArray(episodes) || !episodes.length) return res.status(400).json({ error: "at least one episode is required" });
     if (!Array.isArray(characters) || !characters.length) return res.status(400).json({ error: "at least one character is required" });
 
-    const series = await Series.create({ title, premise, genre, tone, artStyle, voiceLocale });
+    const series = await Series.create({ title, premise, genre, tone, artStyle, voiceLocale, targetEpisodeMinutes });
 
     const createdCharacters = await Character.insertMany(
       characters.map((c) => ({ series: series._id, name: c.name, description: c.description, voiceName: c.voiceName }))
@@ -97,7 +97,7 @@ router.get("/series/:id", async (req, res) => {
 // mid-pipeline guard as the single-episode delete below: refuses only if the scheduler is
 // literally mid-step on one of its episodes right now. Status alone can't tell "safe to delete"
 // from "actively being written to" anymore — runDueTick only ever advances the earliest unfinished
-// episode per series, so a later sibling can sit at a non-terminal status (e.g. "sprites")
+// episode per series, so a later sibling can sit at a non-terminal status (e.g. "images")
 // indefinitely, genuinely untouched, while waiting behind it. isEpisodeInFlight checks the
 // scheduler's real in-memory in-progress set instead of guessing from the stored status.
 router.delete("/series/:id", async (req, res) => {
@@ -252,11 +252,12 @@ router.post("/characters/:id/backfill-sprites", async (req, res) => {
   }
 });
 
-// DELETE a character. Blocked while it's on-screen in an episode that still needs to look its
-// sprites up — stepRenderAndUpload re-fetches Character docs by id at render time, so an episode
-// paused at "review" (not yet rendered) still needs this character to exist. "rendered" is safe
-// to allow, same reasoning as the episode-delete route below: the render already happened, sprite
-// URLs are already baked into the finished MP4, and nothing re-reads the Character doc after that.
+// DELETE a character. Blocked while it's on-screen in an episode that might still need to look it
+// up — stepImages reads a character's description for its image prompts and stepTts reads its
+// voiceName, and editing scenes while paused at "review" (PUT /episodes/:id/scenes) can re-trigger
+// either of those. "rendered" is safe to allow, same reasoning as the episode-delete route below:
+// the render already happened, this character's art/voice are already baked into the finished MP4,
+// and nothing re-reads the Character doc after that.
 router.delete("/characters/:id", async (req, res) => {
   try {
     const inFlight = await Episode.exists({
@@ -290,16 +291,17 @@ router.post("/episodes", async (req, res) => {
   }
 });
 
-// Runs exactly one pipeline step (script, sprites, backgrounds, or narration — whichever matches
-// the episode's current status) and stops, waiting for the next manual click. Mirrors the
-// character sprite-generation route below: acks immediately with 202 since a step can take well
-// over a minute (sprite/background generation especially), and the actual progress/completion
-// arrives over the 'episode:progress'/'episode:error' sockets already emitted by every step.
+// Runs exactly one pipeline step (script, spread images, or narration — whichever matches the
+// episode's current status) and stops, waiting for the next manual click. Mirrors the character
+// sprite-generation route below: acks immediately with 202 since a step can take well over a
+// minute (image generation especially — 2 Pollinations calls per scene), and the actual
+// progress/completion arrives over the 'episode:progress'/'episode:error' sockets already emitted
+// by every step.
 router.post("/episodes/:id/advance", async (req, res) => {
   try {
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
-    if (!["pending", "script", "sprites", "backgrounds"].includes(episode.status)) {
+    if (!["pending", "script", "images"].includes(episode.status)) {
       return res.status(409).json({ error: "This episode isn't waiting on a manual step right now." });
     }
     if (scheduler.isEpisodeInFlight(episode._id)) {
@@ -353,7 +355,7 @@ router.put("/episodes/:id/scenes", async (req, res) => {
     }
 
     const { scenes: editedScenes = [], voiceChanges = [] } = req.body;
-    let needsBackgrounds = false;
+    let needsImages = false;
     let needsTts = false;
 
     // Voice changes are a character-level fix (e.g. the wrong gender voice got assigned when the
@@ -378,8 +380,9 @@ router.put("/episodes/:id/scenes", async (req, res) => {
       if (!scene) continue;
       if (typeof edited.backgroundPrompt === "string" && edited.backgroundPrompt.trim() !== scene.backgroundPrompt.trim()) {
         scene.backgroundPrompt = edited.backgroundPrompt.trim();
-        scene.backgroundUrl = null;
-        needsBackgrounds = true;
+        scene.leftPageUrl = null;
+        scene.rightPageUrl = null;
+        needsImages = true;
       }
       (edited.dialogue || []).forEach((editedLine, i) => {
         const line = scene.dialogue[i];
@@ -397,14 +400,15 @@ router.put("/episodes/:id/scenes", async (req, res) => {
     }
 
     episode.markModified("scenes");
-    // 'sprites' and 'backgrounds' are the same safe re-entry points stepBackgrounds/stepTts's
-    // "already generated" checks make resumable everywhere else in this pipeline.
-    if (needsBackgrounds) episode.status = "sprites";
-    else if (needsTts) episode.status = "backgrounds";
+    // 'script' and 'images' are the same safe re-entry points stepImages/stepTts's "already
+    // generated" checks make resumable everywhere else in this pipeline (STEP_HANDLERS.script ->
+    // stepImages, STEP_HANDLERS.images -> stepTts).
+    if (needsImages) episode.status = "script";
+    else if (needsTts) episode.status = "images";
     // else: only expressions changed (or nothing did) — stays "review", nothing to regenerate.
     await episode.save();
 
-    if (needsBackgrounds || needsTts) {
+    if (needsImages || needsTts) {
       scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     }
     const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
@@ -415,12 +419,14 @@ router.put("/episodes/:id/scenes", async (req, res) => {
   }
 });
 
-// Redo a single scene's background image using its already-saved prompt — no text edit required,
-// for when the same prompt might come out looking better on a different roll. Only allowed at
-// "review" (same restriction as editing scenes above) since regenerating art after the final MP4
-// already exists wouldn't change anything already baked into the render.
-router.post("/episodes/:id/scenes/:order/regenerate-background", async (req, res) => {
+// Redo a single page (left or right) of a scene's spread using its already-saved prompt — no text
+// edit required, for when the same prompt might come out looking better on a different roll. Only
+// allowed at "review" (same restriction as editing scenes above) since regenerating art after the
+// final MP4 already exists wouldn't change anything already baked into the render.
+router.post("/episodes/:id/scenes/:order/regenerate-page", async (req, res) => {
   try {
+    const { side } = req.body;
+    if (side !== "left" && side !== "right") return res.status(400).json({ error: "side must be 'left' or 'right'" });
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
     if (episode.status !== "review") {
@@ -430,7 +436,7 @@ router.post("/episodes/:id/scenes/:order/regenerate-background", async (req, res
     const scene = episode.scenes.find((s) => s.order === order);
     if (!scene) return res.status(404).json({ error: "Scene not found" });
 
-    await scheduler.regenerateSceneBackground(episode, scene);
+    await scheduler.regenerateScenePage(episode, scene, side);
     const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
       .populate("scenes.charactersOnScreen", "name sprites");
     res.json(fresh);
@@ -482,7 +488,7 @@ router.post("/episodes/:id/upload-youtube", async (req, res) => {
 
 // Re-renders an episode that already finished rendering — lets a human re-run the render (e.g.
 // after tweaking a line/voice in review, or just to reroll) without touching the already-generated
-// script/sprites/backgrounds/audio. Same "momentary handoff" pattern as approve-render: sets status
+// script/images/audio. Same "momentary handoff" pattern as approve-render: sets status
 // to "tts" so STEP_HANDLERS.tts (stepRenderAndUpload) picks it up immediately via triggerNow.
 // Scoped to "rendered" only (not "done"/"uploading"/"publishing") — once an episode has been
 // published, re-rendering would replace the B2 copy but not the video already live on YouTube,
@@ -511,9 +517,9 @@ router.post("/episodes/:id/retry", async (req, res) => {
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
     if (episode.status === "error") {
-      // 'sprites' is a safe universal re-entry point once a script exists: stepSprites skips
-      // characters already status:'ready', stepBackgrounds/stepTts skip scenes/lines that
-      // already have a backgroundUrl/audioUrl — so resuming here never redoes finished work.
+      // 'script' is a safe universal re-entry point once a script exists: STEP_HANDLERS.script
+      // (stepImages) skips pages already generated, stepTts skips lines that already have an
+      // audioUrl — so resuming here never redoes finished work.
       episode.status = episode.scenes?.length ? "script" : "pending";
       episode.errorMessage = null;
       await episode.save();

@@ -38,9 +38,13 @@ const CHARACTER_VOICES_BY_LOCALE = {
 };
 const DEFAULT_CHARACTER_VOICES = CHARACTER_VOICES_BY_LOCALE["en-US"];
 
-// ~150 spoken words/minute at natural narration pace — matches the word-count floor
-// generateScript above already assumes (900 words -> "at least 3 minutes").
+// ~150 spoken words/minute at natural narration pace.
 const WORDS_PER_MINUTE = 150;
+
+// Fallback for series created before targetEpisodeMinutes existed on the Series schema (Mongoose
+// defaults don't backfill already-saved documents) — matches the script length those series were
+// originally tuned for.
+const DEFAULT_TARGET_WORDS = 1000;
 
 // Writes the next episode's scene-by-scene script. Fed the series' continuity log so the plot
 // doesn't drift or contradict itself — this is the entire mechanism that makes it feel like a
@@ -55,6 +59,10 @@ async function generateScript(series, characters, premise) {
     .map((e) => `Episode ${e.episodeNumber}: ${e.summary}`)
     .join("\n") || "(this is the first episode — no prior history)";
   const scriptLanguage = SCRIPT_LANGUAGE_BY_LOCALE[series.voiceLocale] || DEFAULT_SCRIPT_LANGUAGE;
+  const targetWords = series.targetEpisodeMinutes
+    ? Math.round(series.targetEpisodeMinutes * WORDS_PER_MINUTE)
+    : DEFAULT_TARGET_WORDS;
+  const targetWordsCeiling = targetWords + 200;
 
   const prompt = `You are writing one episode of an ongoing narrated "motion comic" style story series.
 
@@ -73,13 +81,12 @@ This episode's premise: ${premise}
 
 Write a longer episode as 10-14 scenes. Each scene has a background description, which characters
 are on screen, and a sequence of dialogue/narration lines — a hard minimum of 5 lines per scene,
-never fewer. The finished video must run AT LEAST 3 minutes, which at natural narration pace means
-the total dialogue/narration across the whole script must be AT LEAST 900 words — treat this as a
-strict floor, not a suggestion, and aim past it (1000-1200 words) for safety margin. Undershooting
-this — writing a handful of short scenes — is the single most common mistake; if you're unsure,
-add more scenes and more lines per scene rather than fewer. A line with no character speaking
-(pure narration) is allowed — use character "Narrator" for those, and they still count toward the
-word-count floor.
+never fewer. At natural narration pace, the total dialogue/narration across the whole script must
+be AT LEAST ${targetWords} words — treat this as a strict floor, not a suggestion, and aim past it
+(${targetWords}-${targetWordsCeiling} words) for safety margin. Undershooting this — writing a
+handful of short scenes — is the single most common mistake; if you're unsure, add more scenes and
+more lines per scene rather than fewer. A line with no character speaking (pure narration) is
+allowed — use character "Narrator" for those, and they still count toward the word-count floor.
 
 Somewhere in the episode, include one "curiosity beat": a character notices something (an animal,
 object, or place) and asks a genuine, kid-friendly "why" or "how" question about it. Another
@@ -248,10 +255,13 @@ Return ONLY a raw JSON object (no markdown fences): { "idea": "..." }`;
 // reusing one character across episodes is both cheaper and more visually consistent than
 // inventing a new one per scene. Nothing is persisted here; the caller (POST /outline) just
 // returns this draft for the user to review/edit before committing it via POST /outline/commit.
-async function generateStoryOutline({ idea, voiceLocale = "en-US", targetEpisodeMinutes = 2 }) {
+async function generateStoryOutline({ idea, voiceLocale = "en-US", targetEpisodeMinutes = 5, episodeCount = null }) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const scriptLanguage = SCRIPT_LANGUAGE_BY_LOCALE[voiceLocale] || DEFAULT_SCRIPT_LANGUAGE;
   const targetWords = Math.round(targetEpisodeMinutes * WORDS_PER_MINUTE);
+  const episodeCountInstruction = episodeCount
+    ? `Split the story into EXACTLY ${episodeCount} episodes — this is a hard requirement, not a suggestion.`
+    : `Split the story into as many episodes as it naturally needs to tell it well at that length, not one arbitrary number.`;
 
   const prompt = `You are a children's story planner and show creator, writing a "นิทาน"
 (bedtime/children's story) as a narrated motion-comic video series for kids.
@@ -266,8 +276,7 @@ Plan the WHOLE story before any single episode gets written. Decide:
    friendly shapes").
 2. How many episodes the story needs and what happens in each one, in story order. Each episode
    should be a self-contained chunk of the overall arc, roughly ${targetWords} spoken words long
-   (about ${targetEpisodeMinutes} minutes of narration at natural pace) — split the story into as
-   many episodes as it naturally needs to tell it well at that length, not one arbitrary number.
+   (about ${targetEpisodeMinutes} minutes of narration at natural pace). ${episodeCountInstruction}
    Give each episode a short title and a 1-3 sentence premise of what happens in it.
 3. The cast: list ONLY the characters who actually appear with a real role somewhere in the story
    — do not invent side characters "for flavor". A character only earns a spot if they have real
@@ -305,12 +314,23 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
   const parsed = parseJsonResponse(msg);
   const voicePool = CHARACTER_VOICES_BY_LOCALE[voiceLocale] || DEFAULT_CHARACTER_VOICES;
 
-  const characters = (parsed.characters || []).map((c) => ({
-    name: c.name || "Character",
-    description: c.description || "",
-    role: c.role || "",
-    voiceName: c.gender === "female" ? voicePool.female : voicePool.male,
-  }));
+  // The model occasionally lists the same character twice (e.g. once as the protagonist, again
+  // for a later beat) — nothing downstream dedupes by name, so an unfiltered list would turn into
+  // two separate Character docs on commit. Keep only the first occurrence of each name.
+  const seenNames = new Set();
+  const characters = (parsed.characters || [])
+    .map((c) => ({
+      name: c.name || "Character",
+      description: c.description || "",
+      role: c.role || "",
+      voiceName: c.gender === "female" ? voicePool.female : voicePool.male,
+    }))
+    .filter((c) => {
+      const key = c.name.trim().toLowerCase();
+      if (seenNames.has(key)) return false;
+      seenNames.add(key);
+      return true;
+    });
 
   const episodes = (parsed.episodes || []).map((e, i) => ({
     episodeNumber: i + 1,
@@ -325,6 +345,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
     tone: parsed.tone || "",
     artStyle: parsed.artStyle || "",
     voiceLocale,
+    targetEpisodeMinutes,
     episodes,
     characters,
   };

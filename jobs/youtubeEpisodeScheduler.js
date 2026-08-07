@@ -4,6 +4,7 @@ const Series = require("../models/youtube/Series");
 const Character = require("../models/youtube/Character");
 const Episode = require("../models/youtube/Episode");
 const { generateImageFlux, generateCharacterImage } = require("../utils/youtube/fal");
+const { generateImage } = require("../utils/youtube/pollinations");
 const { synthesize } = require("../utils/youtube/edgeTts");
 const { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS } = require("../utils/youtube/claudeScript");
 const { renderEpisodeToBuffer } = require("../utils/youtube/remotionRender");
@@ -51,11 +52,13 @@ async function stepScript(episode) {
   episode.statusDetail = "";
 }
 
-// Generates one character's locked sprite set (one image per EXPRESSION) — shared by the episode
-// pipeline (stepSprites below) and the standalone POST /characters/:id/generate-sprites route,
-// since a character can get its sprites generated either up front on the Series page or lazily
-// the first time an episode references it. `onProgress(expression)` is optional, used to keep an
-// Episode's statusDetail live while this runs as part of that pipeline.
+// Generates one character's locked sprite set (one image per EXPRESSION). Left over from the old
+// per-line sprite-swap rendering system (see stepImages below, which replaced it with single
+// composed page images) — the episode pipeline no longer calls this, but it's kept in place, still
+// reachable via the standalone POST /characters/:id/generate-sprites route, as the natural
+// starting point if a later paid-tier phase wants identity-locked character art again.
+// `onProgress(expression)` is optional, used to keep that route's progress event live while this
+// runs.
 //
 // The bare expression word ("happy expression") was too weak a signal — diffusion models render
 // it as a subtle, easy-to-miss facial tweak. These need to read at a glance, so each one spells
@@ -150,16 +153,22 @@ function withCharacterLock(characterId, fn) {
 }
 
 async function refreshCharacterSprites(character) {
-  const fresh = await Character.findById(character._id).select("sprites status spriteError");
+  // Must also pull `__v` here, not just the content fields: this runs after waiting on
+  // withCharacterLock, by which point an earlier queued call may have already saved (bumping the
+  // DB's __v) since `character` was first fetched in the route handler. Without re-syncing __v,
+  // the later .save() below still carries the stale version and Mongoose's optimistic-concurrency
+  // check rejects it with "No matching document found for id ... version N" even though the
+  // sprites themselves were refreshed correctly.
+  const fresh = await Character.findById(character._id).select("sprites status spriteError __v");
   character.sprites = fresh.sprites;
   character.status = fresh.status;
   character.spriteError = fresh.spriteError;
+  character.__v = fresh.__v;
 }
 
-// `expressions` defaults to the full palette (used by the manual "Generate sprites" button on the
-// Series page, where there's no episode/script context yet to know what's actually needed) but
-// stepSprites below passes just the subset a specific episode's script actually uses, so a new
-// character's first batch is sized to the story instead of always paying for all of EXPRESSIONS.
+// `expressions` defaults to the full palette — used by the manual "Generate sprites" button on
+// the Series page, now the only caller since the episode pipeline itself no longer generates
+// sprites (see stepImages below).
 async function generateCharacterSpritesInternal(character, onProgress, expressions = EXPRESSIONS) {
   const oldSprites = character.sprites; // deleted from B2 below once the new batch is safely saved
   character.status = "generating_sprites";
@@ -252,9 +261,7 @@ function regenerateCharacterSprite(character, expression) {
 
 // Generates only the expressions a character doesn't have yet, out of `expressions` (defaults to
 // the full palette — for when EXPRESSIONS grows and an already-'ready' character needs the new
-// ones added on top). stepSprites below passes just the specific expressions a later episode's
-// script newly needs from a character that's already 'ready' from an earlier episode, so a
-// character only ever grows the exact sprites its story has actually asked for, not the whole set.
+// ones added on top, via the standalone POST /characters/:id/backfill-sprites route).
 // Each missing expression reuses regenerateCharacterSpriteInternal's push-if-absent behavior one at
 // a time, same throttling as the initial batch generation — all under one lock acquisition so a
 // concurrent caller can't sneak in and see a half-backfilled character.
@@ -274,113 +281,105 @@ function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS
   });
 }
 
-// script -> sprites: generates sprite sets for any NEW character this episode references, and
-// backfills any NEW expression an already-'ready' reused character needs that it doesn't have yet
-// — in both cases scoped to only the expressions this episode's script actually assigned to that
-// character (plus "neutral" as a guaranteed fallback), not the full EXPRESSIONS palette. The
-// script (written in the previous step) already picked an expression per dialogue line from that
-// palette, so by this point the story has already told us exactly which emotions each character
-// needs — generating all 10 regardless would be paying for sprites this story never uses.
-async function stepSprites(episode) {
+// Free-tier draft phase deliberately accepts that Pollinations won't render a character
+// identically pose-to-pose the way fal.ai's instant-character image-to-image did for the old
+// sprite system — see the plan discussion this replaced. Consistency instead comes from repeating
+// the same locked `description` text for a character in every prompt it appears in, across every
+// scene and both pages of a spread.
+// Falls back to a soft storybook illustration look when a series hasn't set its own artStyle —
+// matches the style generateStoryOutline's own prompt suggests by example, and reads as a
+// children's picture book rather than photoreal or generic digital art by default.
+const DEFAULT_SPREAD_STYLE = "soft flat vector illustration, gentle pastel colors, rounded friendly shapes, children's storybook art style";
+const SPREAD_WIDTH = 1024;
+const SPREAD_HEIGHT = 1280;
+
+function buildCastLine(scene, byId) {
+  const cast = scene.charactersOnScreen
+    .map((id) => byId.get(String(id)))
+    .filter(Boolean)
+    .map((c) => `${c.name}: ${c.description}`)
+    .join("; ");
+  return cast ? ` Characters present: ${cast}.` : "";
+}
+
+// Each scene becomes a two-page storybook spread instead of a single background: `left` is a
+// wider establishing framing of the setting, `right` a closer character/action-focused framing of
+// the SAME moment — both prompts share the scene's setting, the series' art style, and every
+// on-screen character's locked description, so the pair reads as one consistent illustration split
+// across two pages rather than two unrelated images.
+function buildSpreadPrompt(scene, series, byId, side) {
+  const styleSuffix = `, ${series.artStyle || DEFAULT_SPREAD_STYLE}`;
+  const castLine = buildCastLine(scene, byId);
+  if (side === "left") {
+    return `wide establishing storybook illustration, full scene composition, ${scene.backgroundPrompt}.${castLine} Show the whole setting clearly with characters positioned naturally within the environment${styleSuffix}, children's picture book illustration, one consistent scene, left page of an open book`;
+  }
+  return `closer storybook illustration, character-focused framing of the same moment, ${scene.backgroundPrompt}.${castLine} Focus on the characters' expressions and action, medium shot${styleSuffix}, children's picture book illustration, one consistent scene, right page of an open book`;
+}
+
+// script -> images: generates the two-page spread (leftPageUrl + rightPageUrl) for every scene,
+// via Pollinations (free tier, see pollinations.js). Replaces the old separate sprite-generation
+// and background-generation steps entirely — there's no per-character sprite to swap in anymore,
+// each page is one fully-composed image with its on-screen characters already baked in. Each page
+// URL is generated independently and skipped if already present, so an interrupted run resumes
+// without re-paying for pages it already has.
+async function stepImages(episode) {
+  const series = await Series.findById(episode.series);
   const characterIds = [
     ...new Set(episode.scenes.flatMap((s) => s.charactersOnScreen.map(String))),
   ];
   const characters = await Character.find({ _id: { $in: characterIds } });
+  const byId = new Map(characters.map((c) => [String(c._id), c]));
 
-  for (const character of characters) {
-    const neededExpressions = [...new Set(
-      episode.scenes
-        .flatMap((s) => s.dialogue)
-        .filter((d) => d.character && String(d.character) === String(character._id))
-        .map((d) => d.expression)
-    )];
-    if (!neededExpressions.includes("neutral")) neededExpressions.push("neutral");
-
-    const onProgress = async (expression) => {
-      episode.statusDetail = `${character.name} sprite: ${expression}`;
+  for (const scene of episode.scenes) {
+    if (!scene.leftPageUrl) {
+      episode.statusDetail = `spread ${scene.order + 1}/${episode.scenes.length} (left page)`;
       await episode.save();
       await emit(episode);
-    };
-
-    // Decide generate-vs-backfill *after* acquiring this character's lock and re-reading its
-    // current status/sprites, not before — otherwise two episodes sharing a character can both
-    // see "not ready yet" at the same time, both queue a full generateCharacterSprites, and the
-    // second one (running once the lock lets it through) throws away and redoes the sprites the
-    // first one just finished.
-    await withCharacterLock(character._id, async () => {
-      await refreshCharacterSprites(character);
-      if (character.status !== "ready") {
-        await generateCharacterSpritesInternal(character, onProgress, neededExpressions);
-      } else {
-        const missing = neededExpressions.filter((e) => !character.sprites.some((s) => s.expression === e));
-        if (missing.length) await backfillMissingSpritesInternal(character, onProgress, neededExpressions);
-      }
-    });
+      // A fresh random seed per page — see generateCharacterSprites' seed=1 bug comment above for
+      // why a fixed/omitted seed produces near-identical-looking images across calls.
+      const seed = Math.floor(Math.random() * 1e9);
+      const buffer = await generateImage(buildSpreadPrompt(scene, series, byId, "left"), { width: SPREAD_WIDTH, height: SPREAD_HEIGHT, seed });
+      scene.leftPageUrl = await uploadToB2(
+        buffer,
+        `youtube/episodes/${episode._id}/scene${scene.order}-left.jpg`,
+        "image/jpeg"
+      );
+    }
+    if (!scene.rightPageUrl) {
+      episode.statusDetail = `spread ${scene.order + 1}/${episode.scenes.length} (right page)`;
+      await episode.save();
+      await emit(episode);
+      const seed = Math.floor(Math.random() * 1e9);
+      const buffer = await generateImage(buildSpreadPrompt(scene, series, byId, "right"), { width: SPREAD_WIDTH, height: SPREAD_HEIGHT, seed });
+      scene.rightPageUrl = await uploadToB2(
+        buffer,
+        `youtube/episodes/${episode._id}/scene${scene.order}-right.jpg`,
+        "image/jpeg"
+      );
+    }
   }
-
-  episode.status = "sprites";
+  episode.status = "images";
   episode.statusDetail = "";
 }
 
-// Pollinations' documented GET endpoint has no negative-prompt param (see buildSpritePrompt's
-// comment above) — a single trailing "no characters, no people" was too weak a signal, and scenes
-// routinely came back with people baked into the scenery itself, which then stay on screen for the
-// whole scene regardless of who's actually speaking (the Scene.tsx portrait-overlay logic only
-// controls the separate circular speaker portrait — it has no way to remove figures the background
-// image itself already contains). Same fix as sprites: repeat the "empty, uninhabited" constraint
-// several times, in different words, front and back of the prompt.
-// Falls back to a photorealistic look when a series hasn't set its own artStyle — tested directly
-// against Pollinations (see conversation), and a plain unstyled prompt reads as cartoon/illustrated
-// by default, which isn't what most of these series actually want for their backgrounds.
-const DEFAULT_BACKGROUND_STYLE = "photorealistic, realistic photography, natural lighting, high detail";
-
-function buildBackgroundPrompt(scene, series) {
-  const styleSuffix = `, ${series.artStyle || DEFAULT_BACKGROUND_STYLE}`;
-  return `empty background scenery, uninhabited location, nobody present, vacant${styleSuffix}, ${scene.backgroundPrompt}, wide establishing shot of the location only, no characters, no people, no person, no human figures, no silhouettes, no crowd, background art only, scenery without any inhabitants`;
-}
-
-// sprites -> backgrounds: one image per scene, using the series' shared artStyle suffix so every
-// scene (and every episode) looks like the same visual world.
-async function stepBackgrounds(episode) {
+// Redo a single page (left or right) of a scene's spread using its already-saved backgroundPrompt,
+// without touching the other page or any other scene — the review panel's standalone "reroll this
+// page" button, as opposed to stepImages' initial per-scene generation. Uses its own fresh random
+// seed and a seed-tagged B2 key so re-running the same prompt gets a new image rather than
+// reproducing (or being served a cached copy of) the same unwanted one — same reasoning as
+// regenerateCharacterSprite above.
+async function regenerateScenePage(episode, scene, side) {
   const series = await Series.findById(episode.series);
-  for (const scene of episode.scenes) {
-    if (scene.backgroundUrl) continue; // already generated — resuming after an interruption
-    episode.statusDetail = `background for scene ${scene.order + 1}/${episode.scenes.length}`;
-    await episode.save();
-    await emit(episode);
-    // A fresh random seed per scene — passing none left Pollinations to fall back to whatever it
-    // defaults to when omitted, which produced near-identical-looking backgrounds across scenes
-    // regardless of how different scene.backgroundPrompt actually was. Same fix, same reasoning,
-    // as generateCharacterSprites' seed=1 bug above; regenerateSceneBackground below already did
-    // this correctly for one-off reroll requests, just never applied to the initial batch either.
-    const seed = Math.floor(Math.random() * 1e9);
-    const prompt = buildBackgroundPrompt(scene, series);
-    const buffer = await generateImageFlux(prompt, { width: 1280, height: 720, seed });
-    scene.backgroundUrl = await uploadToB2(
-      buffer,
-      `youtube/episodes/${episode._id}/scene${scene.order}-bg.jpg`,
-      "image/jpeg"
-    );
-  }
-  episode.status = "backgrounds";
-  episode.statusDetail = "";
-}
-
-// Redo a single scene's background art using its already-saved backgroundPrompt, without touching
-// any other scene or requiring the prompt text itself to have changed — the review panel's
-// standalone "reroll this background" button, as opposed to stepBackgrounds' initial per-scene
-// generation. Uses its own fresh random seed and a seed-tagged B2 key so re-running the same
-// prompt gets a new image rather than reproducing (or being served a cached copy of) the same
-// unwanted one — same reasoning as regenerateCharacterSprite above.
-async function regenerateSceneBackground(episode, scene) {
-  const series = await Series.findById(episode.series);
+  const characters = await Character.find({ _id: { $in: scene.charactersOnScreen } });
+  const byId = new Map(characters.map((c) => [String(c._id), c]));
   const seed = Math.floor(Math.random() * 1e9);
-  const prompt = buildBackgroundPrompt(scene, series);
-  const buffer = await generateImageFlux(prompt, { width: 1280, height: 720, seed });
-  const oldUrl = scene.backgroundUrl;
-  scene.backgroundUrl = await uploadToB2(
+  const prompt = buildSpreadPrompt(scene, series, byId, side);
+  const buffer = await generateImage(prompt, { width: SPREAD_WIDTH, height: SPREAD_HEIGHT, seed });
+  const field = side === "left" ? "leftPageUrl" : "rightPageUrl";
+  const oldUrl = scene[field];
+  scene[field] = await uploadToB2(
     buffer,
-    `youtube/episodes/${episode._id}/scene${scene.order}-bg-${seed}.jpg`,
+    `youtube/episodes/${episode._id}/scene${scene.order}-${side}-${seed}.jpg`,
     "image/jpeg"
   );
   episode.markModified("scenes");
@@ -391,9 +390,9 @@ async function regenerateSceneBackground(episode, scene) {
   if (oldUrl) await deleteB2File(b2KeyFromUrl(oldUrl)).catch(() => {});
 }
 
-// backgrounds -> review: one audio file per dialogue line, then STOPS at "review" instead of
+// images -> review: one audio file per dialogue line, then STOPS at "review" instead of
 // going straight into rendering — gives a human a chance to read the dialogue, look at the
-// backgrounds, and edit anything before the render (which is comparatively expensive/slow) runs.
+// spread images, and edit anything before the render (which is comparatively expensive/slow) runs.
 // Narrator lines use a per-locale default voice; character lines use that character's own locked
 // voiceName.
 async function stepTts(episode) {
@@ -424,54 +423,13 @@ async function stepTts(episode) {
   episode.statusDetail = "";
 }
 
-// Builds one scene's per-line render props. Every line still lists ALL of that scene's on-screen
-// characters (each tagged with a stable left-to-right `slot`), but Scene.tsx only renders the one
-// matching `speaker` for a given line — the slot is what keeps a character's portrait anchored to
-// the same edge across the scene instead of jumping as the speaker changes. Each character's
-// sprite reflects their most recently-voiced expression (defaulting to neutral before their first
-// line), so their face doesn't reset to neutral on lines where someone else is speaking.
-function buildDialogueProps(scene, byId) {
-  const currentExpression = new Map();
-  for (const charId of scene.charactersOnScreen) currentExpression.set(String(charId), "neutral");
-
-  return scene.dialogue.map((line) => {
-    const character = line.character ? byId.get(String(line.character)) : null;
-    if (character) currentExpression.set(String(character._id), line.expression);
-
-    const characters = scene.charactersOnScreen
-      .map((id) => byId.get(String(id)))
-      .filter(Boolean)
-      .map((c, slot) => {
-        const expr = currentExpression.get(String(c._id)) || "neutral";
-        const sprite = c.sprites.find((s) => s.expression === expr) || c.sprites[0];
-        return sprite ? { name: c.name, spriteUrl: sprite.imageUrl, slot } : null;
-      })
-      .filter(Boolean);
-
-    return {
-      text: line.text,
-      speaker: character ? character.name : null,
-      audioUrl: line.audioUrl,
-      durationMs: line.durationMs,
-      characters,
-    };
-  });
-}
-
 // review -> rendered: renders the MP4 (via the Remotion subprocess) and uploads it to B2, then
 // STOPS at "rendered" instead of continuing straight to YouTube — gives a human a chance to
 // preview the actual rendered video (via the player on the episode card) and decide to publish it,
 // rather than every render silently going live on the channel the moment it finishes. If this is
 // interrupted before reaching "rendered", retrying just re-renders from the already-cached
-// background/sprite/audio URLs above (no repeated Pollinations/TTS calls, so it's cheap and safe
-// to redo).
+// page-image/audio URLs above (no repeated Pollinations/TTS calls, so it's cheap and safe to redo).
 async function stepRenderAndUpload(episode) {
-  const characterIds = [
-    ...new Set(episode.scenes.flatMap((s) => s.charactersOnScreen.map(String))),
-  ];
-  const characters = await Character.find({ _id: { $in: characterIds } });
-  const byId = new Map(characters.map((c) => [String(c._id), c]));
-
   episode.status = "rendering";
   episode.statusDetail = "rendering video";
   await episode.save();
@@ -479,9 +437,12 @@ async function stepRenderAndUpload(episode) {
 
   const props = {
     scenes: episode.scenes.map((scene) => ({
-      backgroundUrl: scene.backgroundUrl,
-      cameraMove: scene.cameraMove,
-      dialogue: buildDialogueProps(scene, byId),
+      leftPageUrl: scene.leftPageUrl,
+      rightPageUrl: scene.rightPageUrl,
+      dialogue: scene.dialogue.map((line) => ({
+        audioUrl: line.audioUrl,
+        durationMs: line.durationMs,
+      })),
     })),
     bgmUrl: null, // no royalty-free track bundled in v1 — see remotion/src/EpisodeComposition.tsx
   };
@@ -536,9 +497,8 @@ async function stepPublishToYoutube(episode) {
 
 const STEP_HANDLERS = {
   pending: stepScript,
-  script: stepSprites,
-  sprites: stepBackgrounds,
-  backgrounds: stepTts,
+  script: stepImages,
+  images: stepTts,
   tts: stepRenderAndUpload,
   rendering: stepRenderAndUpload, // safe to redo — see stepRenderAndUpload's comment
   uploading: stepPublishToYoutube, // goes straight to "done" — see its comment
@@ -555,7 +515,7 @@ const STEP_HANDLERS = {
 const inFlightEpisodes = new Set();
 
 // The actual real-time answer to "is this episode being worked on right now" — unlike its status
-// field, which can now sit at a non-terminal value (e.g. "sprites") indefinitely while genuinely
+// field, which can now sit at a non-terminal value (e.g. "images") indefinitely while genuinely
 // idle, waiting on the next manual /advance click. Delete routes use this instead of guessing
 // "safe to delete" from status, since status alone can no longer tell idle-and-waiting apart from
 // mid-write.
@@ -598,4 +558,4 @@ async function triggerNow(episodeId) {
   if (episode) await processOne(episode);
 }
 
-module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneBackground, isEpisodeInFlight };
+module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateScenePage, isEpisodeInFlight };

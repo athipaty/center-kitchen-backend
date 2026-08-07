@@ -15,12 +15,13 @@ const sceneSchema = new mongoose.Schema(
   {
     order: { type: Number, required: true },
     backgroundPrompt: { type: String, required: true }, // text prompt sent to the image generator
-    backgroundUrl: { type: String, default: null }, // B2 URL, filled during the 'backgrounds' step
-    cameraMove: {
-      type: String,
-      enum: ["pan-left", "pan-right", "zoom-in", "zoom-out", "static"],
-      default: "zoom-in",
-    },
+    // A scene renders as a two-page storybook spread rather than a single background + character
+    // portrait overlay — leftPageUrl is a wider/establishing framing of the scene, rightPageUrl a
+    // closer character/action-focused framing of the same moment, both generated with the same
+    // on-screen characters' locked descriptions baked into the prompt for consistency. Filled
+    // during the 'images' step (jobs/youtubeEpisodeScheduler.js).
+    leftPageUrl: { type: String, default: null },
+    rightPageUrl: { type: String, default: null },
     charactersOnScreen: [{ type: mongoose.Schema.Types.ObjectId, ref: "YoutubeCharacter" }],
     dialogue: [dialogueLineSchema],
   },
@@ -39,11 +40,11 @@ const episodeSchema = new mongoose.Schema(
     // advances it to the next status. See that file for exactly what each step does.
     status: {
       type: String,
-      enum: ["pending", "script", "sprites", "backgrounds", "tts", "review", "rendering", "rendered", "uploading", "publishing", "done", "error"],
+      enum: ["pending", "script", "images", "tts", "review", "rendering", "rendered", "uploading", "publishing", "done", "error"],
       default: "pending",
       index: true,
     },
-    statusDetail: { type: String, default: "" }, // human-readable sub-step, e.g. "background 2/4"
+    statusDetail: { type: String, default: "" }, // human-readable sub-step, e.g. "spread 2/4"
     errorMessage: { type: String, default: null },
     videoUrl: { type: String, default: null }, // final B2 MP4 URL
     youtubeVideoId: { type: String, default: null }, // filled during the 'uploading' step
