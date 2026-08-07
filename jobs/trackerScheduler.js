@@ -230,6 +230,10 @@ async function checkProduct(p, syncedListings = null) {
 
 const DEAD_LISTING_DAYS = 7;
 
+// Steady-state "available" count a single-item (non-variant) listing gets restocked back up to
+// after each sale. Multi-variant listings intentionally stay at 1 per variant — not this.
+const SINGLE_ITEM_RESTOCK_QTY = 2;
+
 async function checkDeadListings() {
   const cutoff = new Date(Date.now() - DEAD_LISTING_DAYS * 24 * 3600 * 1000);
 
@@ -894,10 +898,10 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
         } else {
           // Single listing: <Quantity> is the lifetime total ever set on a Good-Til-Cancelled
           // listing, not what's currently available — eBay computes remaining as
-          // Quantity - QuantitySold (which never resets across sales). Reviving to a flat "1"
-          // once QuantitySold >= 1 leaves 0 actually available, which is exactly why a
-          // "restocked" single listing can still show Out of Stock live. Need the item's
-          // current QuantitySold before picking the new Quantity, so GetItem first.
+          // Quantity - QuantitySold (which never resets across sales). Reviving to a flat
+          // SINGLE_ITEM_RESTOCK_QTY once QuantitySold >= 1 leaves 0 actually available, which is
+          // exactly why a "restocked" single listing can still show Out of Stock live. Need the
+          // item's current QuantitySold before picking the new Quantity, so GetItem first.
           const { data: getSingleXml } = await tradingPost('GetItem',
             `<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<ItemID>${itemId}</ItemID></GetItemRequest>`
           );
@@ -907,7 +911,7 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
           const soldSoFar = parseInt(getSingleXml.match(/<SellingStatus>[\s\S]*?<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
 
           const { data: reviseXml } = await tradingPost('ReviseInventoryStatus',
-            `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>${soldSoFar + 1}</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`
+            `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${itemId}</ItemID><Quantity>${soldSoFar + SINGLE_ITEM_RESTOCK_QTY}</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`
           );
           const reviseFailMsg = checkFailure(reviseXml);
           if (reviseFailMsg) throw isListingGoneError(reviseXml) ? Object.assign(new Error(reviseFailMsg), { code: 'LISTING_GONE' }) : new Error(reviseFailMsg);
