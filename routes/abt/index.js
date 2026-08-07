@@ -34,6 +34,8 @@ const AbtEgpPhayaoItem   = require('../../models/abt/AbtEgpPhayaoItem')
 const AbtNotice          = require('../../models/abt/AbtNotice')
 const AbtStockItem        = require('../../models/abt/AbtStockItem')
 const AbtStockTransaction = require('../../models/abt/AbtStockTransaction')
+const AbtFeedback         = require('../../models/abt/AbtFeedback')
+const AbtSurveyResponse   = require('../../models/abt/AbtSurveyResponse')
 
 const upload = multer({ storage: multer.memoryStorage() })
 
@@ -1328,6 +1330,95 @@ router.put('/complaints/:id', requireAuth, async (req, res) => {
     res.json(item)
   } catch (err) {
     res.status(400).json({ error: err.message })
+  }
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEEDBACK (ช่องทางรับฟังความคิดเห็น)
+// ════════════════════════════════════════════════════════════════════════════
+
+router.get('/feedback', requireAuth, async (req, res) => {
+  try {
+    const filter = {}
+    if (req.query.status) filter.status = req.query.status
+    const items = await AbtFeedback.find(filter).sort({ createdAt: -1 }).limit(500)
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/feedback', async (req, res) => {
+  try {
+    const { topic, message, name, phone, isAnonymous } = req.body
+    const item = await AbtFeedback.create({
+      topic,
+      message,
+      isAnonymous: !!isAnonymous,
+      name:  isAnonymous ? '' : name,
+      phone: isAnonymous ? '' : phone,
+    })
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.put('/feedback/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtFeedback.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/feedback/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtFeedback.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// SATISFACTION SURVEY (แบบสำรวจความพึงพอใจ)
+// ════════════════════════════════════════════════════════════════════════════
+
+router.get('/survey-responses', requireAuth, async (req, res) => {
+  try {
+    const items = await AbtSurveyResponse.find().sort({ createdAt: -1 }).limit(1000)
+    res.json(items)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/survey-responses', async (req, res) => {
+  try {
+    const { serviceUsed, ratings, comment, name, phone } = req.body
+    const scores = ['process', 'staff', 'facility', 'quality'].map(k => Number(ratings?.[k]))
+    if (scores.some(s => !Number.isFinite(s) || s < 1 || s > 5)) {
+      return res.status(400).json({ error: 'กรุณาให้คะแนนครบทุกหัวข้อ (1-5)' })
+    }
+    const overallScore = scores.reduce((a, b) => a + b, 0) / scores.length
+    const item = await AbtSurveyResponse.create({ serviceUsed, ratings, comment, name, phone, overallScore })
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/survey-responses/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtSurveyResponse.findByIdAndDelete(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
   }
 })
 
