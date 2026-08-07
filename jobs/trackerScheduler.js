@@ -494,12 +494,6 @@ async function runAutoEndZeroViews() {
     const { getAccessToken } = require('./ebayPriceSync');
     const token = await getAccessToken();
 
-    // Fetch active listings with watch counts in one call
-    const { data: listXml } = await axios.post('https://api.ebay.com/ws/api.dll',
-      `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>200</EntriesPerPage></Pagination></ActiveList></GetMyeBaySellingRequest>`,
-      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
-    );
-
     const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
     const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
     const twentyDaysAgo = Date.now() - 20 * 24 * 60 * 60 * 1000;
@@ -508,20 +502,34 @@ async function runAutoEndZeroViews() {
     const twentyPlusDayListings = [];
     const watchCounts = {};
     const soldCounts = {};
-    const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
-    let m;
-    while ((m = itemRe.exec(listXml)) !== null) {
-      const block = m[1];
-      const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
-      const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
-      if (!itemId || !startTime) continue;
-      watchCounts[itemId] = parseInt(block.match(/<WatchCount>(\d+)<\/WatchCount>/)?.[1] || '0', 10);
-      // QuantitySold rides along on this same call — no extra API cost.
-      soldCounts[itemId] = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
-      const startMs = new Date(startTime).getTime();
-      if (startMs <= threeDaysAgo) oldListings.push(itemId);
-      if (startMs <= tenDaysAgo) tenPlusDayListings.push(itemId);
-      if (startMs <= twentyDaysAgo) twentyPlusDayListings.push(itemId);
+
+    // Paginate through ALL active listings — a single 200-entry page silently stopped
+    // covering anything past #200 once the catalog grew past that. Page cap here is a
+    // safety net, not the stop condition; HasMoreItems below is.
+    for (let page = 1; page <= 200; page++) {
+      const { data: listXml } = await axios.post('https://api.ebay.com/ws/api.dll',
+        `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`,
+        { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+      );
+      if (/<Ack>Failure<\/Ack>/.test(listXml)) break;
+
+      const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
+      let m;
+      while ((m = itemRe.exec(listXml)) !== null) {
+        const block = m[1];
+        const itemId = block.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+        const startTime = block.match(/<StartTime>([\s\S]*?)<\/StartTime>/)?.[1];
+        if (!itemId || !startTime) continue;
+        watchCounts[itemId] = parseInt(block.match(/<WatchCount>(\d+)<\/WatchCount>/)?.[1] || '0', 10);
+        // QuantitySold rides along on this same call — no extra API cost.
+        soldCounts[itemId] = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
+        const startMs = new Date(startTime).getTime();
+        if (startMs <= threeDaysAgo) oldListings.push(itemId);
+        if (startMs <= tenDaysAgo) tenPlusDayListings.push(itemId);
+        if (startMs <= twentyDaysAgo) twentyPlusDayListings.push(itemId);
+      }
+
+      if (!/<HasMoreItems>true<\/HasMoreItems>/.test(listXml)) break;
     }
 
     console.log(`auto-end-zero-views: ${oldListings.length} listings are 3+ days old`);
