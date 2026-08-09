@@ -826,6 +826,24 @@ router.post("/group/:groupId/preflight-images", async (req, res) => {
   }
 });
 
+// PATCH persist the auto-list flow's current step for a set of products, so it survives a
+// page refresh — see the autoListStep/autoListStepAt comment on the Product model. Called by
+// ProductGroupCard at every step transition (fire-and-forget from the frontend) and with
+// step:null when the flow finishes or errors out.
+router.patch("/auto-list-step", async (req, res) => {
+  try {
+    const { ids, step } = req.body;
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: "ids array is required" });
+    await Product.updateMany(
+      { _id: { $in: ids } },
+      { $set: { autoListStep: step || null, autoListStepAt: step ? new Date() : null } }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST re-fetch images for a product — tries Keepa first, falls back to Amazon HTML scrape + Cloudinary upload
 router.post("/:id/refresh-images", async (req, res) => {
   try {

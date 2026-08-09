@@ -46,6 +46,14 @@ const productSchema = new mongoose.Schema(
     listFailCount: { type: Number, default: 0 },
     listingBlocked: { type: Boolean, default: false },
     listingBlockReason: { type: String, default: null },
+    // Live progress marker for the client-driven auto-list flow (preparing-images → title →
+    // images → description → listing → photos → verifying → saving — see ProductGroupCard's
+    // autoListOnEbay). The whole flow runs as sequential fetches from the browser, not a
+    // backend job, so if the tab is refreshed/closed mid-flow nothing resumes it — these two
+    // fields just let the UI show "still under listing" (or "stalled" once stale) after a
+    // reload, instead of the in-progress state silently vanishing with the page's JS memory.
+    autoListStep: { type: String, default: null },
+    autoListStepAt: { type: Date, default: null },
     // Times an order for this listing/variant has blown eBay's 48h tracking deadline —
     // surfaces chronically-late SKUs so their handling time can be bumped on eBay.
     lateShipmentCount: { type: Number, default: 0 },
