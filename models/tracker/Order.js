@@ -22,6 +22,12 @@ const orderSchema = new mongoose.Schema(
     ebayItemId: { type: String, default: null },
     title: { type: String, default: null },
     variationValue: { type: String, default: null },
+    // Snapshot of the matching tracker Product's Amazon URL/image, taken at capture time
+    // (order-capture in trackerScheduler.js runAutoRestock). Product.ebayListingId changes
+    // whenever the listing gets relisted (new eBay item ID), which breaks a live join from
+    // this order's (now-stale) ebayItemId — these snapshot fields keep working regardless.
+    amazonUrl: { type: String, default: null },
+    productImage: { type: String, default: null },
     quantity: { type: Number, default: 1 },
     price: { type: Number, default: null },
     buyerUserId: { type: String, default: null },

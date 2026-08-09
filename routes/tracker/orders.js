@@ -30,19 +30,31 @@ router.get("/", async (req, res) => {
       ],
     }).sort({ createTimeEbay: -1, createdAt: -1 });
 
-    // Attach the matching Amazon product URL for each order's item/variant, same
-    // matching logic used to restock the right variant after a sale.
-    const itemIds = [...new Set(orders.map(o => o.ebayItemId).filter(Boolean))];
-    const products = await Product.find({ ebayListingId: { $in: itemIds } }, { url: 1, ebayListingId: 1, variant: 1, image: 1 }).lean();
+    // Amazon URL/image are snapshotted onto the order at capture time (see order-capture
+    // in trackerScheduler.js) so they survive the product's ebayListingId later changing
+    // on relist. Only fall back to a live join for older orders captured before that
+    // snapshot existed — which breaks if their product has since been relisted, same as
+    // before this fix.
+    const legacyOrders = orders.filter(o => !o.amazonUrl && !o.productImage);
+    const itemIds = [...new Set(legacyOrders.map(o => o.ebayItemId).filter(Boolean))];
+    const products = itemIds.length
+      ? await Product.find({ ebayListingId: { $in: itemIds } }, { url: 1, ebayListingId: 1, variant: 1, image: 1 }).lean()
+      : [];
     const productsByListing = {};
     for (const p of products) (productsByListing[p.ebayListingId] ||= []).push(p);
 
     const now = Date.now();
     const results = orders.map(o => {
-      const candidates = productsByListing[o.ebayItemId] || [];
-      const match = candidates.length
-        ? (o.variationValue ? bestVariantMatch(candidates, o.variationValue) : candidates[0])
-        : null;
+      let amazonUrl = o.amazonUrl || null;
+      let productImage = o.productImage || null;
+      if (!amazonUrl && !productImage) {
+        const candidates = productsByListing[o.ebayItemId] || [];
+        const match = candidates.length
+          ? (o.variationValue ? bestVariantMatch(candidates, o.variationValue) : candidates[0])
+          : null;
+        amazonUrl = match?.url || null;
+        productImage = match?.image || null;
+      }
 
       const shipDeadline = o.createTimeEbay
         ? new Date(o.createTimeEbay.getTime() + SHIP_DEADLINE_HOURS * 3600 * 1000)
@@ -52,8 +64,8 @@ router.get("/", async (req, res) => {
 
       return {
         ...o.toObject(),
-        amazonUrl: match?.url || null,
-        productImage: match?.image || null,
+        amazonUrl,
+        productImage,
         shipDeadline,
         hoursLeft,
         isOverdue: hoursLeft != null && hoursLeft <= 0,
@@ -194,6 +206,41 @@ router.post("/:id/notify-buyer", async (req, res) => {
     order.status = 'notified';
     await order.save();
     res.json({ messageText, order });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── One-time backfill: populate amazonUrl/productImage for orders captured before
+// this snapshot existed. Uses the same live-join logic the GET / route falls back to —
+// running this now, before any further relists happen, locks in a correct match for
+// orders whose product hasn't been relisted yet (orders whose product was already
+// relisted before this backfill runs have no way to recover their original match).
+router.post("/backfill-product-links", async (req, res) => {
+  try {
+    const orders = await Order.find(
+      { $or: [{ amazonUrl: null }, { amazonUrl: { $exists: false } }] },
+      'ebayItemId variationValue'
+    ).lean();
+    if (!orders.length) return res.json({ ok: true, updated: 0, message: 'Nothing to backfill' });
+
+    const itemIds = [...new Set(orders.map(o => o.ebayItemId).filter(Boolean))];
+    const products = await Product.find({ ebayListingId: { $in: itemIds } }, { url: 1, ebayListingId: 1, variant: 1, image: 1 }).lean();
+    const productsByListing = {};
+    for (const p of products) (productsByListing[p.ebayListingId] ||= []).push(p);
+
+    let updated = 0, notFound = 0;
+    for (const o of orders) {
+      const candidates = productsByListing[o.ebayItemId] || [];
+      const match = candidates.length
+        ? (o.variationValue ? bestVariantMatch(candidates, o.variationValue) : candidates[0])
+        : null;
+      if (!match) { notFound++; continue; }
+      await Order.findByIdAndUpdate(o._id, { amazonUrl: match.url || null, productImage: match.image || null });
+      updated++;
+    }
+
+    res.json({ ok: true, candidates: orders.length, updated, notMatched: notFound });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

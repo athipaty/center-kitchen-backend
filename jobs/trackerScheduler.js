@@ -822,11 +822,26 @@ async function runAutoRestock(lookbackMs = 35 * 60 * 1000) {
           const quantity = parseInt(tx.match(/<QuantityPurchased>(\d+)<\/QuantityPurchased>/)?.[1] || '1', 10);
           const price = parseFloat(tx.match(/<TransactionPrice[^>]*>([\d.]+)<\/TransactionPrice>/)?.[1] || '0') || null;
 
+          // Snapshot the matching product's Amazon URL/image NOW, while ebayItemId still
+          // points at a live Product.ebayListingId — a future relist changes that field and
+          // would otherwise silently break this order's product link/thumbnail forever.
+          let amazonUrl = null, productImage = null;
+          try {
+            const candidates = await Product.find({ ebayListingId: ebayItemId }, { url: 1, variant: 1, image: 1 }).lean();
+            const match = candidates.length
+              ? (variationValue ? bestVariantMatch(candidates, variationValue) : candidates[0])
+              : null;
+            amazonUrl = match?.url || null;
+            productImage = match?.image || null;
+          } catch (e) {
+            console.error(`order-capture: product match failed for ${ebayItemId}:`, e.message);
+          }
+
           const result = await Order.findOneAndUpdate(
             { ebayOrderId, ebayItemId, variationValue },
             { $setOnInsert: {
               ebayOrderId, ebayItemId, title, variationValue, quantity, price,
-              buyerUserId, shippingAddress,
+              buyerUserId, shippingAddress, amazonUrl, productImage,
               createTimeEbay: createTimeEbay ? new Date(createTimeEbay) : null,
             } },
             { upsert: true, new: true, rawResult: true }
