@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
+const crypto = require("crypto");
 const Product = require("../../models/tracker/Product");
 
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
@@ -760,7 +761,13 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
           console.log(`fetchAndUploadImages: skipping GIF/tiny placeholder (${buf.length}b) for image ${i + 1}`);
           continue;
         }
-        const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
+        // This position's fileKey gets reused on every future re-scrape of the same product,
+        // but the CDN in front of B2 caches each URL forever (immutable, see uploadToB2) — so if
+        // a later re-scrape uploaded different bytes to the exact same key, the CDN would keep
+        // serving whatever it cached the first time, forever. Embedding the content hash means a
+        // changed photo naturally gets a new URL instead of silently going stale under an old one.
+        const contentHash = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 10);
+        const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}-${contentHash}.jpg`;
         const b2Url = await uploadToB2(buf, fileKey, 'image/jpeg');
         b2Urls.push(b2Url);
       } catch (e) {

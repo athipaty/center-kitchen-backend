@@ -93,7 +93,12 @@ router.post('/upload-images', async (req, res) => {
 
     for (let i = startIndex; i < imageUrls.length; i++) {
       const url = imageUrls[i];
-      const fileKey = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
+      // Base key only — this same position gets re-uploaded every time this slug is fixed/
+      // re-listed, and the CDN in front of B2 caches each exact URL forever (immutable), so
+      // reusing the bare key would let a later re-run silently keep serving whatever the CDN
+      // cached the first time. uploadToB2/copyB2File append a content hash before using this,
+      // so a changed photo naturally lands on a new URL instead of going stale under an old one.
+      const fileKeyBase = `${folder}/${slug}-${String(i + 1).padStart(2, '0')}.jpg`;
       try {
         // If source is already a B2 tracker-images file, server-side copy — no download cost.
         // Checks both the raw B2 domain and the CDN host (B2_CDN_HOST) images are actually
@@ -102,8 +107,8 @@ router.post('/upload-images', async (req, res) => {
         const isB2TrackerUrl = (url.includes('backblazeb2.com') || (process.env.B2_CDN_HOST && url.includes(process.env.B2_CDN_HOST))) && url.includes('/tracker-images/');
         if (isB2TrackerUrl) {
           const srcKey = url.replace(/^https?:\/\/[^/]+\/file\/[^/]+\//, '');
-          const newUrl = await copyB2File(srcKey, fileKey);
-          console.log(`upload-images: B2 copied ${srcKey} → ${fileKey}`);
+          const newUrl = await copyB2File(srcKey, fileKeyBase);
+          console.log(`upload-images: B2 copied ${srcKey} → ${newUrl}`);
           b2Urls.push(newUrl);
           continue;
         }
@@ -122,7 +127,10 @@ router.post('/upload-images', async (req, res) => {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
           }));
         }
-        const b2Url = await uploadToB2(Buffer.from(imgBuffer), fileKey, 'image/jpeg');
+        const buf = Buffer.from(imgBuffer);
+        const contentHash = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 10);
+        const fileKey = fileKeyBase.replace(/\.jpg$/, `-${contentHash}.jpg`);
+        const b2Url = await uploadToB2(buf, fileKey, 'image/jpeg');
         b2Urls.push(b2Url);
       } catch (e) {
         console.error(`upload-images: B2 failed for ${url}:`, e.message);

@@ -75,7 +75,14 @@ async function uploadToB2(buffer, fileKey, contentType = 'image/jpeg', cacheCont
   return b2PublicUrl(fileKey);
 }
 
-// Server-side copy within B2 (no download bandwidth cost), returns new public URL
+// Server-side copy within B2 (no download bandwidth cost), returns new public URL.
+// destFileKey is a base key — the source's own content hash (already known to B2 from the
+// list call, no extra request needed) gets appended before upload. Without this, a caller
+// that reuses the same destFileKey across repeat calls (e.g. re-running "Fix Variation
+// Photos") would overwrite the same URL with different bytes each time, and the CDN in front
+// of B2 caches every URL forever (immutable) — so it would keep serving whichever version it
+// happened to cache first, indefinitely. A content-addressed key makes changed content land
+// on a new URL instead.
 async function copyB2File(sourceFileKey, destFileKey) {
   const b2 = await getAuth();
 
@@ -89,13 +96,16 @@ async function copyB2File(sourceFileKey, destFileKey) {
     throw new Error(`b2: source file not found: ${sourceFileKey}`);
   }
 
-  const encodedDest = destFileKey.split('/').map(encodeURIComponent).join('/');
+  const hashedDest = sourceFile.contentSha1
+    ? destFileKey.replace(/(\.[a-z0-9]+)?$/i, (ext) => `-${sourceFile.contentSha1.slice(0, 10)}${ext || ''}`)
+    : destFileKey;
+  const encodedDest = hashedDest.split('/').map(encodeURIComponent).join('/');
   const { data: copied } = await axios.post(`${b2.apiUrl}/b2api/v3/b2_copy_file`,
     { sourceFileId: sourceFile.fileId, fileName: encodedDest },
     { headers: { Authorization: b2.authToken }, timeout: 15000 }
   );
 
-  return b2PublicUrl(destFileKey);
+  return b2PublicUrl(hashedDest);
 }
 
 // Delete all files under a prefix (mirrors deleteCloudinaryFolder)
