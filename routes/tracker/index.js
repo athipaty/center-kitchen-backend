@@ -510,7 +510,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
     const parsed = await getParsedPage(product);
     if (parsed) {
       const forceHiRes = u => String(u).replace(/\._AC_(?:US\d+|SX\d+|SY\d+|SS\d+)?_?(?=\.jpg)/i, '._AC_SL1500_');
-      // Capped to 11 (+1 for the color swatch prepended below = 12) — eBay's own listing/
+      // Capped to 11 (+1 for the color swatch appended below = 12) — eBay's own listing/
       // variation picture cap is 12, and this gallery gets reused verbatim for every sibling
       // in the group, so uploading more than that per variant is pure wasted B2/queue time.
       // Large multi-dimension groups (e.g. Color x PackageQuantity, 50+ variants) made this
@@ -564,9 +564,12 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
         }
       }
 
+      // The swatch is Amazon's tiny color-picker icon (often just a close-up fabric/color
+      // patch, not a real product shot) — it must never lead the gallery, or it becomes the
+      // hero image and the default photo eBay shows when a buyer selects that color.
       const selectedVariant = (parsed.customization_options?.Color || []).find(c => c.is_selected);
       const swatch = selectedVariant?.image ? forceHiRes(selectedVariant.image) : null;
-      amazonImages = swatch ? [swatch, ...hiRes] : hiRes;
+      amazonImages = swatch ? [...hiRes, swatch] : hiRes;
 
       if (amazonImages.length) {
         console.log(`fetchAndUploadImages: autoparse got ${amazonImages.length} images for ${product._id}`);
@@ -608,7 +611,7 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
                 return cv === norm || cv.includes(norm) || norm.includes(cv);
               });
               const sibSwatch = match?.image ? forceHiRes(match.image) : null;
-              const sibImages = sibSwatch ? [sibSwatch, ...hiRes] : hiRes;
+              const sibImages = sibSwatch ? [...hiRes, sibSwatch] : hiRes;
               if (sibImages.length >= 2) {
                 console.log(`autoparse: seeding "${sib.variant}" with ${sibImages.length} images`);
                 queueImageUpload(sib, sibImages).catch(() => {});
