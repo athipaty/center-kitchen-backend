@@ -92,6 +92,96 @@ async function callScraperApi(amazonUrl) {
   return data;
 }
 
+// Raw (non-autoparse) HTML fetch — used only as a fallback for multi-dimension products,
+// where autoparse's customization_options is known to be incomplete (see extractFullVariantMatrix).
+async function callScraperApiRaw(amazonUrl) {
+  const key = process.env.SCRAPER_API_KEY;
+  if (!key) throw new Error("SCRAPER_API_KEY not set");
+
+  const { data } = await axios.get(SCRAPER_API_BASE, {
+    params: { api_key: key, url: amazonUrl },
+    timeout: 60000,
+  });
+
+  if (typeof data !== 'string' || data.length < 1000) {
+    throw new Error(`ScraperAPI: no HTML returned for ${amazonUrl}`);
+  }
+  return data;
+}
+
+// Extracts a balanced { ... } JSON object that follows "key" : in raw HTML/JS source.
+// Needed because these blobs sit inside a larger <script> JS object literal, not standalone
+// JSON, so a naive non-greedy regex breaks on any nested braces.
+function extractJsonAfterKey(html, key) {
+  const keyIdx = html.indexOf(`"${key}"`);
+  if (keyIdx === -1) return null;
+  const start = html.indexOf('{', keyIdx);
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < html.length; i++) {
+    const c = html[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(html.slice(start, i + 1)); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+function humanizeDimensionKey(key) {
+  return key.replace(/_name$/i, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Amazon's raw PDP HTML embeds its own full cross-product variant matrix
+// ("dimensionValuesDisplayData": { asin: [dim1Value, dim2Value, ...] }, keyed in the same
+// order as "variationValues": { size_name: [...], color_name: [...] }). Unlike
+// customization_options (ScraperAPI autoparse), this isn't relative to whichever ASIN's page
+// got scraped, and it reliably carries text values for dropdown-style dimensions (e.g. Size)
+// that autoparse sometimes returns as bare asin-only entries with no value at all.
+// knownDimensions (from customization_options) lets us borrow Amazon's own dimension label
+// (e.g. "Color") instead of a generated one, by matching on overlapping values.
+function extractFullVariantMatrix(html, baseDomain, knownDimensions = {}) {
+  const displayData = extractJsonAfterKey(html, 'dimensionValuesDisplayData');
+  const variationValues = extractJsonAfterKey(html, 'variationValues');
+  if (!displayData || !variationValues) return null;
+
+  const dimKeys = Object.keys(variationValues);
+  if (!dimKeys.length) return null;
+  const dimNames = dimKeys.map(k => {
+    const values = variationValues[k] || [];
+    for (const [label, valueSet] of Object.entries(knownDimensions)) {
+      if (values.some(v => valueSet.has(v))) return label;
+    }
+    return humanizeDimensionKey(k);
+  });
+
+  const variants = [];
+  for (const [asin, values] of Object.entries(displayData)) {
+    if (!Array.isArray(values) || !asin) continue;
+    const attributes = values
+      .map((value, i) => ({ dimension: dimNames[i] || dimKeys[i], value }))
+      .filter(a => a.value && a.value !== 'Please Select');
+    if (!attributes.length) continue;
+    variants.push({
+      asin, attributes,
+      label: attributes.map(a => a.value).join(' / '),
+      price: null, image: null,
+      url: `${baseDomain}/dp/${asin}`,
+    });
+  }
+  return variants.length ? variants : null;
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 // priceOnly — return just price/stock, used by the scheduler for routine checks on
 // already-tracked products. Full metadata (title, images, specs, variants) is only needed
@@ -137,7 +227,34 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   const rating     = Number.isFinite(ratingNum) && ratingNum > 0 ? ratingNum : null;
   const reviewCount = Number(data.total_reviews ?? data.total_ratings) || 0;
 
-  const variants = getVariants(data, baseDomain);
+  let variants = getVariants(data, baseDomain);
+
+  // customization_options only surfaces siblings relative to the CURRENT page's selection,
+  // and for some listings drops a dimension's text values entirely (see extractFullVariantMatrix).
+  // Scoped to genuinely multi-dimension products (2+ keys) — single-dimension listings already
+  // get complete, correctly-labeled data from customization_options alone, so skip the extra
+  // ScraperAPI call there.
+  const dimKeys = Object.keys(data.customization_options || {});
+  if (dimKeys.length >= 2) {
+    try {
+      const knownDimensions = {};
+      for (const dim of dimKeys) {
+        const vals = new Set((data.customization_options[dim] || []).map(e => e.value).filter(Boolean));
+        if (vals.size) knownDimensions[dim] = vals;
+      }
+      const html = await callScraperApiRaw(`${baseDomain}/dp/${asin}`);
+      const fullMatrix = extractFullVariantMatrix(html, baseDomain, knownDimensions);
+      if (fullMatrix && fullMatrix.length >= variants.length) {
+        // Carry over swatch images already known from customization_options where asins match
+        const imageByAsin = new Map(variants.filter(v => v.image).map(v => [v.asin, v.image]));
+        console.log(`scraper: full-matrix fallback expanded ${asin} from ${variants.length} to ${fullMatrix.length} variants`);
+        variants = fullMatrix.map(v => ({ ...v, image: imageByAsin.get(v.asin) || null }));
+      }
+    } catch (e) {
+      console.log(`scraper: full-matrix fallback failed for ${asin}: ${e.message}`);
+    }
+  }
+
   let variant = null, attributes = [];
   const self = variants.find(v => v.asin === asin);
   if (self) { variant = self.label; attributes = self.attributes; }
