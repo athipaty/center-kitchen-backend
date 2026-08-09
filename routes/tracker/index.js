@@ -521,6 +521,20 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
         .filter(u => u.includes('media-amazon') || u.includes('ssl-images-amazon'))
         .slice(0, 11);
 
+      // `highResImages` is a separately-extracted gallery that doesn't reliably lead with the
+      // same photo Amazon's own product page shows first (seen live: some ASINs had a fabric-
+      // texture marketing slide at highResImages[0] instead of the actual box/product shot).
+      // `images[0]` is the real on-page thumbnail carousel's first entry — Amazon's true main
+      // image — so force that to the front (upgraded to full-res) rather than trusting whatever
+      // highResImages happened to put first.
+      const mainImageRaw = (parsed.images || [])[0];
+      const mainImage = mainImageRaw
+        ? forceHiRes(typeof mainImageRaw === 'string' ? mainImageRaw : (mainImageRaw.link || mainImageRaw.url || ''))
+        : null;
+      if (mainImage && (mainImage.includes('media-amazon') || mainImage.includes('ssl-images-amazon'))) {
+        hiRes = [mainImage, ...hiRes.filter(u => u !== mainImage)].slice(0, 11);
+      }
+
       if (hiRes.length && productAsin) {
         // Pull in sibling group members' persisted hero IDs too — the in-memory registry
         // alone only protects whichever sibling gets scraped SECOND in a given process
