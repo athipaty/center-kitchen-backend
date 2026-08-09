@@ -2169,67 +2169,6 @@ router.get('/all-active-listings', async (req, res) => {
   }
 });
 
-// ── Orphan listings: active on eBay but not linked in the tracker ──
-async function getOrphanListings() {
-  const Product = require('../models/tracker/Product');
-  const token = await getAccessToken();
-
-  // Fetch all active eBay listings (paginated, up to 200)
-  const allEbayItems = [];
-  for (let page = 1; page <= 2; page++) {
-    const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`;
-    const { data: xmlResp } = await axios.post('https://api.ebay.com/ws/api.dll', xml, {
-      headers: {
-        'X-EBAY-API-SITEID': '0',
-        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-        'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling',
-        'X-EBAY-API-IAF-TOKEN': token,
-        'Content-Type': 'text/xml',
-      },
-    });
-    if (/<Ack>Failure<\/Ack>/.test(xmlResp)) break;
-    const itemRe = /<Item>([\s\S]*?)<\/Item>/g;
-    let m;
-    while ((m = itemRe.exec(xmlResp)) !== null) {
-      const block = m[1];
-      const get = tag => { const tm = block.match(new RegExp(`<${tag}[^>]*>([^<]+)<\/${tag}>`)); return tm ? tm[1].trim() : null; };
-      const listingId = get('ItemID');
-      if (listingId) allEbayItems.push({ listingId, title: get('Title') || listingId });
-    }
-    if (!/<HasMoreItems>true<\/HasMoreItems>/.test(xmlResp)) break;
-  }
-
-  // Get all tracked listing IDs from DB
-  const tracked = await Product.distinct('ebayListingId', { ebayListingId: { $exists: true, $ne: null } });
-  const trackedSet = new Set(tracked.map(String));
-
-  // Orphans = active on eBay but not linked to any tracker product
-  return allEbayItems.filter(item => !trackedSet.has(String(item.listingId)));
-}
-
-router.get('/orphan-listings', async (req, res) => {
-  try {
-    const orphans = await getOrphanListings();
-    res.json({ count: orphans.length, orphans });
-  } catch (err) {
-    if (err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
-    console.error('orphan-listings error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.delete('/orphan-listings', async (req, res) => {
-  try {
-    // Delegate to the scheduler's shared function — also emits tracker:orphan:cleanup socket event
-    await require('../jobs/trackerScheduler').orphanCleanup();
-    res.json({ ok: true });
-  } catch (err) {
-    if (err.message === 'not_authenticated') return res.status(401).json({ error: 'not_authenticated' });
-    console.error('end-orphan-listings error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // ── Update price — Inventory API offer ────────────────────────────
 router.patch('/offer/:offerId/price', async (req, res) => {
   try {
@@ -4201,28 +4140,6 @@ router.post('/auto-restock', async (req, res) => {
     }
 
     res.json({ ordersFound: transactions.length, transactions, restocked });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Manual trigger: auto-end dead listings (zero-view retitle rescue, 10-day low-view, 20-day stale) ──
-router.post('/auto-end-zero-views', async (req, res) => {
-  try {
-    const { autoEndZeroViews } = require('../jobs/trackerScheduler');
-    await autoEndZeroViews();
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Manual trigger: relist unsold listings that have views or watchers ──
-router.post('/relist-unsold', async (req, res) => {
-  try {
-    const { relistUnsold } = require('../jobs/trackerScheduler');
-    await relistUnsold();
-    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
