@@ -8,23 +8,47 @@ type PageFlipProps = {
   incomingRightUrl: string;
 };
 
-const Spread: React.FC<{ leftUrl: string; rightUrl: string }> = ({ leftUrl, rightUrl }) => (
-  <AbsoluteFill>
-    <AbsoluteFill style={{ right: "50%" }}>
-      <Img src={leftUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-    </AbsoluteFill>
-    <AbsoluteFill style={{ left: "50%" }}>
-      <Img src={rightUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-    </AbsoluteFill>
-  </AbsoluteFill>
-);
+// One leaf of the book turning around the spine, not the whole spread rotating as one rigid
+// card. Each half — left and right — gets its own perspective and pivots on its own spine-side
+// edge (transformOrigin), the way a real book page actually hinges: the front face is the
+// outgoing page, the back face is the (pre-mirrored) incoming page, so both halves read as two
+// covers opening away from the spine and settling on the new spread, rather than one flat
+// rectangle spinning in place.
+const FlipHalf: React.FC<{
+  side: "left" | "right";
+  outgoingUrl: string;
+  incomingUrl: string;
+  progress: number;
+}> = ({ side, outgoingUrl, incomingUrl, progress }) => {
+  const spineEdge = side === "left" ? "right" : "left";
+  // Left leaf folds away toward the outer-left edge, right leaf toward the outer-right edge —
+  // opposite signs so they open away from each other like real covers, not in the same direction.
+  const sign = side === "left" ? -1 : 1;
+  const rotateY = sign * progress * 180;
 
-// The page-turn transition played between one scene's spread and the next. First pass: a clean
-// single-axis card flip (the whole spread rotating around its vertical center on a CSS 3D
-// perspective), not page-curl physics — the outgoing spread is the flip's front face, the
-// incoming spread its (pre-mirrored) back face, so at progress 0 this looks identical to the
-// outgoing Scene still playing underneath, and at progress 1 identical to the incoming Scene about
-// to start, with nothing to visually pop at either boundary.
+  return (
+    <AbsoluteFill style={{ [spineEdge === "right" ? "right" : "left"]: "50%", perspective: 2400 }}>
+      <AbsoluteFill
+        style={{
+          transformStyle: "preserve-3d",
+          transformOrigin: `${spineEdge} center`,
+          transform: `rotateY(${rotateY}deg)`,
+        }}
+      >
+        <AbsoluteFill style={{ backfaceVisibility: "hidden", backgroundColor: "#000" }}>
+          <Img src={outgoingUrl} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+        </AbsoluteFill>
+        <AbsoluteFill
+          style={{ backfaceVisibility: "hidden", backgroundColor: "#000", transform: "rotateY(180deg)" }}
+        >
+          <Img src={incomingUrl} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+        </AbsoluteFill>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// The page-turn transition played between one scene's spread and the next.
 export const PageFlip: React.FC<PageFlipProps> = ({
   durationInFrames,
   outgoingLeftUrl,
@@ -37,21 +61,14 @@ export const PageFlip: React.FC<PageFlipProps> = ({
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-  const rotateY = progress * 180;
-  // A soft shadow that peaks as the flipping spread passes edge-on (90deg) for a bit of depth,
-  // gone entirely at both ends where the flip is visually flush with the static scene either side.
+  // A soft shadow that peaks as the leaves pass edge-on (90deg) for a bit of depth, gone entirely
+  // at both ends where the flip is visually flush with the static scene either side.
   const shadowOpacity = Math.sin(progress * Math.PI) * 0.45;
 
   return (
-    <AbsoluteFill style={{ perspective: 2400 }}>
-      <AbsoluteFill style={{ transformStyle: "preserve-3d", transform: `rotateY(${rotateY}deg)` }}>
-        <AbsoluteFill style={{ backfaceVisibility: "hidden" }}>
-          <Spread leftUrl={outgoingLeftUrl} rightUrl={outgoingRightUrl} />
-        </AbsoluteFill>
-        <AbsoluteFill style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>
-          <Spread leftUrl={incomingLeftUrl} rightUrl={incomingRightUrl} />
-        </AbsoluteFill>
-      </AbsoluteFill>
+    <AbsoluteFill style={{ backgroundColor: "#000" }}>
+      <FlipHalf side="left" outgoingUrl={outgoingLeftUrl} incomingUrl={incomingLeftUrl} progress={progress} />
+      <FlipHalf side="right" outgoingUrl={outgoingRightUrl} incomingUrl={incomingRightUrl} progress={progress} />
       <AbsoluteFill style={{ backgroundColor: `rgba(0,0,0,${shadowOpacity})`, pointerEvents: "none" }} />
     </AbsoluteFill>
   );

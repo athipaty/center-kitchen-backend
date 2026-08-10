@@ -22,11 +22,11 @@ export const Scene: React.FC<SceneProps & { durationInFrames: number }> = ({
 
   return (
     <AbsoluteFill>
-      <AbsoluteFill style={{ right: "50%" }}>
-        <Img src={leftPageUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      <AbsoluteFill style={{ right: "50%", backgroundColor: "#000" }}>
+        <Img src={leftPageUrl} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
       </AbsoluteFill>
-      <AbsoluteFill style={{ left: "50%" }}>
-        <Img src={rightPageUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      <AbsoluteFill style={{ left: "50%", backgroundColor: "#000" }}>
+        <Img src={rightPageUrl} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
       </AbsoluteFill>
       <div
         style={{
