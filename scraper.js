@@ -109,6 +109,45 @@ async function callScraperApiRaw(amazonUrl) {
   return data;
 }
 
+// ── Free direct-to-Amazon fetch (0 ScraperAPI credits) ──────────────────────────────────────
+// Tried first for priceOnly checks; callScraperApiRaw/callScraperApi below are the fallback
+// for whatever this misses (bot-check pages, layout changes, this server's IP getting flagged).
+// Two things proved necessary in testing, beyond a browser User-Agent:
+//  - Referer + a short jittered delay before the request: a burst of bare stateless requests
+//    with no pacing is what actually trips Amazon's bot-check (tested 4/5 blocked without this,
+//    0/5 blocked with it) — headers alone weren't the fix.
+//  - "i18n-prefs=USD; lc-main=en_US" cookies: without them Amazon geo-locates the request and
+//    silently serves a different currency (e.g. S$ for a Singapore-originating IP) instead of
+//    erroring, which would quietly corrupt tracked prices rather than failing loudly.
+// Scoped to amazon.com only — the Referer/cookie pair here is US-specific, so other Amazon
+// domains (co.uk, ca, ...) skip straight to the ScraperAPI tiers below.
+const DIRECT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Connection": "keep-alive",
+  "Upgrade-Insecure-Requests": "1",
+  "Referer": "https://www.amazon.com/",
+  "Cookie": "i18n-prefs=USD; lc-main=en_US",
+};
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function jitter(minMs, maxMs) { return minMs + Math.random() * (maxMs - minMs); }
+
+async function fetchDirectPriceOnly(asin, baseDomain) {
+  if (!/amazon\.com$/i.test(baseDomain.replace(/^https?:\/\//, ''))) return { price: null };
+  await sleep(jitter(1500, 4000));
+  const resp = await axios.get(`${baseDomain}/dp/${asin}`, {
+    headers: DIRECT_HEADERS,
+    timeout: 15000,
+    validateStatus: () => true,
+  });
+  if (typeof resp.data !== 'string' || resp.data.length < 1000) return { price: null };
+  if (/captcha|robot check|api-services-support@amazon/i.test(resp.data)) return { price: null };
+  return parsePriceFromRawHtml(resp.data);
+}
+
 // Cheap price/stock extraction straight off raw Amazon HTML (no autoparse). The buybox price
 // is reliably the first "a-offscreen">$X.XX occurrence on a standard PDP. If this can't find a
 // price, callers should fall back to the autoparse path rather than trusting this as a real
@@ -214,9 +253,26 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   const baseDomain  = domainMatch ? domainMatch[1] : "https://www.amazon.com";
 
   if (priceOnly) {
-    // Try the cheap 1-credit raw fetch first; only fall back to the 5-credit autoparse call
-    // when the regex can't find a price, so a layout-change parsing miss never gets mistaken
-    // for a real out-of-stock (which feeds the 7-day dead-listing auto-end logic).
+    // Three tiers, cheapest first, each one only a fallback for the one before it — so a miss
+    // at any tier just costs the next tier's price, never a false out-of-stock (which feeds the
+    // 7-day dead-listing auto-end logic):
+    //   1. free direct-to-Amazon (0 credits)
+    //   2. ScraperAPI raw fetch (1 credit)
+    //   3. ScraperAPI autoparse (5 credits)
+    try {
+      const direct = await fetchDirectPriceOnly(asin, baseDomain);
+      if (direct.price) {
+        console.log(`direct: fetched ${asin} — price=${direct.price}`);
+        return {
+          title: null, price: direct.price, currency: "$",
+          image: null, images: [], upc: null,
+          variants: [], isPrime: null, variant: null, attributes: [], specs: {},
+        };
+      }
+    } catch (e) {
+      console.log(`direct: failed for ${asin}: ${e.message}`);
+    }
+
     const html = await callScraperApiRaw(`${baseDomain}/dp/${asin}`);
     let { price, availabilityText } = parsePriceFromRawHtml(html);
 
