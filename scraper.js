@@ -92,8 +92,8 @@ async function callScraperApi(amazonUrl) {
   return data;
 }
 
-// Raw (non-autoparse) HTML fetch — used only as a fallback for multi-dimension products,
-// where autoparse's customization_options is known to be incomplete (see extractFullVariantMatrix).
+// Raw (non-autoparse) HTML fetch — 1 credit vs autoparse's 5. Used for the multi-dimension
+// variant-matrix fallback, and as the primary path for priceOnly checks (see parsePriceFromRawHtml).
 async function callScraperApiRaw(amazonUrl) {
   const key = process.env.SCRAPER_API_KEY;
   if (!key) throw new Error("SCRAPER_API_KEY not set");
@@ -107,6 +107,26 @@ async function callScraperApiRaw(amazonUrl) {
     throw new Error(`ScraperAPI: no HTML returned for ${amazonUrl}`);
   }
   return data;
+}
+
+// Cheap price/stock extraction straight off raw Amazon HTML (no autoparse). The buybox price
+// is reliably the first "a-offscreen">$X.XX occurrence on a standard PDP. If this can't find a
+// price, callers should fall back to the autoparse path rather than trusting this as a real
+// out-of-stock signal — the regex is fragile to Amazon layout changes in a way autoparse isn't.
+function parsePriceFromRawHtml(html) {
+  const priceMatch = html.match(/class="a-offscreen">\s*\$\s*([\d,]+\.\d{2})/);
+  const price = priceMatch ? parsePrice(priceMatch[1]) : null;
+
+  let availabilityText = null;
+  const availIdx = html.indexOf('id="availability"');
+  if (availIdx !== -1) {
+    availabilityText = html.slice(availIdx, availIdx + 500)
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || null;
+  }
+
+  return { price, availabilityText };
 }
 
 // Extracts a balanced { ... } JSON object that follows "key" : in raw HTML/JS source.
@@ -193,6 +213,38 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   const domainMatch = url.match(/(https?:\/\/[^/]+)/);
   const baseDomain  = domainMatch ? domainMatch[1] : "https://www.amazon.com";
 
+  if (priceOnly) {
+    // Try the cheap 1-credit raw fetch first; only fall back to the 5-credit autoparse call
+    // when the regex can't find a price, so a layout-change parsing miss never gets mistaken
+    // for a real out-of-stock (which feeds the 7-day dead-listing auto-end logic).
+    const html = await callScraperApiRaw(`${baseDomain}/dp/${asin}`);
+    let { price, availabilityText } = parsePriceFromRawHtml(html);
+
+    if (price) {
+      console.log(`scraperapi(raw): fetched ${asin} — price=${price}`);
+      return {
+        title: null, price, currency: "$",
+        image: null, images: [], upc: null,
+        variants: [], isPrime: null, variant: null, attributes: [], specs: {},
+      };
+    }
+
+    console.log(`scraperapi(raw): no price for ${asin}, falling back to autoparse`);
+    const data = await callScraperApi(`${baseDomain}/dp/${asin}`);
+    price = parsePrice(data.pricing) || parsePrice(data.prime_price);
+    if (!price) {
+      const err = new Error(data.availability_status || availabilityText || "Out of stock / unavailable on Amazon");
+      err.code = 'OUT_OF_STOCK';
+      throw err;
+    }
+    console.log(`scraperapi: fetched ${asin} — price=${price}, status=${data.availability_status || '?'}`);
+    return {
+      title: null, price, currency: "$",
+      image: null, images: [], upc: null,
+      variants: [], isPrime: null, variant: null, attributes: [], specs: {},
+    };
+  }
+
   const data = await callScraperApi(`${baseDomain}/dp/${asin}`);
   const price = parsePrice(data.pricing) || parsePrice(data.prime_price);
 
@@ -203,14 +255,6 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   }
 
   console.log(`scraperapi: fetched ${asin} — price=${price}, status=${data.availability_status || '?'}`);
-
-  if (priceOnly) {
-    return {
-      title: null, price, currency: "$",
-      image: null, images: [], upc: null,
-      variants: [], isPrime: null, variant: null, attributes: [], specs: {},
-    };
-  }
 
   const title      = data.name || "Unknown product";
   const listPriceRaw = parsePrice(data.list_price);
