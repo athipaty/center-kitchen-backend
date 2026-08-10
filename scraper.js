@@ -148,12 +148,20 @@ async function fetchDirectPriceOnly(asin, baseDomain) {
   return parsePriceFromRawHtml(resp.data);
 }
 
-// Cheap price/stock extraction straight off raw Amazon HTML (no autoparse). The buybox price
-// is reliably the first "a-offscreen">$X.XX occurrence on a standard PDP. If this can't find a
-// price, callers should fall back to the autoparse path rather than trusting this as a real
-// out-of-stock signal — the regex is fragile to Amazon layout changes in a way autoparse isn't.
+// Cheap price/stock extraction straight off raw Amazon HTML (no autoparse). Scoped to the
+// #corePrice_feature_div buybox container, NOT the first "a-offscreen">$X.XX on the whole page —
+// that page-wide scan was the root cause of wildly wrong prices on variant/twister products
+// (Color/Size dropdowns): Amazon server-renders that container EMPTY for those listings (price
+// gets hydrated client-side by JS based on the selected variant), so the old page-wide regex
+// silently grabbed an unrelated price from a "customers also bought" carousel or comparison
+// table instead — confirmed live 2026-08-11 (25/158 tracked items had wrong stored prices, all
+// but a couple were variant products with an empty corePrice_feature_div). If the container is
+// missing/empty, callers should fall back to the autoparse path rather than trusting a page-wide
+// match as real — the regex is fragile to Amazon layout changes in a way autoparse isn't.
 function parsePriceFromRawHtml(html) {
-  const priceMatch = html.match(/class="a-offscreen">\s*\$\s*([\d,]+\.\d{2})/);
+  const containerIdx = html.indexOf('id="corePrice_feature_div"');
+  const searchWindow = containerIdx !== -1 ? html.slice(containerIdx, containerIdx + 3000) : null;
+  const priceMatch = searchWindow ? searchWindow.match(/class="a-offscreen">\s*\$\s*([\d,]+\.\d{2})/) : null;
   const price = priceMatch ? parsePrice(priceMatch[1]) : null;
 
   let availabilityText = null;
