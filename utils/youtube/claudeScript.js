@@ -86,14 +86,20 @@ ${continuityText}
 
 This episode's premise: ${premise}
 
-Write the episode as ${sceneCountLow}-${sceneCountHigh} scenes. Each scene has a background description, which characters
-are on screen, and a sequence of dialogue/narration lines — a hard minimum of 5 lines per scene,
-never fewer. At natural narration pace, the total dialogue/narration across the whole script must
-be AT LEAST ${targetWords} words — treat this as a strict floor, not a suggestion, and aim past it
-(${targetWords}-${targetWordsCeiling} words) for safety margin. Undershooting this — writing a
-handful of short scenes — is the single most common mistake; if you're unsure, add more scenes and
-more lines per scene rather than fewer. A line with no character speaking (pure narration) is
-allowed — use character "Narrator" for those, and they still count toward the word-count floor.
+Write the episode as ${sceneCountLow}-${sceneCountHigh} scenes. Each scene becomes exactly ONE
+illustration that stays on screen for that whole scene's dialogue — so a scene should cover ONE
+visual moment/beat, not a whole stretch of the story. Roughly 3-6 dialogue lines per scene is the
+target; if a moment needs more lines than that to play out, split it into an additional scene
+instead of piling more lines onto one — a new development, action, or emotional turn should mean a
+new scene (and therefore a new picture), not more dialogue crammed under the same static image.
+Each scene has a background description, which characters are on screen, and its sequence of
+dialogue/narration lines. At natural narration pace, the total dialogue/narration across the whole
+script must be AT LEAST ${targetWords} words — treat this as a strict floor, not a suggestion, and
+aim past it (${targetWords}-${targetWordsCeiling} words) for safety margin. Undershooting this —
+writing too few scenes, or too little dialogue — is the single most common mistake; if you're
+unsure, add more scenes to cover more distinct moments rather than lengthening existing ones. A
+line with no character speaking (pure narration) is allowed — use character "Narrator" for those,
+and they still count toward the word-count floor.
 
 Somewhere in the episode, include one "curiosity beat": a character notices something (an animal,
 object, or place) and asks a genuine, kid-friendly "why" or "how" question about it. Another

@@ -302,17 +302,29 @@ function buildCastLine(scene, byId) {
     .filter(Boolean)
     .map((c) => `${c.name}: ${c.description}`)
     .join("; ");
-  return cast ? ` Characters present: ${cast}.` : "";
+  // The consistency instruction lives right next to the descriptions it governs, repeated in
+  // every scene prompt a character appears in — the only lever this free-tier text-to-image setup
+  // has for keeping a character recognizable across scenes, since there's no image-to-image/
+  // reference-image input available (see the comment above this function).
+  return cast ? ` On-screen characters — draw each EXACTLY as described here, every time, so they stay visually recognizable as the same character across every scene: ${cast}.` : "";
 }
 
 // One full-frame illustration per scene (previously a two-page spread split across leftPageUrl/
-// rightPageUrl) — wide enough to establish the setting while still keeping on-screen characters'
-// faces and expressions clearly readable, since there's no second closer-framed page to fall back
-// on for that anymore.
+// rightPageUrl). Characters are the priority subject — large, front-and-center, expressions
+// clearly readable — with the background as secondary context rather than the main composition,
+// and character info placed early in the prompt (word order carries real weight for a
+// text-to-image model) so it doesn't get diluted by the scene description that follows.
 function buildScenePrompt(scene, series, byId) {
   const styleSuffix = `, ${series.artStyle || DEFAULT_SPREAD_STYLE}`;
   const castLine = buildCastLine(scene, byId);
-  return `kids' cartoon illustration, full scene composition, ${scene.backgroundPrompt}.${castLine} Show the whole setting clearly with every on-screen character positioned naturally within the environment, framed so their faces and expressions stay clearly readable${styleSuffix}, children's animated cartoon illustration, one consistent scene, single widescreen frame`;
+  // Narrator-only scenes (no dialogue attributed to any character) have nothing on screen to
+  // prioritize — falls back to a plain establishing shot instead of asking for a "primary
+  // character subject" that doesn't exist here, which would just invite the model to hallucinate
+  // one in.
+  const framing = castLine
+    ? `kids' cartoon illustration, character-focused medium shot, characters as the large, prominent, primary subject filling most of the frame, faces/expressions/poses clearly readable.${castLine} Background/setting (secondary, supporting context behind the characters): ${scene.backgroundPrompt}`
+    : `kids' cartoon illustration, wide establishing shot, full scene composition, no characters present: ${scene.backgroundPrompt}`;
+  return `${framing}${styleSuffix}, children's animated cartoon illustration, one consistent scene, single widescreen frame`;
 }
 
 // script -> images: generates one full-frame image per scene, via Pollinations (free tier, see
