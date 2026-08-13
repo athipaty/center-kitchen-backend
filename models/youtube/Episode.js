@@ -15,13 +15,10 @@ const sceneSchema = new mongoose.Schema(
   {
     order: { type: Number, required: true },
     backgroundPrompt: { type: String, required: true }, // text prompt sent to the image generator
-    // A scene renders as a two-page storybook spread rather than a single background + character
-    // portrait overlay — leftPageUrl is a wider/establishing framing of the scene, rightPageUrl a
-    // closer character/action-focused framing of the same moment, both generated with the same
-    // on-screen characters' locked descriptions baked into the prompt for consistency. Filled
-    // during the 'images' step (jobs/youtubeEpisodeScheduler.js).
-    leftPageUrl: { type: String, default: null },
-    rightPageUrl: { type: String, default: null },
+    // A scene renders as one full-frame illustration — the setting and every on-screen character's
+    // locked description baked into a single prompt for consistency. Filled during the 'images'
+    // step (jobs/youtubeEpisodeScheduler.js).
+    imageUrl: { type: String, default: null },
     charactersOnScreen: [{ type: mongoose.Schema.Types.ObjectId, ref: "YoutubeCharacter" }],
     dialogue: [dialogueLineSchema],
   },

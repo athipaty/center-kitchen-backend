@@ -291,7 +291,7 @@ router.post("/episodes", async (req, res) => {
   }
 });
 
-// Runs exactly one pipeline step (script, spread images, or narration — whichever matches the
+// Runs exactly one pipeline step (script, scene images, or narration — whichever matches the
 // episode's current status) and stops, waiting for the next manual click. Mirrors the character
 // sprite-generation route below: acks immediately with 202 since a step can take well over a
 // minute (image generation especially — 2 Pollinations calls per scene), and the actual
@@ -342,7 +342,7 @@ router.get("/episodes/:id", async (req, res) => {
 });
 
 // Edit dialogue text/expression, background prompts, and/or a character's voice at any checkpoint
-// that already has scene data to show — "script" (script only), "images" (+ spread art),
+// that already has scene data to show — "script" (script only), "images" (+ scene art),
 // "review" (+ narration), or "rendered" (+ finished video, which an edit here does NOT touch;
 // re-approving render afterward is what actually replaces it). Only touches what actually
 // changed and re-enters the pipeline at the earliest step that needs to redo — reusing the same
@@ -391,8 +391,7 @@ router.put("/episodes/:id/scenes", async (req, res) => {
       if (!scene) continue;
       if (typeof edited.backgroundPrompt === "string" && edited.backgroundPrompt.trim() !== scene.backgroundPrompt.trim()) {
         scene.backgroundPrompt = edited.backgroundPrompt.trim();
-        scene.leftPageUrl = null;
-        scene.rightPageUrl = null;
+        scene.imageUrl = null;
         needsImages = true;
       }
       (edited.dialogue || []).forEach((editedLine, i) => {
@@ -438,26 +437,24 @@ router.put("/episodes/:id/scenes", async (req, res) => {
   }
 });
 
-// Redo a single page (left or right) of a scene's spread using its already-saved prompt — no text
-// edit required, for when the same prompt might come out looking better on a different roll.
-// Allowed anywhere spread art already exists ("images", "review", "rendered") — not "script"
-// (nothing generated yet) and not once published ("uploading"/"publishing"/"done"), same
-// reasoning as EDITABLE_STATUSES above. At "rendered" this doesn't change anything already baked
-// into the finished video — re-approving render is what actually picks up the new art.
-router.post("/episodes/:id/scenes/:order/regenerate-page", async (req, res) => {
+// Redo a scene's image using its already-saved prompt — no text edit required, for when the same
+// prompt might come out looking better on a different roll. Allowed anywhere the image already
+// exists ("images", "review", "rendered") — not "script" (nothing generated yet) and not once
+// published ("uploading"/"publishing"/"done"), same reasoning as EDITABLE_STATUSES above. At
+// "rendered" this doesn't change anything already baked into the finished video — re-approving
+// render is what actually picks up the new art.
+router.post("/episodes/:id/scenes/:order/regenerate-image", async (req, res) => {
   try {
-    const { side } = req.body;
-    if (side !== "left" && side !== "right") return res.status(400).json({ error: "side must be 'left' or 'right'" });
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
     if (!["images", "review", "rendered"].includes(episode.status)) {
-      return res.status(409).json({ error: "This episode isn't at a step where spread art can be regenerated." });
+      return res.status(409).json({ error: "This episode isn't at a step where the image can be regenerated." });
     }
     const order = Number(req.params.order);
     const scene = episode.scenes.find((s) => s.order === order);
     if (!scene) return res.status(404).json({ error: "Scene not found" });
 
-    await scheduler.regenerateScenePage(episode, scene, side);
+    await scheduler.regenerateSceneImage(episode, scene);
     const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
       .populate("scenes.charactersOnScreen", "name sprites");
     res.json(fresh);

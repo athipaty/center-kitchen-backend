@@ -80,10 +80,8 @@ export const EpisodeVideo: React.FC<EpisodeProps> = ({ scenes, bgmUrl }) => {
           <Sequence key={`flip-${i}`} from={from} durationInFrames={durationInFrames} layout="none">
             <PageFlip
               durationInFrames={durationInFrames}
-              outgoingLeftUrl={scene.leftPageUrl}
-              outgoingRightUrl={scene.rightPageUrl}
-              incomingLeftUrl={next.leftPageUrl}
-              incomingRightUrl={next.rightPageUrl}
+              outgoingUrl={scene.imageUrl}
+              incomingUrl={next.imageUrl}
             />
           </Sequence>
         );

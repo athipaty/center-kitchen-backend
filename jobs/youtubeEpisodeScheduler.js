@@ -285,14 +285,16 @@ function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS
 // identically pose-to-pose the way fal.ai's instant-character image-to-image did for the old
 // sprite system — see the plan discussion this replaced. Consistency instead comes from repeating
 // the same locked `description` text for a character in every prompt it appears in, across every
-// scene and both pages of a spread.
+// scene.
 // Falls back to a kids' animated cartoon look when a series hasn't set its own artStyle — matches
 // the style generateStoryOutline's own prompt suggests by example, and matches buildSpritePrompt's
 // character style so scenes and characters read as the same consistent show rather than a
 // storybook/painterly background clashing with cartoon characters.
 const DEFAULT_SPREAD_STYLE = "kids' animated cartoon style, bold thick clean outlines, flat bright saturated colors, rounded friendly shapes, children's cartoon show background art, NOT realistic, NOT photographic, NOT painterly";
-const SPREAD_WIDTH = 1024;
-const SPREAD_HEIGHT = 1280;
+// Matches the 1280x720 (16:9) Remotion composition width/height ratio directly, generated a bit
+// larger for quality headroom when Img scales it to fit the frame.
+const SCENE_WIDTH = 1600;
+const SCENE_HEIGHT = 900;
 
 function buildCastLine(scene, byId) {
   const cast = scene.charactersOnScreen
@@ -303,26 +305,21 @@ function buildCastLine(scene, byId) {
   return cast ? ` Characters present: ${cast}.` : "";
 }
 
-// Each scene becomes a two-page storybook spread instead of a single background: `left` is a
-// wider establishing framing of the setting, `right` a closer character/action-focused framing of
-// the SAME moment — both prompts share the scene's setting, the series' art style, and every
-// on-screen character's locked description, so the pair reads as one consistent illustration split
-// across two pages rather than two unrelated images.
-function buildSpreadPrompt(scene, series, byId, side) {
+// One full-frame illustration per scene (previously a two-page spread split across leftPageUrl/
+// rightPageUrl) — wide enough to establish the setting while still keeping on-screen characters'
+// faces and expressions clearly readable, since there's no second closer-framed page to fall back
+// on for that anymore.
+function buildScenePrompt(scene, series, byId) {
   const styleSuffix = `, ${series.artStyle || DEFAULT_SPREAD_STYLE}`;
   const castLine = buildCastLine(scene, byId);
-  if (side === "left") {
-    return `wide establishing kids' cartoon illustration, full scene composition, ${scene.backgroundPrompt}.${castLine} Show the whole setting clearly with characters positioned naturally within the environment${styleSuffix}, children's animated cartoon illustration, one consistent scene, left page of an open book`;
-  }
-  return `closer kids' cartoon illustration, character-focused framing of the same moment, ${scene.backgroundPrompt}.${castLine} Focus on the characters' expressions and action, medium shot${styleSuffix}, children's animated cartoon illustration, one consistent scene, right page of an open book`;
+  return `kids' cartoon illustration, full scene composition, ${scene.backgroundPrompt}.${castLine} Show the whole setting clearly with every on-screen character positioned naturally within the environment, framed so their faces and expressions stay clearly readable${styleSuffix}, children's animated cartoon illustration, one consistent scene, single widescreen frame`;
 }
 
-// script -> images: generates the two-page spread (leftPageUrl + rightPageUrl) for every scene,
-// via Pollinations (free tier, see pollinations.js). Replaces the old separate sprite-generation
-// and background-generation steps entirely — there's no per-character sprite to swap in anymore,
-// each page is one fully-composed image with its on-screen characters already baked in. Each page
-// URL is generated independently and skipped if already present, so an interrupted run resumes
-// without re-paying for pages it already has.
+// script -> images: generates one full-frame image per scene, via Pollinations (free tier, see
+// pollinations.js). Replaces the old separate sprite-generation and background-generation steps
+// entirely — there's no per-character sprite to swap in anymore, each image is one fully-composed
+// frame with its on-screen characters already baked in. Skipped per-scene if already present, so
+// an interrupted run resumes without re-paying for images it already has.
 async function stepImages(episode) {
   const series = await Series.findById(episode.series);
   const characterIds = [
@@ -332,29 +329,17 @@ async function stepImages(episode) {
   const byId = new Map(characters.map((c) => [String(c._id), c]));
 
   for (const scene of episode.scenes) {
-    if (!scene.leftPageUrl) {
-      episode.statusDetail = `spread ${scene.order + 1}/${episode.scenes.length} (left page)`;
+    if (!scene.imageUrl) {
+      episode.statusDetail = `scene ${scene.order + 1}/${episode.scenes.length}`;
       await episode.save();
       await emit(episode);
-      // A fresh random seed per page — see generateCharacterSprites' seed=1 bug comment above for
+      // A fresh random seed per image — see generateCharacterSprites' seed=1 bug comment above for
       // why a fixed/omitted seed produces near-identical-looking images across calls.
       const seed = Math.floor(Math.random() * 1e9);
-      const buffer = await generateImage(buildSpreadPrompt(scene, series, byId, "left"), { width: SPREAD_WIDTH, height: SPREAD_HEIGHT, seed });
-      scene.leftPageUrl = await uploadToB2(
+      const buffer = await generateImage(buildScenePrompt(scene, series, byId), { width: SCENE_WIDTH, height: SCENE_HEIGHT, seed });
+      scene.imageUrl = await uploadToB2(
         buffer,
-        `youtube/episodes/${episode._id}/scene${scene.order}-left.jpg`,
-        "image/jpeg"
-      );
-    }
-    if (!scene.rightPageUrl) {
-      episode.statusDetail = `spread ${scene.order + 1}/${episode.scenes.length} (right page)`;
-      await episode.save();
-      await emit(episode);
-      const seed = Math.floor(Math.random() * 1e9);
-      const buffer = await generateImage(buildSpreadPrompt(scene, series, byId, "right"), { width: SPREAD_WIDTH, height: SPREAD_HEIGHT, seed });
-      scene.rightPageUrl = await uploadToB2(
-        buffer,
-        `youtube/episodes/${episode._id}/scene${scene.order}-right.jpg`,
+        `youtube/episodes/${episode._id}/scene${scene.order}.jpg`,
         "image/jpeg"
       );
     }
@@ -363,24 +348,22 @@ async function stepImages(episode) {
   episode.statusDetail = "";
 }
 
-// Redo a single page (left or right) of a scene's spread using its already-saved backgroundPrompt,
-// without touching the other page or any other scene — the review panel's standalone "reroll this
-// page" button, as opposed to stepImages' initial per-scene generation. Uses its own fresh random
-// seed and a seed-tagged B2 key so re-running the same prompt gets a new image rather than
-// reproducing (or being served a cached copy of) the same unwanted one — same reasoning as
-// regenerateCharacterSprite above.
-async function regenerateScenePage(episode, scene, side) {
+// Redo a scene's image using its already-saved backgroundPrompt, without touching any other
+// scene — the review panel's standalone "reroll this image" button, as opposed to stepImages'
+// initial per-scene generation. Uses its own fresh random seed and a seed-tagged B2 key so
+// re-running the same prompt gets a new image rather than reproducing (or being served a cached
+// copy of) the same unwanted one — same reasoning as regenerateCharacterSprite above.
+async function regenerateSceneImage(episode, scene) {
   const series = await Series.findById(episode.series);
   const characters = await Character.find({ _id: { $in: scene.charactersOnScreen } });
   const byId = new Map(characters.map((c) => [String(c._id), c]));
   const seed = Math.floor(Math.random() * 1e9);
-  const prompt = buildSpreadPrompt(scene, series, byId, side);
-  const buffer = await generateImage(prompt, { width: SPREAD_WIDTH, height: SPREAD_HEIGHT, seed });
-  const field = side === "left" ? "leftPageUrl" : "rightPageUrl";
-  const oldUrl = scene[field];
-  scene[field] = await uploadToB2(
+  const prompt = buildScenePrompt(scene, series, byId);
+  const buffer = await generateImage(prompt, { width: SCENE_WIDTH, height: SCENE_HEIGHT, seed });
+  const oldUrl = scene.imageUrl;
+  scene.imageUrl = await uploadToB2(
     buffer,
-    `youtube/episodes/${episode._id}/scene${scene.order}-${side}-${seed}.jpg`,
+    `youtube/episodes/${episode._id}/scene${scene.order}-${seed}.jpg`,
     "image/jpeg"
   );
   episode.markModified("scenes");
@@ -393,7 +376,7 @@ async function regenerateScenePage(episode, scene, side) {
 
 // images -> review: one audio file per dialogue line, then STOPS at "review" instead of
 // going straight into rendering — gives a human a chance to read the dialogue, look at the
-// spread images, and edit anything before the render (which is comparatively expensive/slow) runs.
+// scene images, and edit anything before the render (which is comparatively expensive/slow) runs.
 // Narrator lines use a per-locale default voice; character lines use that character's own locked
 // voiceName.
 async function stepTts(episode) {
@@ -438,8 +421,7 @@ async function stepRenderAndUpload(episode) {
 
   const props = {
     scenes: episode.scenes.map((scene) => ({
-      leftPageUrl: scene.leftPageUrl,
-      rightPageUrl: scene.rightPageUrl,
+      imageUrl: scene.imageUrl,
       dialogue: scene.dialogue.map((line) => ({
         audioUrl: line.audioUrl,
         durationMs: line.durationMs,
@@ -559,4 +541,4 @@ async function triggerNow(episodeId) {
   if (episode) await processOne(episode);
 }
 
-module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateScenePage, isEpisodeInFlight };
+module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneImage, isEpisodeInFlight };
