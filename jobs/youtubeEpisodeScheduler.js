@@ -91,7 +91,7 @@ const EXPRESSION_DETAILS = {
 // consistently single-character, a clear improvement over a single "solo" mention.
 function buildSpritePrompt(character, expression) {
   const expressionDetail = EXPRESSION_DETAILS[expression] || `${expression} expression`;
-  return `single character portrait, exactly one (1) person only, ${character.description}, ${expressionDetail}, exaggerated clearly readable emotion, upper body portrait, head shoulders and chest only, cropped at the waist, close-up bust shot, solo, alone, no other people, no second character, no crowd, no background figures, isolated on a plain white background, simple flat vector cartoon character illustration, character reference sheet`;
+  return `kids' animated cartoon character portrait in the style of a children's TV cartoon show, exactly one (1) person only, ${character.description}, ${expressionDetail}, exaggerated clearly readable emotion, upper body portrait, head shoulders and chest only, cropped at the waist, close-up bust shot, solo, alone, no other people, no second character, no crowd, no background figures, isolated on a plain white background, bold thick clean outlines, flat bright saturated colors, big expressive cartoon eyes, simple flat vector cartoon character illustration, NOT realistic, NOT photographic, NOT 3D render, character reference sheet`;
 }
 
 // Fraction of the generated square image's height to keep, top-down. The "upper body only" prompt
@@ -286,10 +286,11 @@ function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS
 // sprite system — see the plan discussion this replaced. Consistency instead comes from repeating
 // the same locked `description` text for a character in every prompt it appears in, across every
 // scene and both pages of a spread.
-// Falls back to a soft storybook illustration look when a series hasn't set its own artStyle —
-// matches the style generateStoryOutline's own prompt suggests by example, and reads as a
-// children's picture book rather than photoreal or generic digital art by default.
-const DEFAULT_SPREAD_STYLE = "soft flat vector illustration, gentle pastel colors, rounded friendly shapes, children's storybook art style";
+// Falls back to a kids' animated cartoon look when a series hasn't set its own artStyle — matches
+// the style generateStoryOutline's own prompt suggests by example, and matches buildSpritePrompt's
+// character style so scenes and characters read as the same consistent show rather than a
+// storybook/painterly background clashing with cartoon characters.
+const DEFAULT_SPREAD_STYLE = "kids' animated cartoon style, bold thick clean outlines, flat bright saturated colors, rounded friendly shapes, children's cartoon show background art, NOT realistic, NOT photographic, NOT painterly";
 const SPREAD_WIDTH = 1024;
 const SPREAD_HEIGHT = 1280;
 
@@ -311,9 +312,9 @@ function buildSpreadPrompt(scene, series, byId, side) {
   const styleSuffix = `, ${series.artStyle || DEFAULT_SPREAD_STYLE}`;
   const castLine = buildCastLine(scene, byId);
   if (side === "left") {
-    return `wide establishing storybook illustration, full scene composition, ${scene.backgroundPrompt}.${castLine} Show the whole setting clearly with characters positioned naturally within the environment${styleSuffix}, children's picture book illustration, one consistent scene, left page of an open book`;
+    return `wide establishing kids' cartoon illustration, full scene composition, ${scene.backgroundPrompt}.${castLine} Show the whole setting clearly with characters positioned naturally within the environment${styleSuffix}, children's animated cartoon illustration, one consistent scene, left page of an open book`;
   }
-  return `closer storybook illustration, character-focused framing of the same moment, ${scene.backgroundPrompt}.${castLine} Focus on the characters' expressions and action, medium shot${styleSuffix}, children's picture book illustration, one consistent scene, right page of an open book`;
+  return `closer kids' cartoon illustration, character-focused framing of the same moment, ${scene.backgroundPrompt}.${castLine} Focus on the characters' expressions and action, medium shot${styleSuffix}, children's animated cartoon illustration, one consistent scene, right page of an open book`;
 }
 
 // script -> images: generates the two-page spread (leftPageUrl + rightPageUrl) for every scene,

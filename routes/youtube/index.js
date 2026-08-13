@@ -341,17 +341,28 @@ router.get("/episodes/:id", async (req, res) => {
   }
 });
 
-// Edit dialogue text/expression, background prompts, and/or a character's voice while an episode
-// is paused at "review" (after TTS, before the expensive render). Only touches what actually
+// Edit dialogue text/expression, background prompts, and/or a character's voice at any checkpoint
+// that already has scene data to show — "script" (script only), "images" (+ spread art),
+// "review" (+ narration), or "rendered" (+ finished video, which an edit here does NOT touch;
+// re-approving render afterward is what actually replaces it). Only touches what actually
 // changed and re-enters the pipeline at the earliest step that needs to redo — reusing the same
 // "already generated, skip it" guards stepBackgrounds/stepTts use for resuming after a crash, so
-// unrelated scenes/lines are never regenerated.
+// unrelated scenes/lines are never regenerated. "uploading"/"publishing"/"done" stay off-limits:
+// once an episode is live on YouTube, edits here wouldn't reach the published video anyway.
+const EDITABLE_STATUSES = ["script", "images", "review", "rendered"];
+// Position in the pipeline each editable status represents — used below to figure out the
+// earliest step an edit needs to re-enter at, without ever jumping the episode FORWARD past
+// wherever it already was (e.g. editing dialogue text while still at "script", before images
+// even exist yet, must not skip straight to "images" — there's nothing to regenerate yet, the
+// edited text just sits there ready for the images step to eventually hand off to narration).
+const STATUS_POSITION = { script: 0, images: 1, review: 2, rendered: 3 };
+
 router.put("/episodes/:id/scenes", async (req, res) => {
   try {
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
-    if (episode.status !== "review") {
-      return res.status(409).json({ error: "This episode isn't awaiting review right now." });
+    if (!EDITABLE_STATUSES.includes(episode.status)) {
+      return res.status(409).json({ error: "This episode isn't at a step that can be revised right now." });
     }
 
     const { scenes: editedScenes = [], voiceChanges = [] } = req.body;
@@ -402,13 +413,21 @@ router.put("/episodes/:id/scenes", async (req, res) => {
     episode.markModified("scenes");
     // 'script' and 'images' are the same safe re-entry points stepImages/stepTts's "already
     // generated" checks make resumable everywhere else in this pipeline (STEP_HANDLERS.script ->
-    // stepImages, STEP_HANDLERS.images -> stepTts).
-    if (needsImages) episode.status = "script";
-    else if (needsTts) episode.status = "images";
-    // else: only expressions changed (or nothing did) — stays "review", nothing to regenerate.
+    // stepImages, STEP_HANDLERS.images -> stepTts). Take the minimum of the current position and
+    // whatever an invalidated step requires, so an edit never advances the episode past a step
+    // that hasn't actually run yet.
+    const currentPos = STATUS_POSITION[episode.status];
+    let targetPos = currentPos;
+    if (needsImages) targetPos = Math.min(targetPos, STATUS_POSITION.script);
+    if (needsTts) targetPos = Math.min(targetPos, STATUS_POSITION.images);
+    const targetStatus = Object.keys(STATUS_POSITION).find((k) => STATUS_POSITION[k] === targetPos);
+    const willRegenerate = targetStatus !== episode.status;
+    episode.status = targetStatus;
+    // else: only expressions changed (or nothing did, or an edit at "script"/"images" didn't
+    // invalidate anything that's actually been generated yet) — status stays put, nothing to redo.
     await episode.save();
 
-    if (needsImages || needsTts) {
+    if (willRegenerate) {
       scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     }
     const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
@@ -420,17 +439,19 @@ router.put("/episodes/:id/scenes", async (req, res) => {
 });
 
 // Redo a single page (left or right) of a scene's spread using its already-saved prompt — no text
-// edit required, for when the same prompt might come out looking better on a different roll. Only
-// allowed at "review" (same restriction as editing scenes above) since regenerating art after the
-// final MP4 already exists wouldn't change anything already baked into the render.
+// edit required, for when the same prompt might come out looking better on a different roll.
+// Allowed anywhere spread art already exists ("images", "review", "rendered") — not "script"
+// (nothing generated yet) and not once published ("uploading"/"publishing"/"done"), same
+// reasoning as EDITABLE_STATUSES above. At "rendered" this doesn't change anything already baked
+// into the finished video — re-approving render is what actually picks up the new art.
 router.post("/episodes/:id/scenes/:order/regenerate-page", async (req, res) => {
   try {
     const { side } = req.body;
     if (side !== "left" && side !== "right") return res.status(400).json({ error: "side must be 'left' or 'right'" });
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
-    if (episode.status !== "review") {
-      return res.status(409).json({ error: "This episode isn't awaiting review right now." });
+    if (!["images", "review", "rendered"].includes(episode.status)) {
+      return res.status(409).json({ error: "This episode isn't at a step where spread art can be regenerated." });
     }
     const order = Number(req.params.order);
     const scene = episode.scenes.find((s) => s.order === order);

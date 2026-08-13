@@ -279,8 +279,10 @@ Plan the WHOLE story before any single episode gets written. Decide:
 
 1. A show identity: title, one-paragraph premise, genre, tone (kid-appropriate — warm, gentle,
    age 3-8 friendly, no scary or violent content), and a short art-style description for a
-   consistent illustrated look (e.g. "soft flat vector illustration, pastel colors, rounded
-   friendly shapes").
+   consistent illustrated look. This MUST read as a kids' animated cartoon (like a children's TV
+   cartoon show), never photoreal, painterly, or a soft storybook/picture-book look — e.g. "kids'
+   animated cartoon style, bold thick outlines, flat bright saturated colors, rounded friendly
+   shapes".
 2. How many episodes the story needs and what happens in each one, in story order. Each episode
    should be a self-contained chunk of the overall arc, roughly ${targetWords} spoken words long
    (about ${targetEpisodeMinutes} minutes of narration at natural pace). ${episodeCountInstruction}
