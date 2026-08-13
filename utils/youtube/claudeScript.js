@@ -63,6 +63,13 @@ async function generateScript(series, characters, premise) {
     ? Math.round(series.targetEpisodeMinutes * WORDS_PER_MINUTE)
     : DEFAULT_TARGET_WORDS;
   const targetWordsCeiling = targetWords + 200;
+  // Scale scene count with target length so short episodes (e.g. a 30s short at 0.5 min) aren't
+  // forced into the same 10-14 scenes tuned for a ~5-minute episode. Falls back to 5 minutes (not
+  // DEFAULT_TARGET_WORDS) for legacy series without targetEpisodeMinutes, since 10-14 scenes was
+  // originally tuned for a 5-minute episode — this reproduces that exact range unchanged.
+  const targetMinutesForScenes = series.targetEpisodeMinutes || 5;
+  const sceneCountLow = Math.max(2, Math.round(targetMinutesForScenes * 2));
+  const sceneCountHigh = Math.max(sceneCountLow + 1, Math.round(targetMinutesForScenes * 2.8));
 
   const prompt = `You are writing one episode of an ongoing narrated "motion comic" style story series.
 
@@ -79,7 +86,7 @@ ${continuityText}
 
 This episode's premise: ${premise}
 
-Write a longer episode as 10-14 scenes. Each scene has a background description, which characters
+Write the episode as ${sceneCountLow}-${sceneCountHigh} scenes. Each scene has a background description, which characters
 are on screen, and a sequence of dialogue/narration lines — a hard minimum of 5 lines per scene,
 never fewer. At natural narration pace, the total dialogue/narration across the whole script must
 be AT LEAST ${targetWords} words — treat this as a strict floor, not a suggestion, and aim past it
