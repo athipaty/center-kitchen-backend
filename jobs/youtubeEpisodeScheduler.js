@@ -437,6 +437,7 @@ async function stepRenderAndUpload(episode) {
       dialogue: scene.dialogue.map((line) => ({
         audioUrl: line.audioUrl,
         durationMs: line.durationMs,
+        text: line.text,
       })),
     })),
     bgmUrl: null, // no royalty-free track bundled in v1 — see remotion/src/EpisodeComposition.tsx
@@ -541,11 +542,27 @@ async function processOne(episode) {
 
 function start(socketIo) {
   io = socketIo;
-  // No background sweep here on purpose — every stage (script, sprites, backgrounds, narration,
+  // No ongoing background sweep — every stage (script, sprites, backgrounds, narration,
   // approve-render, upload) only ever runs when a human explicitly triggers it (a button click
-  // hitting triggerNow via routes/youtube/index.js), one step at a time. A server restart mid-step
-  // just leaves that episode idle at its last-saved status until the next manual click resumes it
-  // — safe, since every step already skips whatever it finds already generated.
+  // hitting triggerNow via routes/youtube/index.js), one step at a time. A server restart mid-
+  // MANUAL step (pending/script/images) just leaves that episode idle at its last-saved status
+  // until the next manual click resumes it — safe, since every step already skips whatever it
+  // finds already generated.
+  //
+  // 'tts'/'rendering'/'uploading' are different: once a human clicks "Approve & render", the
+  // pipeline is supposed to run straight through to 'done' with no further clicks, so the
+  // frontend shows no button for these — just a progress spinner. If the process dies mid-step
+  // (e.g. a redeploy landing mid-render), the episode is left stuck forever: inFlightEpisodes is
+  // gone (a fresh Set every boot) but nothing is left to ever call triggerNow again. Right after a
+  // fresh boot is the one moment it's safe to assume nothing else could legitimately still be
+  // working on these — there's no other instance that could be — so resume any found here, once.
+  Episode.find({ status: { $in: ["tts", "rendering", "uploading"] } })
+    .then((stuck) => {
+      for (const episode of stuck) {
+        processOne(episode).catch((e) => console.error(`startup resume failed for ${episode._id}:`, e.message));
+      }
+    })
+    .catch((e) => console.error("startup resume sweep failed:", e.message));
 }
 
 async function triggerNow(episodeId) {

@@ -1,6 +1,7 @@
 export type DialogueLineProps = {
   audioUrl: string;
   durationMs: number;
+  text: string;
 };
 
 // A scene renders as one full-frame illustration. No per-line portrait/caption data: consistency

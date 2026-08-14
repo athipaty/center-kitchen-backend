@@ -119,6 +119,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
   "scenes": [
     {
       "backgroundPrompt": "a vivid visual description of the setting for this scene, no characters",
+      "charactersOnScreen": ["exact name from the list above, for every character actually visible/present in this scene — including ones who are silently reacting, listening, or just standing there, not only whoever has a dialogue line"],
       "cameraMove": "one of: ${CAMERA_MOVES.join(", ")}",
       "dialogue": [
         { "characterName": "exact name from the list above, or Narrator", "expression": "one of: ${EXPRESSIONS.join(", ")}", "text": "the line" }
@@ -146,7 +147,18 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
         text: d.text || "",
       };
     });
-    const charactersOnScreen = [...new Set(dialogue.map((d) => d.character).filter(Boolean))];
+    // Union of Claude's explicit charactersOnScreen list (covers silent/reacting characters who
+    // never speak, which dialogue-derived detection always missed) with whoever has a dialogue line
+    // in this scene (safety net in case Claude writes a line for someone but forgets to also list
+    // them in charactersOnScreen).
+    const namedOnScreen = (s.charactersOnScreen || [])
+      .map((name) => byName.get(String(name).toLowerCase()))
+      .filter(Boolean)
+      .map((c) => c._id);
+    const speakingOnScreen = dialogue.map((d) => d.character).filter(Boolean);
+    const charactersOnScreen = [
+      ...new Map([...namedOnScreen, ...speakingOnScreen].map((id) => [String(id), id])).values(),
+    ];
     return {
       order: i,
       backgroundPrompt: s.backgroundPrompt || "a simple background",

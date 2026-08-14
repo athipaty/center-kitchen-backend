@@ -437,6 +437,34 @@ router.put("/episodes/:id/scenes", async (req, res) => {
   }
 });
 
+// Full reset — throws out the current script entirely and asks Claude for a brand-new one from the
+// same premise, discarding every scene/image/dialogue/audio that traced back to the old script.
+// Unlike PUT /scenes above (which patches specific fields and reuses everything else), this is for
+// when the script itself came out wrong in a way editing can't fix (e.g. a character silently
+// missing from a scene's charactersOnScreen, so its image never had a chance to include them) —
+// there's nothing worth keeping, so it goes all the way back to "pending" for stepScript to redo
+// from scratch at the next scheduler tick. Gated by the same EDITABLE_STATUSES as PUT /scenes: not
+// once published ("uploading"/"publishing"/"done").
+router.post("/episodes/:id/regenerate-script", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (!EDITABLE_STATUSES.includes(episode.status)) {
+      return res.status(409).json({ error: "This episode isn't at a step that can be revised right now." });
+    }
+    episode.scenes = [];
+    episode.videoUrl = null;
+    episode.status = "pending";
+    episode.statusDetail = "";
+    await episode.save();
+    scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
+    const fresh = await Episode.findById(episode._id);
+    res.json(fresh);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Redo a scene's image using its already-saved prompt — no text edit required, for when the same
 // prompt might come out looking better on a different roll. Allowed anywhere the image already
 // exists ("images", "review", "rendered") — not "script" (nothing generated yet) and not once
