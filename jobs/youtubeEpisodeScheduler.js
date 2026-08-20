@@ -464,29 +464,42 @@ async function stepRenderAndUpload(episode) {
 // episode, there's no reason to pause between them — same one-call-does-several-hops reasoning as
 // stepRenderAndUpload chaining rendering -> uploading -> rendered below. Re-fetches the video
 // buffer from B2 (rather than threading it through from stepRenderAndUpload) since each step
-// reloads the episode fresh from Mongo. Only reached via the explicit POST
-// /episodes/:id/upload-youtube route below (same "momentary handoff" trick as approve-render uses
-// with "tts": that route sets status to "uploading" and triggers the scheduler, which dispatches
-// straight to this handler) — never automatically, since "rendered" itself has no STEP_HANDLERS
-// entry.
+// reloads the episode fresh from Mongo. Reached via the explicit POST /episodes/:id/upload-youtube
+// route (same "momentary handoff" trick as approve-render uses with "tts"), a startup resume for
+// an episode still at "uploading" when the process died mid-step (see start() below), or a
+// POST /episodes/:id/retry after either of those failed partway.
+//
+// Both of those resume paths can re-enter this handler after the YouTube upload itself already
+// succeeded (e.g. summarizeEpisode/series.save() is what actually failed) — unlike
+// stepImages/stepTts, which already skip whatever they find per-scene/per-line, this used to
+// re-run the upload unconditionally, publishing the same episode to the channel a second time as
+// an untracked duplicate video. Skip the upload once youtubeVideoId is already saved, and skip
+// re-appending the continuity summary once this episode's entry is already in the log, so
+// re-entering this step after a partial success only redoes whatever didn't actually finish.
 async function stepPublishToYoutube(episode) {
   const series = await Series.findById(episode.series);
-  episode.statusDetail = "uploading to YouTube";
-  await episode.save();
-  await emit(episode);
 
-  const meta = await generateYoutubeMetadata(series, episode);
-  const { data: mp4Buffer } = await axios.get(episode.videoUrl, { responseType: "arraybuffer" });
-  const { videoId, url } = await uploadVideoToYoutube(Buffer.from(mp4Buffer), meta);
-  episode.youtubeVideoId = videoId;
-  episode.youtubeUrl = url;
-  episode.statusDetail = "";
-  await episode.save();
-  await emit(episode);
+  if (!episode.youtubeVideoId) {
+    episode.statusDetail = "uploading to YouTube";
+    await episode.save();
+    await emit(episode);
 
-  const summary = await summarizeEpisode(series, episode);
-  series.continuityLog.push({ episodeNumber: episode.episodeNumber, summary });
-  await series.save();
+    const meta = await generateYoutubeMetadata(series, episode);
+    const { data: mp4Buffer } = await axios.get(episode.videoUrl, { responseType: "arraybuffer" });
+    const { videoId, url } = await uploadVideoToYoutube(Buffer.from(mp4Buffer), meta);
+    episode.youtubeVideoId = videoId;
+    episode.youtubeUrl = url;
+    episode.statusDetail = "";
+    await episode.save();
+    await emit(episode);
+  }
+
+  const alreadySummarized = series.continuityLog.some((e) => e.episodeNumber === episode.episodeNumber);
+  if (!alreadySummarized) {
+    const summary = await summarizeEpisode(series, episode);
+    series.continuityLog.push({ episodeNumber: episode.episodeNumber, summary });
+    await series.save();
+  }
   episode.status = "done";
   episode.statusDetail = "";
 }
