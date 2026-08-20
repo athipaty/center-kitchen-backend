@@ -1773,6 +1773,36 @@ router.post('/contact-messages/:id/replies', requireAuth, async (req, res) => {
   }
 })
 
+router.put('/contact-messages/:id/replies/:replyId', requireAuth, async (req, res) => {
+  try {
+    const { message } = req.body
+    if (!message?.trim()) return res.status(400).json({ error: 'message is required' })
+    const item = await AbtContactMessage.findById(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    const reply = item.replies.id(req.params.replyId)
+    if (!reply) return res.status(404).json({ error: 'Reply not found' })
+    reply.message = message.trim()
+    await item.save()
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+router.delete('/contact-messages/:id/replies/:replyId', requireAuth, async (req, res) => {
+  try {
+    const item = await AbtContactMessage.findById(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    const reply = item.replies.id(req.params.replyId)
+    if (!reply) return res.status(404).json({ error: 'Reply not found' })
+    reply.deleteOne()
+    await item.save()
+    res.json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
 router.delete('/contact-messages/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtContactMessage.findByIdAndDelete(req.params.id)
