@@ -556,17 +556,31 @@ router.post("/episodes/:id/rerender", async (req, res) => {
 });
 
 // Resumes a stuck/failed episode from wherever it left off — the pipeline is designed to be
-// safe to re-run a step (see stepBackgrounds/stepTts's "already generated" skip checks and
-// stepRenderAndUpload's comment), so retry just clears the error and re-triggers.
+// safe to re-run a step (see stepImages/stepTts's "already generated" skip checks and
+// stepRenderAndUpload's own "cheap and safe to redo" comment), so retry just clears the error
+// and re-triggers from the step that actually needs to redo.
+//
+// That resume point has to be reconstructed from what's actually saved on the episode, not
+// assumed — flattening every failure back to "script" (regardless of which step actually failed)
+// used to send a failure from deep in the pipeline (tts/rendering/uploading — the fully-automatic
+// tail that's meant to run straight through to "done" with no further clicks) all the way back
+// through two dead *manual* steps, and once back in the automatic tail, stepRenderAndUpload would
+// re-render the whole video from scratch even when only the final YouTube upload had failed.
+// Checking what's actually missing keeps a retry exactly as cheap as the failure that caused it.
+function resumeStatusAfterError(episode) {
+  if (!episode.scenes?.length) return "pending";
+  if (!episode.scenes.every((s) => s.imageUrl)) return "script";
+  if (!episode.scenes.every((s) => s.dialogue.every((d) => d.audioUrl))) return "images";
+  if (!episode.videoUrl) return "tts";
+  return "uploading"; // rendered, only the YouTube publish step was left to fail
+}
+
 router.post("/episodes/:id/retry", async (req, res) => {
   try {
     const episode = await Episode.findById(req.params.id);
     if (!episode) return res.status(404).json({ error: "Episode not found" });
     if (episode.status === "error") {
-      // 'script' is a safe universal re-entry point once a script exists: STEP_HANDLERS.script
-      // (stepImages) skips pages already generated, stepTts skips lines that already have an
-      // audioUrl — so resuming here never redoes finished work.
-      episode.status = episode.scenes?.length ? "script" : "pending";
+      episode.status = resumeStatusAfterError(episode);
       episode.errorMessage = null;
       await episode.save();
     }
