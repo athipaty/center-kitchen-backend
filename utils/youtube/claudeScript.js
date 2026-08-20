@@ -1,4 +1,5 @@
 const Anthropic = require("@anthropic-ai/sdk");
+const { defaultNarratorVoice } = require("./narratorVoices");
 
 // Same call shape used throughout routes/ebay.js: no system prompt, instructions embedded in the
 // user prompt itself requesting raw JSON, fences stripped defensively before JSON.parse (Claude
@@ -19,24 +20,14 @@ const EXPRESSIONS = ["neutral", "happy", "sad", "surprised", "angry", "curious",
 const CAMERA_MOVES = ["pan-left", "pan-right", "zoom-in", "zoom-out", "static"];
 
 // Output language is pinned to the series' narration voice, independent of whatever language
-// the premise/title were typed in — the TTS voice (see NARRATOR_VOICE_BY_LOCALE in
-// youtubeEpisodeScheduler.js) can only read the language it's built for, so a Thai premise with
-// an English-voiced series still needs an English script, and vice versa.
+// the premise/title were typed in — the TTS voice (see narratorVoices.js) can only read the
+// language it's built for, so a Thai premise with an English-voiced series still needs an
+// English script, and vice versa.
 const SCRIPT_LANGUAGE_BY_LOCALE = {
   "en-US": "English",
   "th-TH": "Thai",
 };
 const DEFAULT_SCRIPT_LANGUAGE = "English";
-
-// Locale-specific character voice pool, gender-mapped. Deliberately small and hardcoded — edge-
-// tts-universal has no stable published voice list (see edgeTts.js's own comment on this), so
-// outline generation picks from voices already confirmed to work rather than letting Claude
-// invent a voiceName that might not exist and silently break narration later.
-const CHARACTER_VOICES_BY_LOCALE = {
-  "en-US": { male: "en-US-AndrewNeural", female: "en-US-AvaNeural" },
-  "th-TH": { male: "th-TH-NiwatNeural", female: "th-TH-PremwadeeNeural" },
-};
-const DEFAULT_CHARACTER_VOICES = CHARACTER_VOICES_BY_LOCALE["en-US"];
 
 // ~150 spoken words/minute at natural narration pace.
 const WORDS_PER_MINUTE = 150;
@@ -87,19 +78,23 @@ ${continuityText}
 This episode's premise: ${premise}
 
 Write the episode as ${sceneCountLow}-${sceneCountHigh} scenes. Each scene becomes exactly ONE
-illustration that stays on screen for that whole scene's dialogue — so a scene should cover ONE
-visual moment/beat, not a whole stretch of the story. Roughly 3-6 dialogue lines per scene is the
-target; if a moment needs more lines than that to play out, split it into an additional scene
-instead of piling more lines onto one — a new development, action, or emotional turn should mean a
-new scene (and therefore a new picture), not more dialogue crammed under the same static image.
-Each scene has a background description, which characters are on screen, and its sequence of
-dialogue/narration lines. At natural narration pace, the total dialogue/narration across the whole
+illustration that stays on screen for that whole scene's narration — so a scene should cover ONE
+visual moment/beat, not a whole stretch of the story. Roughly 3-6 narration segments per scene is
+the target; if a moment needs more than that to play out, split it into an additional scene instead
+of piling more segments onto one — a new development, action, or emotional turn should mean a new
+scene (and therefore a new picture), not more narration crammed under the same static image.
+
+This is read aloud by ONE storyteller voice, not a cast of voice actors — write it the way a
+bedtime-story narrator reads a picture book aloud, not as a dialogue-driven script. Any character
+speech belongs INSIDE the narration as reported or quoted speech the storyteller voices themselves
+(e.g. "Ruso peeked over the log and whispered, 'Is anyone there?'" or "Milo asked why the sky turns
+orange at sunset."), never as a separate line attributed to that character. Each scene has a
+background description, which characters are visually on screen, and a sequence of narration
+segments telling that scene's beat. At natural narration pace, the total narration across the whole
 script must be AT LEAST ${targetWords} words — treat this as a strict floor, not a suggestion, and
 aim past it (${targetWords}-${targetWordsCeiling} words) for safety margin. Undershooting this —
-writing too few scenes, or too little dialogue — is the single most common mistake; if you're
-unsure, add more scenes to cover more distinct moments rather than lengthening existing ones. A
-line with no character speaking (pure narration) is allowed — use character "Narrator" for those,
-and they still count toward the word-count floor.
+writing too few scenes, or too little narration — is the single most common mistake; if you're
+unsure, add more scenes to cover more distinct moments rather than lengthening existing ones.
 
 Somewhere in the episode, include one "curiosity beat": a character notices something (an animal,
 object, or place) and asks a genuine, kid-friendly "why" or "how" question about it. Another
@@ -108,10 +103,10 @@ character (or whichever character would naturally know) gives the real answer in
 sentences: a small, accurate, age-appropriate fact, not a lecture. Keep it fun and brief, matching
 the rest of the episode's tone.
 
-Write the title and every dialogue/narration line in ${scriptLanguage}, regardless of what
-language the premise above happens to be written in — the narrator voice can only read
-${scriptLanguage}. backgroundPrompt (image generation prompts) should stay in English regardless,
-since the image model doesn't need to match the narration language.
+Write the title and every narration segment in ${scriptLanguage}, regardless of what language the
+premise above happens to be written in — the narrator voice can only read ${scriptLanguage}.
+backgroundPrompt (image generation prompts) should stay in English regardless, since the image
+model doesn't need to match the narration language.
 
 Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
 {
@@ -119,10 +114,10 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
   "scenes": [
     {
       "backgroundPrompt": "a vivid visual description of the setting for this scene, no characters",
-      "charactersOnScreen": ["exact name from the list above, for every character actually visible/present in this scene — including ones who are silently reacting, listening, or just standing there, not only whoever has a dialogue line"],
+      "charactersOnScreen": ["exact name from the list above, for every character actually visible/present in this scene — including ones who are silently reacting, listening, or just standing there, not only whoever is mentioned speaking"],
       "cameraMove": "one of: ${CAMERA_MOVES.join(", ")}",
-      "dialogue": [
-        { "characterName": "exact name from the list above, or Narrator", "expression": "one of: ${EXPRESSIONS.join(", ")}", "text": "the line" }
+      "narration": [
+        { "expression": "one of: ${EXPRESSIONS.join(", ")} — the storyteller's vocal tone for this segment", "text": "1-3 sentence chunk of story narration for this beat, third-person storyteller voice; quoted character speech inside it is fine" }
       ]
     }
   ]
@@ -138,33 +133,23 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
   const byName = new Map(characters.map((c) => [c.name.toLowerCase(), c]));
 
   const scenes = (parsed.scenes || []).map((s, i) => {
-    const dialogue = (s.dialogue || []).map((d) => {
-      const isNarrator = !d.characterName || d.characterName.toLowerCase() === "narrator";
-      const char = isNarrator ? null : byName.get(String(d.characterName).toLowerCase());
-      return {
-        character: char ? char._id : null,
-        expression: EXPRESSIONS.includes(d.expression) ? d.expression : "neutral",
-        text: d.text || "",
-      };
-    });
-    // Union of Claude's explicit charactersOnScreen list (covers silent/reacting characters who
-    // never speak, which dialogue-derived detection always missed) with whoever has a dialogue line
-    // in this scene (safety net in case Claude writes a line for someone but forgets to also list
-    // them in charactersOnScreen).
-    const namedOnScreen = (s.charactersOnScreen || [])
+    const narration = (s.narration || []).map((n) => ({
+      expression: EXPRESSIONS.includes(n.expression) ? n.expression : "neutral",
+      text: n.text || "",
+    }));
+    // Nothing speaks a line anymore (one storyteller voices the whole episode), so
+    // charactersOnScreen is purely Claude's explicit list of who's visually present this scene —
+    // there's no dialogue-derived signal left to union it with.
+    const charactersOnScreen = (s.charactersOnScreen || [])
       .map((name) => byName.get(String(name).toLowerCase()))
       .filter(Boolean)
       .map((c) => c._id);
-    const speakingOnScreen = dialogue.map((d) => d.character).filter(Boolean);
-    const charactersOnScreen = [
-      ...new Map([...namedOnScreen, ...speakingOnScreen].map((id) => [String(id), id])).values(),
-    ];
     return {
       order: i,
       backgroundPrompt: s.backgroundPrompt || "a simple background",
       cameraMove: CAMERA_MOVES.includes(s.cameraMove) ? s.cameraMove : "zoom-in",
       charactersOnScreen,
-      dialogue,
+      narration,
     };
   });
 
@@ -177,7 +162,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
 async function summarizeEpisode(series, episode) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const script = episode.scenes
-    .map((s) => s.dialogue.map((d) => d.text).join(" "))
+    .map((s) => s.narration.map((n) => n.text).join(" "))
     .join(" ");
 
   const prompt = `Summarize this episode of "${series.title}" in 2-3 sentences, focused on plot
@@ -204,7 +189,7 @@ Return ONLY a raw JSON object (no markdown fences): { "summary": "..." }`;
 async function generateYoutubeMetadata(series, episode) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const script = episode.scenes
-    .map((s) => s.dialogue.map((d) => d.text).join(" "))
+    .map((s) => s.narration.map((n) => n.text).join(" "))
     .join(" ");
 
   const prompt = `You are a YouTube SEO specialist writing the public listing for one episode of an
@@ -274,12 +259,13 @@ Return ONLY a raw JSON object (no markdown fences): { "idea": "..." }`;
 }
 
 // Plans a whole story before any Series/Character/Episode exists: given a one-line idea, drafts
-// the show identity, splits the story into short episodes sized to a target runtime, and proposes
-// ONLY the characters the story actually needs. Deliberately asked to keep the cast small — every
-// extra character is a whole locked sprite set (5-10 generated images) plus its own voice, and
-// reusing one character across episodes is both cheaper and more visually consistent than
-// inventing a new one per scene. Nothing is persisted here; the caller (POST /outline) just
-// returns this draft for the user to review/edit before committing it via POST /outline/commit.
+// the show identity (including a default narratorVoice for the locale — the one storyteller voice
+// reading every episode), splits the story into short episodes sized to a target runtime, and
+// proposes ONLY the characters the story actually needs. Deliberately asked to keep the cast small
+// — every extra character is a whole locked sprite set (5-10 generated images), and reusing one
+// character across episodes is both cheaper and more visually consistent than inventing a new one
+// per scene. Nothing is persisted here; the caller (POST /outline) just returns this draft for the
+// user to review/edit before committing it via POST /outline/commit.
 async function generateStoryOutline({ idea, voiceLocale = "en-US", targetEpisodeMinutes = 5, episodeCount = null }) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const scriptLanguage = SCRIPT_LANGUAGE_BY_LOCALE[voiceLocale] || DEFAULT_SCRIPT_LANGUAGE;
@@ -310,9 +296,8 @@ Plan the WHOLE story before any single episode gets written. Decide:
    dialogue and an emotional beat in at least one episode. Prefer reusing one character across
    multiple episodes over introducing a new one for a single scene. For each character give: a
    short name, a locked visual description specific enough to draw the exact same way every time
-   (species/type, age, build, colors, one or two distinctive features — no vague adjectives), their
-   role in the story in one short phrase, and "gender": "male" or "female" (used to pick a
-   matching narration voice).
+   (species/type, age, build, colors, one or two distinctive features — no vague adjectives), and
+   their role in the story in one short phrase.
 
 Write the show title, episode titles/premises, and character names/descriptions/roles in
 ${scriptLanguage}, regardless of what language the idea above was typed in.
@@ -328,7 +313,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
     { "title": "episode title", "premise": "1-3 sentences describing what happens in this episode" }
   ],
   "characters": [
-    { "name": "character name", "description": "locked visual description", "role": "their role in the story, one short phrase", "gender": "male or female" }
+    { "name": "character name", "description": "locked visual description", "role": "their role in the story, one short phrase" }
   ]
 }`;
 
@@ -339,7 +324,6 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
   });
 
   const parsed = parseJsonResponse(msg);
-  const voicePool = CHARACTER_VOICES_BY_LOCALE[voiceLocale] || DEFAULT_CHARACTER_VOICES;
 
   // The model occasionally lists the same character twice (e.g. once as the protagonist, again
   // for a later beat) — nothing downstream dedupes by name, so an unfiltered list would turn into
@@ -350,7 +334,6 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
       name: c.name || "Character",
       description: c.description || "",
       role: c.role || "",
-      voiceName: c.gender === "female" ? voicePool.female : voicePool.male,
     }))
     .filter((c) => {
       const key = c.name.trim().toLowerCase();
@@ -372,6 +355,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
     tone: parsed.tone || "",
     artStyle: parsed.artStyle || "",
     voiceLocale,
+    narratorVoice: defaultNarratorVoice(voiceLocale),
     targetEpisodeMinutes,
     episodes,
     characters,

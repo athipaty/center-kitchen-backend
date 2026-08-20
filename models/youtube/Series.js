@@ -21,6 +21,11 @@ const seriesSchema = new mongoose.Schema(
     // so the whole series looks like one consistent art style, not a new style per generation.
     artStyle: { type: String, default: "" },
     voiceLocale: { type: String, default: "en-US" },
+    // The single storyteller voice narrating every scene across every episode of this series —
+    // replaces per-character voiceName now that one narrator reads the whole episode instead of
+    // each character speaking in their own voice. Defaulted from NARRATOR_VOICE_BY_LOCALE at
+    // creation time (see routes/youtube/index.js), editable afterward via PATCH /series/:id.
+    narratorVoice: { type: String, default: "" },
     // Drives generateScript's word-count target (targetEpisodeMinutes * WORDS_PER_MINUTE, see
     // claudeScript.js) — set once at outline time, applies to every episode in the series.
     targetEpisodeMinutes: { type: Number, default: 5 },

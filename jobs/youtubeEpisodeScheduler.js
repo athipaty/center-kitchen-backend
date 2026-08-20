@@ -10,16 +10,9 @@ const { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS }
 const { renderEpisodeToBuffer } = require("../utils/youtube/remotionRender");
 const { uploadToB2, deleteB2File, b2KeyFromUrl } = require("../utils/b2Utils");
 const { uploadVideoToYoutube } = require("../utils/youtube/youtubeUpload");
+const { defaultNarratorVoice } = require("../utils/youtube/narratorVoices");
 
 let io = null;
-
-// No official voice list is stable enough to hardcode broadly — these are just sane per-locale
-// narrator defaults, confirmed live against edge-tts-universal's VoicesManager during development.
-const NARRATOR_VOICE_BY_LOCALE = {
-  "en-US": "en-US-AndrewNeural",
-  "th-TH": "th-TH-NiwatNeural",
-};
-const DEFAULT_NARRATOR_VOICE = "en-US-AndrewNeural";
 
 // edge-tts-universal has no documented rate limit, but firing dozens of lines back-to-back with
 // zero spacing (now that episodes run 8-12 scenes instead of 3-5) is what made NoAudioReceived
@@ -386,26 +379,22 @@ async function regenerateSceneImage(episode, scene) {
   if (oldUrl) await deleteB2File(b2KeyFromUrl(oldUrl)).catch(() => {});
 }
 
-// images -> review: one audio file per dialogue line, then STOPS at "review" instead of
-// going straight into rendering — gives a human a chance to read the dialogue, look at the
-// scene images, and edit anything before the render (which is comparatively expensive/slow) runs.
-// Narrator lines use a per-locale default voice; character lines use that character's own locked
-// voiceName.
+// images -> review: one audio file per narration segment, all read by the series' single
+// narratorVoice, then STOPS at "review" instead of going straight into rendering — gives a human
+// a chance to read the narration, look at the scene images, and edit anything before the render
+// (which is comparatively expensive/slow) runs.
 async function stepTts(episode) {
   const series = await Series.findById(episode.series);
-  const characters = await Character.find({ series: episode.series });
-  const byId = new Map(characters.map((c) => [String(c._id), c]));
-  const narratorVoice = NARRATOR_VOICE_BY_LOCALE[series.voiceLocale] || DEFAULT_NARRATOR_VOICE;
+  const narratorVoice = series.narratorVoice || defaultNarratorVoice(series.voiceLocale);
 
   for (const scene of episode.scenes) {
-    for (let i = 0; i < scene.dialogue.length; i++) {
-      const line = scene.dialogue[i];
+    for (let i = 0; i < scene.narration.length; i++) {
+      const line = scene.narration[i];
       if (line.audioUrl) continue; // already generated — resuming after an interruption
       episode.statusDetail = `narration for scene ${scene.order + 1} line ${i + 1}`;
       await episode.save();
       await emit(episode);
-      const voice = line.character ? byId.get(String(line.character))?.voiceName || narratorVoice : narratorVoice;
-      const { buffer, durationMs } = await synthesize(line.text, voice, line.expression);
+      const { buffer, durationMs } = await synthesize(line.text, narratorVoice, line.expression);
       line.audioUrl = await uploadToB2(
         buffer,
         `youtube/episodes/${episode._id}/scene${scene.order}-line${i}.mp3`,
@@ -434,7 +423,10 @@ async function stepRenderAndUpload(episode) {
   const props = {
     scenes: episode.scenes.map((scene) => ({
       imageUrl: scene.imageUrl,
-      dialogue: scene.dialogue.map((line) => ({
+      // Remotion's SceneProps still calls this `dialogue` (see remotion/src/types.ts) — it only
+      // cares about an ordered list of {audioUrl, durationMs, text} segments to sequence, not who
+      // said them, so the DB's `narration` field maps straight onto it unchanged.
+      dialogue: scene.narration.map((line) => ({
         audioUrl: line.audioUrl,
         durationMs: line.durationMs,
         text: line.text,
