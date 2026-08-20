@@ -1758,6 +1758,21 @@ router.put('/contact-messages/:id', requireAuth, async (req, res) => {
   }
 })
 
+router.post('/contact-messages/:id/replies', requireAuth, async (req, res) => {
+  try {
+    const { author, message } = req.body
+    if (!message?.trim()) return res.status(400).json({ error: 'message is required' })
+    const item = await AbtContactMessage.findById(req.params.id)
+    if (!item) return res.status(404).json({ error: 'Not found' })
+    item.replies.push({ author: author?.trim() || undefined, message: message.trim() })
+    if (item.status === 'new') item.status = 'read'
+    await item.save()
+    res.status(201).json(item)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
 router.delete('/contact-messages/:id', requireAuth, async (req, res) => {
   try {
     const item = await AbtContactMessage.findByIdAndDelete(req.params.id)
