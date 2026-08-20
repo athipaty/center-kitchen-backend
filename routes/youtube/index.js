@@ -6,6 +6,7 @@ const Episode = require("../../models/youtube/Episode");
 const scheduler = require("../../jobs/youtubeEpisodeScheduler");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
 const { generateStoryOutline, suggestStoryIdea } = require("../../utils/youtube/claudeScript");
+const { defaultNarratorVoice } = require("../../utils/youtube/narratorVoices");
 
 // ── Story outline (AI-assisted planning) ───────────────────────────
 // Suggests a one-line idea to seed the outline wizard's idea box — the "🎲 Suggest an idea"
@@ -39,15 +40,18 @@ router.post("/outline", async (req, res) => {
 // until a manual POST /episodes/:id/advance click, same as an episode created one at a time.
 router.post("/outline/commit", async (req, res) => {
   try {
-    const { title, premise, genre, tone, artStyle, voiceLocale, targetEpisodeMinutes, episodes, characters } = req.body;
+    const { title, premise, genre, tone, artStyle, voiceLocale, narratorVoice, targetEpisodeMinutes, episodes, characters } = req.body;
     if (!title || !premise) return res.status(400).json({ error: "title and premise are required" });
     if (!Array.isArray(episodes) || !episodes.length) return res.status(400).json({ error: "at least one episode is required" });
     if (!Array.isArray(characters) || !characters.length) return res.status(400).json({ error: "at least one character is required" });
 
-    const series = await Series.create({ title, premise, genre, tone, artStyle, voiceLocale, targetEpisodeMinutes });
+    const series = await Series.create({
+      title, premise, genre, tone, artStyle, voiceLocale, targetEpisodeMinutes,
+      narratorVoice: narratorVoice || defaultNarratorVoice(voiceLocale),
+    });
 
     const createdCharacters = await Character.insertMany(
-      characters.map((c) => ({ series: series._id, name: c.name, description: c.description, voiceName: c.voiceName }))
+      characters.map((c) => ({ series: series._id, name: c.name, description: c.description }))
     );
 
     const createdEpisodes = [];
@@ -65,9 +69,34 @@ router.post("/outline/commit", async (req, res) => {
 // ── Series ──────────────────────────────────────────────────────────
 router.post("/series", async (req, res) => {
   try {
-    const { title, premise, genre, tone, artStyle, voiceLocale } = req.body;
+    const { title, premise, genre, tone, artStyle, voiceLocale, narratorVoice } = req.body;
     if (!title || !premise) return res.status(400).json({ error: "title and premise are required" });
-    const series = await Series.create({ title, premise, genre, tone, artStyle, voiceLocale });
+    const series = await Series.create({
+      title, premise, genre, tone, artStyle, voiceLocale,
+      narratorVoice: narratorVoice || defaultNarratorVoice(voiceLocale || "en-US"),
+    });
+    res.json(series);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Edit a series' identity/narrator voice — currently the only field the UI actually lets a user
+// change post-creation is narratorVoice (a "New series" form field for everything else already
+// exists; this is what a standalone "series settings" affordance would grow into if more fields
+// need editing later).
+router.patch("/series/:id", async (req, res) => {
+  try {
+    const { title, premise, genre, tone, artStyle, narratorVoice } = req.body;
+    const update = {};
+    if (title !== undefined) update.title = title;
+    if (premise !== undefined) update.premise = premise;
+    if (genre !== undefined) update.genre = genre;
+    if (tone !== undefined) update.tone = tone;
+    if (artStyle !== undefined) update.artStyle = artStyle;
+    if (narratorVoice !== undefined) update.narratorVoice = narratorVoice;
+    const series = await Series.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!series) return res.status(404).json({ error: "Series not found" });
     res.json(series);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -132,16 +161,14 @@ router.delete("/series/:id", async (req, res) => {
 // ── Characters ──────────────────────────────────────────────────────
 router.post("/characters", async (req, res) => {
   try {
-    const { seriesId, name, description, voiceName, voiceOptions, attrs } = req.body;
-    if (!seriesId || !name || !description || !voiceName) {
-      return res.status(400).json({ error: "seriesId, name, description, and voiceName are required" });
+    const { seriesId, name, description, attrs } = req.body;
+    if (!seriesId || !name || !description) {
+      return res.status(400).json({ error: "seriesId, name, and description are required" });
     }
     const character = await Character.create({
       series: seriesId,
       name,
       description,
-      voiceName,
-      voiceOptions: Array.isArray(voiceOptions) ? voiceOptions : [],
       attrs: attrs || null,
     });
     res.json(character);
@@ -253,11 +280,10 @@ router.post("/characters/:id/backfill-sprites", async (req, res) => {
 });
 
 // DELETE a character. Blocked while it's on-screen in an episode that might still need to look it
-// up — stepImages reads a character's description for its image prompts and stepTts reads its
-// voiceName, and editing scenes while paused at "review" (PUT /episodes/:id/scenes) can re-trigger
-// either of those. "rendered" is safe to allow, same reasoning as the episode-delete route below:
-// the render already happened, this character's art/voice are already baked into the finished MP4,
-// and nothing re-reads the Character doc after that.
+// up — stepImages reads a character's description for its image prompts, and editing scenes while
+// paused at "review" (PUT /episodes/:id/scenes) can re-trigger that. "rendered" is safe to allow,
+// same reasoning as the episode-delete route below: the render already happened, this character's
+// art is already baked into the finished MP4, and nothing re-reads the Character doc after that.
 router.delete("/characters/:id", async (req, res) => {
   try {
     const inFlight = await Episode.exists({
@@ -318,11 +344,10 @@ router.get("/episodes", async (req, res) => {
   try {
     const { seriesId } = req.query;
     const filter = seriesId ? { series: seriesId } : {};
-    // Populated so the "review" step can show a speaker name + their current voice next to each
-    // line without a second round-trip per character.
+    // Populated so the episode card can show which characters are on screen without a second
+    // round-trip per character.
     const episodes = await Episode.find(filter)
       .sort({ episodeNumber: -1 })
-      .populate("scenes.dialogue.character", "name voiceName voiceOptions")
       .populate("scenes.charactersOnScreen", "name sprites");
     res.json(episodes);
   } catch (err) {
@@ -332,8 +357,7 @@ router.get("/episodes", async (req, res) => {
 
 router.get("/episodes/:id", async (req, res) => {
   try {
-    const episode = await Episode.findById(req.params.id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
-      .populate("scenes.charactersOnScreen", "name sprites");
+    const episode = await Episode.findById(req.params.id).populate("scenes.charactersOnScreen", "name sprites");
     if (!episode) return res.status(404).json({ error: "Episode not found" });
     res.json(episode);
   } catch (err) {
@@ -341,18 +365,18 @@ router.get("/episodes/:id", async (req, res) => {
   }
 });
 
-// Edit dialogue text/expression, background prompts, and/or a character's voice at any checkpoint
-// that already has scene data to show — "script" (script only), "images" (+ scene art),
-// "review" (+ narration), or "rendered" (+ finished video, which an edit here does NOT touch;
-// re-approving render afterward is what actually replaces it). Only touches what actually
-// changed and re-enters the pipeline at the earliest step that needs to redo — reusing the same
-// "already generated, skip it" guards stepBackgrounds/stepTts use for resuming after a crash, so
-// unrelated scenes/lines are never regenerated. "uploading"/"publishing"/"done" stay off-limits:
-// once an episode is live on YouTube, edits here wouldn't reach the published video anyway.
+// Edit narration text/expression and/or background prompts at any checkpoint that already has
+// scene data to show — "script" (script only), "images" (+ scene art), "review" (+ narration
+// audio), or "rendered" (+ finished video, which an edit here does NOT touch; re-approving render
+// afterward is what actually replaces it). Only touches what actually changed and re-enters the
+// pipeline at the earliest step that needs to redo — reusing the same "already generated, skip it"
+// guards stepImages/stepTts use for resuming after a crash, so unrelated scenes/lines are never
+// regenerated. "uploading"/"publishing"/"done" stay off-limits: once an episode is live on
+// YouTube, edits here wouldn't reach the published video anyway.
 const EDITABLE_STATUSES = ["script", "images", "review", "rendered"];
 // Position in the pipeline each editable status represents — used below to figure out the
 // earliest step an edit needs to re-enter at, without ever jumping the episode FORWARD past
-// wherever it already was (e.g. editing dialogue text while still at "script", before images
+// wherever it already was (e.g. editing narration text while still at "script", before images
 // even exist yet, must not skip straight to "images" — there's nothing to regenerate yet, the
 // edited text just sits there ready for the images step to eventually hand off to narration).
 const STATUS_POSITION = { script: 0, images: 1, review: 2, rendered: 3 };
@@ -365,26 +389,9 @@ router.put("/episodes/:id/scenes", async (req, res) => {
       return res.status(409).json({ error: "This episode isn't at a step that can be revised right now." });
     }
 
-    const { scenes: editedScenes = [], voiceChanges = [] } = req.body;
+    const { scenes: editedScenes = [] } = req.body;
     let needsImages = false;
     let needsTts = false;
-
-    // Voice changes are a character-level fix (e.g. the wrong gender voice got assigned when the
-    // character was created) — update the Character so every future episode gets it too, then
-    // wipe just this episode's already-recorded lines for that character so they re-synthesize.
-    for (const { characterId, voiceName } of voiceChanges) {
-      if (!characterId || !voiceName) continue;
-      await Character.findByIdAndUpdate(characterId, { voiceName });
-      for (const scene of episode.scenes) {
-        for (const line of scene.dialogue) {
-          if (String(line.character) === String(characterId)) {
-            line.audioUrl = null;
-            line.durationMs = null;
-            needsTts = true;
-          }
-        }
-      }
-    }
 
     for (const edited of editedScenes) {
       const scene = episode.scenes.find((s) => s.order === edited.order);
@@ -394,8 +401,8 @@ router.put("/episodes/:id/scenes", async (req, res) => {
         scene.imageUrl = null;
         needsImages = true;
       }
-      (edited.dialogue || []).forEach((editedLine, i) => {
-        const line = scene.dialogue[i];
+      (edited.narration || []).forEach((editedLine, i) => {
+        const line = scene.narration[i];
         if (!line) return;
         if (typeof editedLine.text === "string" && editedLine.text.trim() !== line.text.trim()) {
           line.text = editedLine.text.trim();
@@ -404,7 +411,7 @@ router.put("/episodes/:id/scenes", async (req, res) => {
           needsTts = true;
         }
         if (editedLine.expression && editedLine.expression !== line.expression) {
-          line.expression = editedLine.expression; // free — every character's sprite set already covers all 5 expressions
+          line.expression = editedLine.expression; // free — just a prosody nudge for the next TTS pass, not a new image
         }
       });
     }
@@ -429,8 +436,7 @@ router.put("/episodes/:id/scenes", async (req, res) => {
     if (willRegenerate) {
       scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
     }
-    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
-      .populate("scenes.charactersOnScreen", "name sprites");
+    const fresh = await Episode.findById(episode._id).populate("scenes.charactersOnScreen", "name sprites");
     res.json(fresh);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -483,8 +489,7 @@ router.post("/episodes/:id/scenes/:order/regenerate-image", async (req, res) => 
     if (!scene) return res.status(404).json({ error: "Scene not found" });
 
     await scheduler.regenerateSceneImage(episode, scene);
-    const fresh = await Episode.findById(episode._id).populate("scenes.dialogue.character", "name voiceName voiceOptions")
-      .populate("scenes.charactersOnScreen", "name sprites");
+    const fresh = await Episode.findById(episode._id).populate("scenes.charactersOnScreen", "name sprites");
     res.json(fresh);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -570,7 +575,7 @@ router.post("/episodes/:id/rerender", async (req, res) => {
 function resumeStatusAfterError(episode) {
   if (!episode.scenes?.length) return "pending";
   if (!episode.scenes.every((s) => s.imageUrl)) return "script";
-  if (!episode.scenes.every((s) => s.dialogue.every((d) => d.audioUrl))) return "images";
+  if (!episode.scenes.every((s) => s.narration.every((d) => d.audioUrl))) return "images";
   if (!episode.videoUrl) return "tts";
   return "uploading"; // rendered, only the YouTube publish step was left to fail
 }

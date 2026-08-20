@@ -1,9 +1,13 @@
 const mongoose = require("mongoose");
 
-const dialogueLineSchema = new mongoose.Schema(
+// One storyteller-voiced beat of narration within a scene — no `character` ref: the whole episode
+// is read by the series' single narratorVoice now, so there's no per-line speaker to attribute a
+// line to (see Series.narratorVoice). Kept as an array of short segments rather than one big string
+// per scene purely for TTS/render pacing — each segment gets its own edge-tts call and its own
+// audioUrl/durationMs, which is what drives that scene's on-screen timing in Remotion.
+const narrationLineSchema = new mongoose.Schema(
   {
-    character: { type: mongoose.Schema.Types.ObjectId, ref: "YoutubeCharacter", default: null }, // null = narrator
-    expression: { type: String, default: "neutral" }, // which sprite to show while this line plays
+    expression: { type: String, default: "neutral" }, // narrator's vocal tone for this segment — prosody nudge in edgeTts.js
     text: { type: String, required: true },
     audioUrl: { type: String, default: null }, // B2 URL, filled during the 'tts' step
     durationMs: { type: Number, default: null }, // filled during the 'tts' step, drives scene timing
@@ -20,7 +24,7 @@ const sceneSchema = new mongoose.Schema(
     // step (jobs/youtubeEpisodeScheduler.js).
     imageUrl: { type: String, default: null },
     charactersOnScreen: [{ type: mongoose.Schema.Types.ObjectId, ref: "YoutubeCharacter" }],
-    dialogue: [dialogueLineSchema],
+    narration: [narrationLineSchema],
   },
   { timestamps: false }
 );
