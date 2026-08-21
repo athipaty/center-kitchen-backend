@@ -52,6 +52,12 @@ const STRUCTURES = {
       3: { stone: 10, ore: 6 },
     },
   },
+  // A fighting unit rather than a barrier — no levels, just a build cost.
+  // Its health during combat is session-only game state (see the client),
+  // not persisted here; the server only cares whether it still exists.
+  knight: {
+    cost: { wood: 10, ore: 8 },
+  },
 };
 
 // Total resources sunk into a structure at a given level — its build cost
@@ -277,6 +283,30 @@ router.post("/player/:name/upgrade-structure", async (req, res) => {
       player.inventory[resource] -= amount;
     }
     target.level = nextLevel;
+
+    await player.save();
+    res.json(player);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===========================
+// STRUCTURE LOST (a structure — e.g. a Knight — was destroyed in combat.
+// Removes it with no refund, unlike a voluntary demolish.)
+// ===========================
+router.post("/player/:name/structure-lost", async (req, res) => {
+  try {
+    const name = req.params.name.trim().slice(0, 20);
+    const { structureId } = req.body;
+
+    const player = await Player.findOne({ name });
+    if (!player) return res.status(404).json({ error: "Player not found" });
+
+    const target = player.structures.id(structureId);
+    if (!target) return res.status(404).json({ error: "Structure not found" });
+
+    target.deleteOne();
 
     await player.save();
     res.json(player);
