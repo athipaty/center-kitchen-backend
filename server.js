@@ -136,6 +136,9 @@ app.use('/api/youtube', require('./routes/youtube'));
 // --- Profile (portfolio site binary assets: photo, certificate) ---
 app.use('/api/profile', require('./routes/profile'));
 
+// --- Grocery (Singapore supermarket price tracker) ---
+app.use('/api/grocery', require('./routes/grocery'));
+
 /* =====================
    DATABASE
 ===================== */
@@ -146,6 +149,7 @@ mongoose
     require("./jobs/trackerScheduler").start(io);
     require("./jobs/youtubeEpisodeScheduler").start(io);
     require("./jobs/egpCacheRefresh").start();
+    require("./jobs/groceryPriceCheck").start();
     require("./jobs/abtContactCleanup").start();
     // egpPhayaoRefresh disabled — the nationwide RSS it scans is too sparse for the
     // keyword-match approach to ever reliably find Phayao items (0 hits after 24+
