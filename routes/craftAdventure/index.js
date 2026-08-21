@@ -134,8 +134,8 @@ router.post("/player/:name/reset", async (req, res) => {
     const player = await Player.findOneAndUpdate(
       { name },
       {
-        x: 400,
-        y: 300,
+        x: 1200, // center of the world (WORLD_W x WORLD_H = 2400 x 1600 in game.js)
+        y: 800,
         inventory: { wood: 0, stone: 0, ore: 0 },
         upgrades: { axeLevel: 0, pickaxeLevel: 0, bootsLevel: 0, bagLevel: 0 },
       },

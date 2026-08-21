@@ -9,13 +9,14 @@ const playerSchema = new mongoose.Schema(
       trim: true,
       maxlength: 20,
     },
+    // Center of the game world (WORLD_W x WORLD_H = 2400 x 1600 in game.js).
     x: {
       type: Number,
-      default: 400,
+      default: 1200,
     },
     y: {
       type: Number,
-      default: 300,
+      default: 800,
     },
     inventory: {
       wood: { type: Number, default: 0 },
