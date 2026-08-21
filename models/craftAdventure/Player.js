@@ -29,14 +29,16 @@ const playerSchema = new mongoose.Schema(
       bootsLevel: { type: Number, default: 0 },
       bagLevel: { type: Number, default: 0 },
     },
-    // Player-placed buildings (walls, etc.) — world position, no per-item
-    // state. Each gets an auto _id so a single structure can be targeted for
-    // demolition without relying on (collidable, so unique-ish) position.
+    // Player-placed buildings (walls, etc.) — world position plus upgrade
+    // level. Each gets an auto _id so a single structure can be targeted for
+    // demolition, moving, or upgrading without relying on (collidable, so
+    // unique-ish) position.
     structures: [
       {
         type: { type: String, required: true },
         x: { type: Number, required: true },
         y: { type: Number, required: true },
+        level: { type: Number, default: 1 },
       },
     ],
   },

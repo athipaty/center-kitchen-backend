@@ -45,9 +45,30 @@ const RECIPES = {
 // ===========================
 const STRUCTURES = {
   wall: {
-    cost: { wood: 5 },
+    cost: { wood: 5 }, // level 1 (build cost)
+    maxLevel: 3,
+    upgradeCost: {
+      2: { wood: 6, stone: 4 },
+      3: { stone: 10, ore: 6 },
+    },
   },
 };
+
+// Total resources sunk into a structure at a given level — its build cost
+// plus every upgrade paid to reach that level. Demolish refunds this, not
+// just the base build cost, so upgrading isn't a way to lose value.
+function totalInvestedCost(type, level) {
+  const def = STRUCTURES[type];
+  if (!def) return {};
+  const total = { ...def.cost };
+  for (let lvl = 2; lvl <= level; lvl++) {
+    const upgradeCost = def.upgradeCost?.[lvl] || {};
+    for (const [resource, amount] of Object.entries(upgradeCost)) {
+      total[resource] = (total[resource] || 0) + amount;
+    }
+  }
+  return total;
+}
 
 // ===========================
 // PLAYER (find-or-create by name — no password for v1)
@@ -169,7 +190,8 @@ router.post("/player/:name/build", async (req, res) => {
 });
 
 // ===========================
-// DEMOLISH (remove a placed structure and refund its full cost)
+// DEMOLISH (remove a placed structure and refund everything invested in it,
+// including any upgrades)
 // ===========================
 router.post("/player/:name/demolish", async (req, res) => {
   try {
@@ -182,11 +204,79 @@ router.post("/player/:name/demolish", async (req, res) => {
     const target = player.structures.id(structureId);
     if (!target) return res.status(404).json({ error: "Structure not found" });
 
-    const cost = STRUCTURES[target.type]?.cost || {};
+    const cost = totalInvestedCost(target.type, target.level || 1);
     for (const [resource, amount] of Object.entries(cost)) {
       player.inventory[resource] = (player.inventory[resource] || 0) + amount;
     }
     target.deleteOne();
+
+    await player.save();
+    res.json(player);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===========================
+// MOVE STRUCTURE (relocate a placed structure — free, keeps its level)
+// ===========================
+router.post("/player/:name/move-structure", async (req, res) => {
+  try {
+    const name = req.params.name.trim().slice(0, 20);
+    const { structureId, x, y } = req.body;
+    if (typeof x !== "number" || typeof y !== "number") {
+      return res.status(400).json({ error: "Invalid position" });
+    }
+
+    const player = await Player.findOne({ name });
+    if (!player) return res.status(404).json({ error: "Player not found" });
+
+    const target = player.structures.id(structureId);
+    if (!target) return res.status(404).json({ error: "Structure not found" });
+
+    target.x = x;
+    target.y = y;
+
+    await player.save();
+    res.json(player);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===========================
+// UPGRADE STRUCTURE (validated server-side like craft/build, so the client
+// can't grant itself levels by calling the API directly)
+// ===========================
+router.post("/player/:name/upgrade-structure", async (req, res) => {
+  try {
+    const name = req.params.name.trim().slice(0, 20);
+    const { structureId } = req.body;
+
+    const player = await Player.findOne({ name });
+    if (!player) return res.status(404).json({ error: "Player not found" });
+
+    const target = player.structures.id(structureId);
+    if (!target) return res.status(404).json({ error: "Structure not found" });
+
+    const def = STRUCTURES[target.type];
+    const currentLevel = target.level || 1;
+    const nextLevel = currentLevel + 1;
+    if (!def || nextLevel > (def.maxLevel || 1)) {
+      return res.status(400).json({ error: "Already at max level" });
+    }
+
+    const cost = def.upgradeCost[nextLevel];
+    for (const [resource, amount] of Object.entries(cost)) {
+      if ((player.inventory[resource] || 0) < amount) {
+        return res.status(400).json({ error: `Not enough ${resource}` });
+      }
+    }
+
+    for (const [resource, amount] of Object.entries(cost)) {
+      player.inventory[resource] -= amount;
+    }
+    target.level = nextLevel;
 
     await player.save();
     res.json(player);
