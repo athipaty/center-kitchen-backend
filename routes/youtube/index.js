@@ -280,8 +280,9 @@ router.post("/characters/:id/backfill-sprites", async (req, res) => {
 });
 
 // DELETE a character. Blocked while it's on-screen in an episode that might still need to look it
-// up — stepImages reads a character's description for its image prompts, and editing scenes while
-// paused at "review" (PUT /episodes/:id/scenes) can re-trigger that. "rendered" is safe to allow,
+// up — stepImages reads a character's description and locked reference photo for its image
+// prompts, and editing scenes while paused at "review" (PUT /episodes/:id/scenes) can re-trigger
+// that. "rendered" is safe to allow,
 // same reasoning as the episode-delete route below: the render already happened, this character's
 // art is already baked into the finished MP4, and nothing re-reads the Character doc after that.
 router.delete("/characters/:id", async (req, res) => {
