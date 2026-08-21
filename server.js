@@ -79,6 +79,9 @@ app.use('/api/forecast', require('./routes/forecast'));
 // --- Milk ---
 app.use('/api/milk', require('./routes/milk'));
 
+// --- Craft Adventure (game) ---
+app.use('/api/craft-adventure', require('./routes/craftAdventure'));
+
 // --- Product Portal ---
 app.use('/api/products', require('./routes/productportal'));
 
