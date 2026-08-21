@@ -56,6 +56,7 @@ app.use(
       "https://youtube-tan-sigma.vercel.app",
       "https://modu-high-1pde.vercel.app",
       "https://profile-kappa-sand.vercel.app",
+      "https://craft-adventure.vercel.app",
     ],
     credentials: true,
   }),

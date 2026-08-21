@@ -124,4 +124,28 @@ router.post("/player/:name/craft", async (req, res) => {
   }
 });
 
+// ===========================
+// RESET (testing only — wipes this player's progress back to defaults)
+// ===========================
+router.post("/player/:name/reset", async (req, res) => {
+  try {
+    const name = req.params.name.trim().slice(0, 20);
+
+    const player = await Player.findOneAndUpdate(
+      { name },
+      {
+        x: 400,
+        y: 300,
+        inventory: { wood: 0, stone: 0, ore: 0 },
+        upgrades: { axeLevel: 0, pickaxeLevel: 0, bootsLevel: 0, bagLevel: 0 },
+      },
+      { new: true }
+    );
+    if (!player) return res.status(404).json({ error: "Player not found" });
+    res.json(player);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
