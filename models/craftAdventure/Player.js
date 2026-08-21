@@ -28,6 +28,7 @@ const playerSchema = new mongoose.Schema(
       pickaxeLevel: { type: Number, default: 0 },
       bootsLevel: { type: Number, default: 0 },
       bagLevel: { type: Number, default: 0 },
+      knightLevel: { type: Number, default: 0 },
     },
     // Player-placed buildings (walls, etc.) — world position plus upgrade
     // level. Each gets an auto _id so a single structure can be targeted for
