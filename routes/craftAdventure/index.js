@@ -169,6 +169,33 @@ router.post("/player/:name/build", async (req, res) => {
 });
 
 // ===========================
+// DEMOLISH (remove a placed structure and refund its full cost)
+// ===========================
+router.post("/player/:name/demolish", async (req, res) => {
+  try {
+    const name = req.params.name.trim().slice(0, 20);
+    const { structureId } = req.body;
+
+    const player = await Player.findOne({ name });
+    if (!player) return res.status(404).json({ error: "Player not found" });
+
+    const target = player.structures.id(structureId);
+    if (!target) return res.status(404).json({ error: "Structure not found" });
+
+    const cost = STRUCTURES[target.type]?.cost || {};
+    for (const [resource, amount] of Object.entries(cost)) {
+      player.inventory[resource] = (player.inventory[resource] || 0) + amount;
+    }
+    target.deleteOne();
+
+    await player.save();
+    res.json(player);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===========================
 // RESET (testing only — wipes this player's progress back to defaults)
 // ===========================
 router.post("/player/:name/reset", async (req, res) => {
