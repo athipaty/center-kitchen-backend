@@ -57,10 +57,20 @@ async function generateScript(series, characters, premise) {
   // Scale scene count with target length so short episodes (e.g. a 30s short at 0.5 min) aren't
   // forced into the same 10-14 scenes tuned for a ~5-minute episode. Falls back to 5 minutes (not
   // DEFAULT_TARGET_WORDS) for legacy series without targetEpisodeMinutes, since 10-14 scenes was
-  // originally tuned for a 5-minute episode — this reproduces that exact range unchanged.
+  // originally tuned for a 5-minute episode — this formula still reproduces that exact range.
+  //
+  // A flat multiplier (the old formula: minutes * 2 to minutes * 2.8) undershoots badly at short
+  // durations — a 1-minute episode only asked for 2-3 scenes, so one static image sat on screen
+  // for 20-30s of narration even though the word-count floor below still forced Claude to write a
+  // full episode's worth of dialogue into those few scenes. A viewer notices a sparse, static
+  // video well before that "same pace as a 5-minute episode" ratio would predict, so short
+  // episodes need a higher scenes-per-minute rate than long ones, not the same one. This is a
+  // linear fit through two anchor points instead — (1 min -> 6-8 scenes) and (5 min -> 10-14,
+  // preserving the original tuning) — so a picture changes roughly every 8-10s of narration at
+  // any target length instead of the old ~25-30s.
   const targetMinutesForScenes = series.targetEpisodeMinutes || 5;
-  const sceneCountLow = Math.max(2, Math.round(targetMinutesForScenes * 2));
-  const sceneCountHigh = Math.max(sceneCountLow + 1, Math.round(targetMinutesForScenes * 2.8));
+  const sceneCountLow = Math.max(2, Math.round(targetMinutesForScenes + 5));
+  const sceneCountHigh = Math.max(sceneCountLow + 1, Math.round(targetMinutesForScenes * 1.5 + 6.5));
 
   const prompt = `You are writing one episode of an ongoing narrated "motion comic" style story series.
 
