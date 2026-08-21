@@ -38,6 +38,17 @@ const RECIPES = {
       2: { stone: 10, ore: 10 },
     },
   },
+  // Player equipment, not a placed unit — crafting it is what lets the
+  // player fight at all (see the client's combat logic); level scales
+  // attack damage.
+  knight: {
+    upgradeKey: "knightLevel",
+    maxLevel: 2,
+    costs: {
+      1: { wood: 6, ore: 6 },
+      2: { ore: 12, stone: 8 },
+    },
+  },
 };
 
 // ===========================
@@ -51,12 +62,6 @@ const STRUCTURES = {
       2: { wood: 6, stone: 4 },
       3: { stone: 10, ore: 6 },
     },
-  },
-  // A fighting unit rather than a barrier — no levels, just a build cost.
-  // Its health during combat is session-only game state (see the client),
-  // not persisted here; the server only cares whether it still exists.
-  knight: {
-    cost: { wood: 10, ore: 8 },
   },
 };
 
@@ -292,30 +297,6 @@ router.post("/player/:name/upgrade-structure", async (req, res) => {
 });
 
 // ===========================
-// STRUCTURE LOST (a structure — e.g. a Knight — was destroyed in combat.
-// Removes it with no refund, unlike a voluntary demolish.)
-// ===========================
-router.post("/player/:name/structure-lost", async (req, res) => {
-  try {
-    const name = req.params.name.trim().slice(0, 20);
-    const { structureId } = req.body;
-
-    const player = await Player.findOne({ name });
-    if (!player) return res.status(404).json({ error: "Player not found" });
-
-    const target = player.structures.id(structureId);
-    if (!target) return res.status(404).json({ error: "Structure not found" });
-
-    target.deleteOne();
-
-    await player.save();
-    res.json(player);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ===========================
 // RESET (testing only — wipes this player's progress back to defaults)
 // ===========================
 router.post("/player/:name/reset", async (req, res) => {
@@ -328,7 +309,7 @@ router.post("/player/:name/reset", async (req, res) => {
         x: 1200, // center of the world (WORLD_W x WORLD_H = 2400 x 1600 in game.js)
         y: 800,
         inventory: { wood: 0, stone: 0, ore: 0 },
-        upgrades: { axeLevel: 0, pickaxeLevel: 0, bootsLevel: 0, bagLevel: 0 },
+        upgrades: { axeLevel: 0, pickaxeLevel: 0, bootsLevel: 0, bagLevel: 0, knightLevel: 0 },
         structures: [],
       },
       { new: true }
