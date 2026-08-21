@@ -41,6 +41,15 @@ const RECIPES = {
 };
 
 // ===========================
+// BUILDABLE STRUCTURES
+// ===========================
+const STRUCTURES = {
+  wall: {
+    cost: { wood: 5 },
+  },
+};
+
+// ===========================
 // PLAYER (find-or-create by name — no password for v1)
 // ===========================
 router.get("/player/:name", async (req, res) => {
@@ -125,6 +134,41 @@ router.post("/player/:name/craft", async (req, res) => {
 });
 
 // ===========================
+// BUILD (place a structure — validated server-side like craft, so the
+// client can't grant itself free structures by calling the API directly)
+// ===========================
+router.post("/player/:name/build", async (req, res) => {
+  try {
+    const name = req.params.name.trim().slice(0, 20);
+    const { type, x, y } = req.body;
+    const structure = STRUCTURES[type];
+    if (!structure) return res.status(400).json({ error: "Unknown structure" });
+    if (typeof x !== "number" || typeof y !== "number") {
+      return res.status(400).json({ error: "Invalid position" });
+    }
+
+    const player = await Player.findOne({ name });
+    if (!player) return res.status(404).json({ error: "Player not found" });
+
+    for (const [resource, amount] of Object.entries(structure.cost)) {
+      if ((player.inventory[resource] || 0) < amount) {
+        return res.status(400).json({ error: `Not enough ${resource}` });
+      }
+    }
+
+    for (const [resource, amount] of Object.entries(structure.cost)) {
+      player.inventory[resource] -= amount;
+    }
+    player.structures.push({ type, x, y });
+
+    await player.save();
+    res.json(player);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===========================
 // RESET (testing only — wipes this player's progress back to defaults)
 // ===========================
 router.post("/player/:name/reset", async (req, res) => {
@@ -138,6 +182,7 @@ router.post("/player/:name/reset", async (req, res) => {
         y: 800,
         inventory: { wood: 0, stone: 0, ore: 0 },
         upgrades: { axeLevel: 0, pickaxeLevel: 0, bootsLevel: 0, bagLevel: 0 },
+        structures: [],
       },
       { new: true }
     );
