@@ -64,10 +64,16 @@ const STRUCTURES = {
     },
   },
   // A defensive turret that auto-fires at enemies (client-side combat
-  // logic) — no levels, just a build cost. Enemies never fight back, so
-  // there's no health to track and nothing that could destroy it.
+  // logic). Its level scales damage/range/cooldown client-side; here it's
+  // just another cost table. Enemies never fight back, so there's no
+  // health to track and nothing that could destroy it.
   tower: {
-    cost: { wood: 8, stone: 10 },
+    cost: { wood: 8, stone: 10 }, // level 1 (build cost)
+    maxLevel: 3,
+    upgradeCost: {
+      2: { wood: 10, stone: 8 },
+      3: { stone: 14, ore: 10 },
+    },
   },
 };
 
