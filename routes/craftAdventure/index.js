@@ -63,6 +63,12 @@ const STRUCTURES = {
       3: { stone: 10, ore: 6 },
     },
   },
+  // A defensive turret that auto-fires at enemies (client-side combat
+  // logic) — no levels, just a build cost. Enemies never fight back, so
+  // there's no health to track and nothing that could destroy it.
+  tower: {
+    cost: { wood: 8, stone: 10 },
+  },
 };
 
 // Total resources sunk into a structure at a given level — its build cost
