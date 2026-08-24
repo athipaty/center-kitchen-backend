@@ -1124,6 +1124,24 @@ router.post("/resync-ebay-prices", async (req, res) => {
   }
 });
 
+// GET a digest of eBay price corrections applied over the last N hours (default 24) —
+// listings/variants whose live price actually differed from what it should have been and
+// got overwritten by syncEbayPrice(). Recurring audit runs (POST /resync-ebay-prices on a
+// schedule) fix mispriced listings immediately and silently; this is what turns that into
+// something a human can review once a day instead of reading raw logs.
+router.get("/price-sync-digest", async (req, res) => {
+  try {
+    const PriceCorrection = require("../../models/tracker/PriceCorrection");
+    const hours = Number(req.query.hours) || 24;
+    const since = new Date(Date.now() - hours * 3600 * 1000);
+    const corrections = await PriceCorrection.find({ createdAt: { $gte: since } }).sort({ createdAt: 1 }).lean();
+    const listingsAffected = [...new Set(corrections.map(c => c.listingId))];
+    res.json({ hours, count: corrections.length, listingsAffected: listingsAffected.length, corrections });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET monitoring status (next check time)
 router.get("/status", (req, res) => {
   res.json({ nextCheck: scheduler.getNextCheck() });
