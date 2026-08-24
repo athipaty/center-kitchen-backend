@@ -126,11 +126,16 @@ async function deleteB2Prefix(prefix) {
       if (!files.length) break;
 
       for (const f of files) {
-        await axios.post(`${b2.apiUrl}/b2api/v3/b2_delete_file_version`,
+        const ok = await axios.post(`${b2.apiUrl}/b2api/v3/b2_delete_file_version`,
           { fileId: f.fileId, fileName: f.fileName },
           { headers: { Authorization: b2.authToken }, timeout: 10000 }
-        ).catch(() => {});
-        deleted++;
+        ).then(() => true).catch(err => {
+          // Previously counted as deleted regardless of outcome — an orphaned file (still
+          // billed for storage, and in the worst case still served from the CDN) left no trace.
+          console.error(`b2: failed to delete file ${f.fileName} under ${prefix}:`, err.response?.data || err.message);
+          return false;
+        });
+        if (ok) deleted++;
       }
 
       if (data.nextFileName) { nextFileName = data.nextFileName; } else { break; }

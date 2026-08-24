@@ -747,7 +747,11 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
         await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
         return existingUrls;
       }
-    } catch {}
+    } catch (err) {
+      // Falls through to a full re-upload below — harmless but burns ScraperAPI/B2 write cost
+      // every time this fires. Worth knowing if it's happening routinely vs. a one-off blip.
+      console.warn(`fetchAndUploadImages: B2 pre-check failed for ${folder}, forcing full re-upload:`, err.message);
+    }
 
     // Counts don't match (stale/corrupted folder from a prior scrape, or first upload) —
     // wipe and re-upload the full fresh set rather than resuming from existingUrls.length,

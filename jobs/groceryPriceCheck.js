@@ -25,7 +25,9 @@ async function runDailyPriceCheck() {
       console.error(`[groceryPriceCheck] failed for "${product.name}" (${product.supermarket}):`, err.message);
       product.lastCheckFailed = true;
       product.lastChecked = new Date();
-      await product.save().catch(() => {});
+      await product.save().catch(saveErr =>
+        console.error(`[groceryPriceCheck] also failed to save lastCheckFailed flag for "${product.name}":`, saveErr.message)
+      );
       failed++;
     }
     await new Promise((r) => setTimeout(r, 3000));

@@ -8,7 +8,11 @@ const PriceCorrection = require('../models/tracker/PriceCorrection');
 async function recordCorrection(listingId, variant, fromPrice, toPrice) {
   try {
     await PriceCorrection.create({ listingId, variant, fromPrice, toPrice });
-  } catch {}
+  } catch (err) {
+    // If this write fails, the correction that WAS applied on live eBay never makes it
+    // into the price-sync-digest audit trail — log so that gap itself is visible.
+    console.error('ebayPriceSync: failed to record price correction:', err.message);
+  }
 }
 
 // ── Pricing constants — must stay in sync with frontend src/utils/pricing.js ──
@@ -29,7 +33,9 @@ let tokens = { access_token: null, refresh_token: null, expires_at: 0 };
   try {
     const doc = await EbayToken.findById('ebay');
     if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at };
-  } catch {}
+  } catch (err) {
+    console.error('ebayPriceSync: startup eBay token load failed:', err.message);
+  }
 })();
 
 function basicAuth() {
@@ -45,7 +51,12 @@ async function saveTokens() {
       refresh_token: tokens.refresh_token,
       expires_at: tokens.expires_at,
     }, { upsert: true, new: true });
-  } catch {}
+  } catch (err) {
+    // A silent failure here means the freshly-refreshed token only lives in this process's
+    // memory — a restart (or routes/ebay.js's independent token copy) reverts to the stale
+    // one, causing confusing intermittent 401s that look unrelated to this.
+    console.error('ebayPriceSync: failed to persist refreshed eBay token:', err.message);
+  }
 }
 
 // In-flight refresh promise — coalesces concurrent callers so only one HTTP round-trip
@@ -57,7 +68,9 @@ async function getAccessToken() {
     try {
       const doc = await EbayToken.findById('ebay');
       if (doc) tokens = { access_token: doc.access_token, refresh_token: doc.refresh_token, expires_at: doc.expires_at };
-    } catch {}
+    } catch (err) {
+      console.error('ebayPriceSync: eBay token lazy-load failed:', err.message);
+    }
   }
   if (tokens.access_token && Date.now() < tokens.expires_at - 60000) return tokens.access_token;
   if (!tokens.refresh_token) throw new Error('eBay not connected');
@@ -73,6 +86,9 @@ async function getAccessToken() {
       tokens.expires_at = Date.now() + data.expires_in * 1000;
       await saveTokens();
       return tokens.access_token;
+    } catch (err) {
+      console.error('ebayPriceSync: token refresh failed:', err.response?.status, err.response?.data || err.message);
+      throw err;
     } finally {
       _refreshPromise = null;
     }
