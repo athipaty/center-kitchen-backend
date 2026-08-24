@@ -1142,6 +1142,37 @@ router.get("/price-sync-digest", async (req, res) => {
   }
 });
 
+// POST re-run the digest and, only if corrections were actually found, push an ntfy alert
+// summarizing them (optionally with a link back to wherever this was triggered from, e.g.
+// a chat session). Kept separate from the plain GET digest so routine polling never spams
+// a notification — only a call to this route can trigger one, and only when count > 0.
+router.post("/price-sync-digest/notify", async (req, res) => {
+  try {
+    const PriceCorrection = require("../../models/tracker/PriceCorrection");
+    const { ntfyPush } = require("../../utils/ntfy");
+    const hours = Number(req.body?.hours) || 24;
+    const chatUrl = req.body?.chatUrl || null;
+    const since = new Date(Date.now() - hours * 3600 * 1000);
+    const corrections = await PriceCorrection.find({ createdAt: { $gte: since } }).sort({ createdAt: 1 }).lean();
+    const listingsAffected = [...new Set(corrections.map(c => c.listingId))];
+
+    let notified = false;
+    if (corrections.length) {
+      const lines = corrections.slice(0, 10).map(c =>
+        `${c.listingId} "${c.variant || '?'}" $${c.fromPrice.toFixed(2)} → $${c.toPrice.toFixed(2)}`
+      );
+      const more = corrections.length > 10 ? `\n…and ${corrections.length - 10} more` : '';
+      const body = `${corrections.length} correction(s) across ${listingsAffected.length} listing(s) in the last ${hours}h:\n${lines.join('\n')}${more}`
+        + (chatUrl ? `\n\nOpen chat: ${chatUrl}` : '');
+      notified = await ntfyPush('⚠️ eBay price-sync: corrections made', body, { priority: 'default', tags: ['warning', 'moneybag'] });
+    }
+
+    res.json({ hours, count: corrections.length, listingsAffected: listingsAffected.length, notified });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET monitoring status (next check time)
 router.get("/status", (req, res) => {
   res.json({ nextCheck: scheduler.getNextCheck() });
