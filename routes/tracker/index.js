@@ -1078,6 +1078,52 @@ router.post("/fix-oos-qty", async (req, res) => {
   }
 });
 
+// POST force a full price resync for every eBay-linked listing, recomputing every
+// variant's live price fresh from the DB. Needed after a bug (fixed 2026-08-24) where
+// checkProduct() called syncEbayPrice() before saving the just-scraped price — the variant
+// that triggered a sync got priced on eBay from its OLD price while the DB recorded it as
+// synced to the NEW price, so the mismatch never retried and the wrong price stuck on the
+// live listing. Day-to-day syncing only re-prices a listing when one of its own variants'
+// Amazon price changes again, so an already-stuck variant won't self-heal on its own —
+// this does one full pass to correct any listing left mispriced by that bug.
+router.post("/resync-ebay-prices", async (req, res) => {
+  try {
+    const { syncEbayPrice } = require("../../jobs/ebayPriceSync");
+    const products = await Product.find(
+      { ebayListingId: { $exists: true, $ne: null } },
+      'ebayListingId variant current'
+    ).lean();
+
+    const byListing = {};
+    for (const p of products) {
+      if (!byListing[p.ebayListingId]) byListing[p.ebayListingId] = [];
+      byListing[p.ebayListingId].push(p);
+    }
+    const listingIds = Object.keys(byListing);
+    res.json({ started: true, total: listingIds.length });
+
+    let done = 0;
+    for (const listingId of listingIds) {
+      const primary = byListing[listingId][0];
+      try {
+        // For multi-variation listings syncEbayPrice re-derives EVERY variation's price
+        // from its own matched DB record — the primary variant here only matters for the
+        // single-SKU-listing fallback path.
+        await syncEbayPrice(listingId, primary.current, primary.variant);
+        done++;
+        console.log(`resync-ebay-prices [${done}/${listingIds.length}] ${listingId} ✓`);
+      } catch (e) {
+        done++;
+        console.error(`resync-ebay-prices [${done}/${listingIds.length}] ${listingId} failed:`, e.message);
+      }
+      await new Promise(r => setTimeout(r, 5000)); // stay within eBay's per-minute rate limit
+    }
+    console.log(`resync-ebay-prices: done — ${listingIds.length} listings processed`);
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
 // GET monitoring status (next check time)
 router.get("/status", (req, res) => {
   res.json({ nextCheck: scheduler.getNextCheck() });
