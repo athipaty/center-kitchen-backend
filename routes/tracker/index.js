@@ -1173,6 +1173,24 @@ router.post("/price-sync-digest/notify", async (req, res) => {
   }
 });
 
+// POST send a clearly-labeled test ntfy alert, bypassing PriceCorrection entirely — lets a
+// human confirm NTFY_TOPIC is configured and ntfy.sh delivery actually works end-to-end
+// without writing fake correction data into the real digest.
+router.post("/price-sync-digest/notify-test", async (req, res) => {
+  try {
+    const { ntfyPush } = require("../../utils/ntfy");
+    const chatUrl = req.body?.chatUrl || null;
+    const sent = await ntfyPush(
+      '🧪 eBay price-sync: test alert',
+      `This is a manual test of the price-sync digest alert — no real corrections were found. If you got this, ntfy delivery is working.${chatUrl ? `\n\nOpen chat: ${chatUrl}` : ''}`,
+      { priority: 'default', tags: ['test_tube'] }
+    );
+    res.json({ sent });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET monitoring status (next check time)
 router.get("/status", (req, res) => {
   res.json({ nextCheck: scheduler.getNextCheck() });
