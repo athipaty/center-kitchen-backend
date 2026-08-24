@@ -1,6 +1,15 @@
 const axios = require('axios');
 const EbayToken = require('../models/shared/EbayToken');
 const Product = require('../models/tracker/Product');
+const PriceCorrection = require('../models/tracker/PriceCorrection');
+
+// Records a variation whose live eBay price didn't match what it should have been.
+// Best-effort — never let a logging failure fail the price sync itself.
+async function recordCorrection(listingId, variant, fromPrice, toPrice) {
+  try {
+    await PriceCorrection.create({ listingId, variant, fromPrice, toPrice });
+  } catch {}
+}
 
 // ── Pricing constants — must stay in sync with frontend src/utils/pricing.js ──
 const EBAY_FEE_RATE  = 0.1325;
@@ -285,15 +294,25 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
 
   if (varBlocks.length === 0) {
     // Single listing — ReviseInventoryStatus is fine
+    const oldPriceM = getItemXml.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+    const oldPrice = oldPriceM ? parseFloat(oldPriceM[1]) : null;
+
     const { data: reviseXml } = await tradingPost(token, 'ReviseInventoryStatus',
       `<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">${creds}<InventoryStatus><ItemID>${cleanId}</ItemID><StartPrice currencyID="USD">${priceStr}</StartPrice></InventoryStatus></ReviseInventoryStatusRequest>`
     );
     const err = checkFailure(reviseXml);
     if (err) throw new Error(err);
+    if (oldPrice != null && Math.abs(oldPrice - Number(priceStr)) > 0.001) {
+      await recordCorrection(cleanId, variantLabel || null, oldPrice, Number(priceStr));
+    }
   } else {
     // Multi-variation: look up every DB variant for this listing and price each eBay
     // variation independently using its own Amazon price.
     const dbVariants = await Product.find({ ebayListingId: cleanId }).lean();
+
+    // Variations whose live price didn't match what it should be — recorded after a
+    // successful revise, for the daily price-sync digest.
+    const corrections = [];
 
     const variationXml = varBlocks.map(block => {
       const ebayLabel = extractVariationLabel(block);
@@ -310,6 +329,10 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
       } else {
         // No DB records found — fall back to single-price update for the triggering variant
         thisPrice = labelMatch(ebayLabel, variantLabel || '') ? priceStr : currentPrice;
+      }
+
+      if (Math.abs(parseFloat(currentPrice) - parseFloat(thisPrice)) > 0.001) {
+        corrections.push({ variant: ebayLabel, from: parseFloat(currentPrice), to: parseFloat(thisPrice) });
       }
 
       const specificsContent = block.match(/<VariationSpecifics>([\s\S]*?)<\/VariationSpecifics>/)?.[1] || '';
@@ -349,6 +372,7 @@ async function syncEbayPrice(listingId, amazonPrice, variantLabel) {
     );
     const err = checkFailure(reviseXml);
     if (err) throw new Error(err);
+    for (const c of corrections) await recordCorrection(cleanId, c.variant, c.from, c.to);
   }
 }
 
