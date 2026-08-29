@@ -42,6 +42,14 @@ const playerSchema = new mongoose.Schema(
         level: { type: Number, default: 1 },
       },
     ],
+    // Fog-of-war reveal state: one bit per map cell (FOG_COLS x FOG_ROWS in
+    // game.js), packed and base64-encoded client-side so a login restores
+    // the areas already explored instead of everything starting fogged
+    // again. Opaque to the server — just stored and echoed back as-is.
+    exploredCells: {
+      type: String,
+      default: "",
+    },
   },
   {
     timestamps: true,
