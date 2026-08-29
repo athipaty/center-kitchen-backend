@@ -121,7 +121,7 @@ router.get("/player/:name", async (req, res) => {
 router.post("/player/:name/save", async (req, res) => {
   try {
     const name = req.params.name.trim().slice(0, 20);
-    const { x, y, inventory } = req.body;
+    const { x, y, inventory, exploredCells } = req.body;
 
     const update = {};
     if (typeof x === "number") update.x = x;
@@ -132,6 +132,12 @@ router.post("/player/:name/save", async (req, res) => {
           update[`inventory.${key}`] = Math.max(0, Math.floor(inventory[key]));
         }
       }
+    }
+    // Opaque packed fog-of-war bits (see models/craftAdventure/Player.js) —
+    // the server doesn't interpret this, just bounds its size. FOG_COLS x
+    // FOG_ROWS bits base64-encoded is ~2500 chars; cap well above that.
+    if (typeof exploredCells === "string" && exploredCells.length <= 4096) {
+      update.exploredCells = exploredCells;
     }
 
     const player = await Player.findOneAndUpdate({ name }, update, { new: true });
@@ -327,6 +333,7 @@ router.post("/player/:name/reset", async (req, res) => {
         inventory: { wood: 0, stone: 0, ore: 0 },
         upgrades: { axeLevel: 0, pickaxeLevel: 0, bootsLevel: 0, bagLevel: 0, knightLevel: 0 },
         structures: [],
+        exploredCells: "",
       },
       { new: true }
     );
