@@ -329,6 +329,11 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
   // null, same fallback behavior as when Keepa itself didn't have it for a given product.
   const upc        = null;
   const isPrime    = !!data.prime_price || /amazon(\.com)?$/i.test((data.sold_by || '').trim()) || /prime/i.test(data.shipping_time || '');
+  // Surfaced so callers (the /preview route) can derive fulfillment info from this same
+  // autoparse response instead of paying for a second ScraperAPI call via fetchFulfillment —
+  // see routes/tracker/index.js's isAmazonFulfilled(), which already expects these raw values.
+  const shipsFrom  = data.ships_from || null;
+  const soldBy     = data.sold_by || null;
   const specs      = getSpecs(data);
   const bullets    = Array.isArray(data.feature_bullets) ? data.feature_bullets : [];
   const ratingNum  = typeof data.average_rating === 'number' ? data.average_rating : parseFloat(data.average_rating);
@@ -375,7 +380,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
 
   const isNewRelease = false;
 
-  return { title, price, currency: "$", listPrice, image, images, upc, variants, isPrime, variant, attributes, specs, bullets, rating, reviewCount, isNewRelease };
+  return { title, price, currency: "$", listPrice, image, images, upc, variants, isPrime, variant, attributes, specs, bullets, rating, reviewCount, isNewRelease, shipsFrom, soldBy };
 }
 
 module.exports = { cleanUrl, extractAsin, fetchProduct };

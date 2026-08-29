@@ -64,7 +64,15 @@ router.post("/preview", async (req, res) => {
       url: `${baseDomain}/dp/${v.asin}`,
     }));
     const groupId = extractAsin(cleanedUrl);
-    const fulfillment = await fetchFulfillment(cleanedUrl);
+    // Derived from fetchProduct()'s own autoparse response (scraper.js now surfaces
+    // shipsFrom/soldBy) instead of a second fetchFulfillment() ScraperAPI call for the
+    // identical page — that used to double /preview's cost on top of the preview/add
+    // duplication fixed above.
+    const fulfillment = {
+      shipsFrom: info.shipsFrom ?? null,
+      soldBy: info.soldBy ?? null,
+      isAmazonFulfilled: isAmazonFulfilled(info.shipsFrom, info.soldBy),
+    };
     if (groupId) {
       ScraperCache.findByIdAndUpdate(
         groupId,
