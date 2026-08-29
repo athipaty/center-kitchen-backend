@@ -3,6 +3,7 @@ const router = express.Router();
 const axios = require("axios");
 const crypto = require("crypto");
 const Product = require("../../models/tracker/Product");
+const ScraperCache = require("../../models/tracker/ScraperCache");
 
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
@@ -41,6 +42,13 @@ router.get("/", async (req, res) => {
 });
 
 
+// Preview results are cached here (keyed by ASIN) so a same-ASIN POST / (add) within the
+// TTL reuses this scrape instead of paying for another ScraperAPI autoparse call — previously
+// /preview and POST / each did their own fetchProduct() for the identical page, doubling the
+// 5-credit cost of every listing added. Short TTL: long enough to cover "preview, then click
+// Add", short enough that a stale price/stock snapshot never gets used for a return visit.
+const PREVIEW_CACHE_TTL_MS = 5 * 60 * 1000;
+
 // POST preview a URL — returns scraped info + variants without saving anything
 router.post("/preview", async (req, res) => {
   try {
@@ -57,6 +65,13 @@ router.post("/preview", async (req, res) => {
     }));
     const groupId = extractAsin(cleanedUrl);
     const fulfillment = await fetchFulfillment(cleanedUrl);
+    if (groupId) {
+      ScraperCache.findByIdAndUpdate(
+        groupId,
+        { data: info, expiresAt: new Date(Date.now() + PREVIEW_CACHE_TTL_MS) },
+        { upsert: true }
+      ).catch(e => console.warn(`preview-cache: failed to store ${groupId}:`, e.message));
+    }
     res.json({
       title: info.title, price: info.price, currency: info.currency, image: info.image,
       isPrime: info.isPrime || false, upc: info.upc || null, variants, groupId,
@@ -96,7 +111,14 @@ router.post("/", async (req, res) => {
     const existing = await Product.findOne({ url: cleanedUrl });
     if (existing) return res.status(409).json({ error: "Already tracking this product.", product: existing });
 
-    const info = await fetchProduct(cleanedUrl);
+    // Reuse the /preview scrape for this ASIN if it's still fresh, instead of paying for
+    // another ScraperAPI autoparse call for the identical page — see PREVIEW_CACHE_TTL_MS.
+    const asinForCache = extractAsin(cleanedUrl);
+    const cached = asinForCache ? await ScraperCache.findById(asinForCache).lean() : null;
+    const info = (cached && cached.expiresAt > new Date())
+      ? cached.data
+      : await fetchProduct(cleanedUrl);
+    if (cached) ScraperCache.deleteOne({ _id: asinForCache }).catch(() => {});
 
     const product = new Product({
       url: cleanedUrl,
