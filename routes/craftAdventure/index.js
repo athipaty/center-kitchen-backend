@@ -101,7 +101,11 @@ router.get("/player/:name", async (req, res) => {
     const name = req.params.name.trim().slice(0, 20);
     if (!name) return res.status(400).json({ error: "Name is required" });
 
-    let player = await Player.findOne({ name });
+    // .lean() for the existing-player read: this is the request the client
+    // blocks on to start the game, and it's read-only here (nothing on this
+    // path calls .save() on it), so skipping Mongoose document hydration is
+    // free. The create-a-new-player path still needs a real document.
+    let player = await Player.findOne({ name }).lean();
     if (!player) {
       player = await Player.create({ name });
     }
