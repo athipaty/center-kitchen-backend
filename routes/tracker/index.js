@@ -45,9 +45,10 @@ router.get("/", async (req, res) => {
 // Preview results are cached here (keyed by ASIN) so a same-ASIN POST / (add) within the
 // TTL reuses this scrape instead of paying for another ScraperAPI autoparse call — previously
 // /preview and POST / each did their own fetchProduct() for the identical page, doubling the
-// 5-credit cost of every listing added. Short TTL: long enough to cover "preview, then click
-// Add", short enough that a stale price/stock snapshot never gets used for a return visit.
-const PREVIEW_CACHE_TTL_MS = 5 * 60 * 1000;
+// 5-credit cost of every listing added. 20 minutes covers "preview, step away, come back and
+// click Add" without leaving much room for a stale price/stock snapshot to matter — any gap
+// left is closed by the next 6-hourly resync anyway.
+const PREVIEW_CACHE_TTL_MS = 20 * 60 * 1000;
 
 // POST preview a URL — returns scraped info + variants without saving anything
 router.post("/preview", async (req, res) => {
@@ -92,6 +93,12 @@ router.post("/preview", async (req, res) => {
   }
 });
 
+// Shipping/seller info changes far less often than price, so a standalone fulfillment lookup
+// can safely outlive PREVIEW_CACHE_TTL_MS. Stored under a "fulfillment:" prefixed id in the same
+// ScraperCache collection so it can never collide with a plain-ASIN preview cache entry — POST /
+// expects that one to hold a full fetchProduct() result, not just shipsFrom/soldBy.
+const FULFILLMENT_CACHE_TTL_MS = 60 * 60 * 1000;
+
 // GET on-demand Amazon fulfillment lookup for one candidate — backs the "Check shipping" button
 // on a tracked product. Deliberately a per-click lookup rather than enriching every search
 // result automatically — the codebase's existing image-scrape queue (queueImageUpload) already
@@ -101,7 +108,33 @@ router.get("/fulfillment", async (req, res) => {
   try {
     const { url } = req.query;
     if (!url) return res.status(400).json({ error: "url is required" });
-    const fulfillment = await fetchFulfillment(cleanUrl(url));
+    const cleanedUrl = cleanUrl(url);
+    const asin = extractAsin(cleanedUrl);
+
+    if (asin) {
+      // A still-fresh /preview scrape for this exact ASIN already carries shipsFrom/soldBy
+      // (see scraper.js) — reuse it for free instead of paying for any lookup at all.
+      const previewCached = await ScraperCache.findById(asin).lean();
+      if (previewCached && previewCached.expiresAt > new Date() && previewCached.data?.shipsFrom !== undefined) {
+        const { shipsFrom, soldBy } = previewCached.data;
+        return res.json({ shipsFrom, soldBy: soldBy ?? null, isAmazonFulfilled: isAmazonFulfilled(shipsFrom, soldBy) });
+      }
+
+      // Otherwise reuse an earlier standalone lookup for this ASIN, if still fresh.
+      const fulfillmentCached = await ScraperCache.findById(`fulfillment:${asin}`).lean();
+      if (fulfillmentCached && fulfillmentCached.expiresAt > new Date()) {
+        return res.json(fulfillmentCached.data);
+      }
+    }
+
+    const fulfillment = await fetchFulfillment(cleanedUrl);
+    if (asin) {
+      ScraperCache.findByIdAndUpdate(
+        `fulfillment:${asin}`,
+        { data: fulfillment, expiresAt: new Date(Date.now() + FULFILLMENT_CACHE_TTL_MS) },
+        { upsert: true }
+      ).catch(e => console.warn(`fulfillment-cache: failed to store ${asin}:`, e.message));
+    }
     res.json(fulfillment);
   } catch (err) {
     res.status(502).json({ error: err.message });
