@@ -111,7 +111,7 @@ router.get("/fulfillment", async (req, res) => {
 // POST add a product to track
 router.post("/", async (req, res) => {
   try {
-    const { url, groupId, fulfillment } = req.body;
+    const { url, groupId, fulfillment, variant: variantHint } = req.body;
     if (!url) return res.status(400).json({ error: "url is required" });
 
     const cleanedUrl = cleanUrl(url);
@@ -123,10 +123,42 @@ router.post("/", async (req, res) => {
     // another ScraperAPI autoparse call for the identical page — see PREVIEW_CACHE_TTL_MS.
     const asinForCache = extractAsin(cleanedUrl);
     const cached = asinForCache ? await ScraperCache.findById(asinForCache).lean() : null;
-    const info = (cached && cached.expiresAt > new Date())
-      ? cached.data
-      : await fetchProduct(cleanedUrl);
-    if (cached) ScraperCache.deleteOne({ _id: asinForCache }).catch(() => {});
+
+    // Sibling-variant fast path: when tracking several variants from one preview (e.g. every
+    // color), each sibling used to pay for its own full 5-credit autoparse even though the
+    // frontend already knows its label/attributes/image from the parent scrape's
+    // customization_options (see /preview). Once one variant in the group is saved, every
+    // later one in this group can inherit title/specs/bullets/images from it and only needs a
+    // cheap price/stock check for its own ASIN — the same free-first waterfall checkProduct
+    // uses (fetchProduct priceOnly), not a second full scrape of a near-identical page.
+    let sibling = null;
+    if (!cached && variantHint && groupId) {
+      sibling = await Product.findOne({ groupId }).lean();
+    }
+
+    let info;
+    if (sibling) {
+      const priceInfo = await fetchProduct(cleanedUrl, { priceOnly: true });
+      info = {
+        title: sibling.title,
+        price: priceInfo.price,
+        currency: sibling.currency,
+        listPrice: null, // per-variant list price isn't known from the cheap check — leave unset rather than guess
+        image: variantHint.image || sibling.image || null,
+        images: sibling.images || [],
+        upc: null,
+        isPrime: sibling.isPrime,
+        variant: variantHint.label || null,
+        attributes: variantHint.attributes || [],
+        specs: sibling.specs || {},
+        bullets: sibling.bullets || [],
+      };
+    } else {
+      info = (cached && cached.expiresAt > new Date())
+        ? cached.data
+        : await fetchProduct(cleanedUrl);
+      if (cached) ScraperCache.deleteOne({ _id: asinForCache }).catch(() => {});
+    }
 
     const product = new Product({
       url: cleanedUrl,
