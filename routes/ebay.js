@@ -3762,7 +3762,7 @@ router.get('/listings/views', async (req, res) => {
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
-  const start = new Date(now.getTime() - 21 * 24 * 60 * 60 * 1000);
+  const start = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
   // Return cached results for all IDs that are still fresh
   const result = {};
