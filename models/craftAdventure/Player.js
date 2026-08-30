@@ -50,6 +50,24 @@ const playerSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    // Current HP (out of PLAYER_MAX_HEALTH in game.js) — so logging back
+    // in doesn't hand you back a full health bar after taking damage.
+    health: {
+      type: Number,
+      default: 30,
+    },
+    // Snapshot of every resource node's current state (position, amount
+    // left, respawn timer) — the client's initial layout is otherwise
+    // reproducible from a per-name seed, but depleted/relocated nodes
+    // aren't, so this is what makes a login pick up gathering progress
+    // instead of handing back a full, undepleted map. Empty means "no
+    // snapshot yet, seed a fresh layout" (a brand-new player, or right
+    // after a reset). Untyped array — the server never reads into these,
+    // just stores/echoes them back for the client to restore verbatim.
+    resources: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
   },
   {
     timestamps: true,

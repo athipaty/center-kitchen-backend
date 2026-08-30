@@ -121,7 +121,7 @@ router.get("/player/:name", async (req, res) => {
 router.post("/player/:name/save", async (req, res) => {
   try {
     const name = req.params.name.trim().slice(0, 20);
-    const { x, y, inventory, exploredCells } = req.body;
+    const { x, y, inventory, exploredCells, health, resources } = req.body;
 
     const update = {};
     if (typeof x === "number") update.x = x;
@@ -138,6 +138,18 @@ router.post("/player/:name/save", async (req, res) => {
     // FOG_ROWS bits base64-encoded is ~2500 chars; cap well above that.
     if (typeof exploredCells === "string" && exploredCells.length <= 4096) {
       update.exploredCells = exploredCells;
+    }
+    // PLAYER_MAX_HEALTH is 30 in game.js — clamped here too so a stray/bad
+    // client value can't persist a health outside the real range.
+    if (typeof health === "number" && Number.isFinite(health)) {
+      update.health = Math.max(0, Math.min(30, Math.floor(health)));
+    }
+    // Full resource-node snapshot (position/amount/respawn timer) — see
+    // models/craftAdventure/Player.js. Untyped/unread server-side, just
+    // bounded so a stray client can't grow the document unbounded (55
+    // nodes today, capped generously above that).
+    if (Array.isArray(resources) && resources.length <= 200) {
+      update.resources = resources;
     }
 
     const player = await Player.findOneAndUpdate({ name }, update, { new: true });
@@ -334,6 +346,8 @@ router.post("/player/:name/reset", async (req, res) => {
         upgrades: { axeLevel: 0, pickaxeLevel: 0, bootsLevel: 0, bagLevel: 0, knightLevel: 0 },
         structures: [],
         exploredCells: "",
+        health: 30,
+        resources: [],
       },
       { new: true }
     );
