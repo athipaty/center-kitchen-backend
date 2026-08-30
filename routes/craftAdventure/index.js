@@ -263,6 +263,31 @@ router.post("/player/:name/demolish", async (req, res) => {
 });
 
 // ===========================
+// STRUCTURE DESTROYED (an enemy tore it down after being blocked with no
+// way around — unlike /demolish above, this is a loss, not a deliberate
+// teardown, so it does NOT refund the resources sunk into it)
+// ===========================
+router.post("/player/:name/structure-destroyed", async (req, res) => {
+  try {
+    const name = req.params.name.trim().slice(0, 20);
+    const { structureId } = req.body;
+
+    const player = await Player.findOne({ name });
+    if (!player) return res.status(404).json({ error: "Player not found" });
+
+    const target = player.structures.id(structureId);
+    if (!target) return res.status(404).json({ error: "Structure not found" });
+
+    target.deleteOne();
+
+    await player.save();
+    res.json(player);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===========================
 // MOVE STRUCTURE (relocate a placed structure — free, keeps its level)
 // ===========================
 router.post("/player/:name/move-structure", async (req, res) => {
