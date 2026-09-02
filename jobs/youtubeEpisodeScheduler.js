@@ -3,23 +3,21 @@ const axios = require("axios");
 const Series = require("../models/youtube/Series");
 const Character = require("../models/youtube/Character");
 const Episode = require("../models/youtube/Episode");
-const { generateImageFlux, generateCharacterImage } = require("../utils/youtube/fal");
-const { generateImage } = require("../utils/youtube/pollinations");
+const {
+  generateImageFlux,
+  generateCharacterImage,
+  generateCharacterReferenceImage,
+  generateSceneImage,
+  generateSceneWithReferences,
+} = require("../utils/youtube/fal");
 const { synthesize } = require("../utils/youtube/edgeTts");
 const { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS } = require("../utils/youtube/claudeScript");
 const { renderEpisodeToBuffer } = require("../utils/youtube/remotionRender");
 const { uploadToB2, deleteB2File, b2KeyFromUrl } = require("../utils/b2Utils");
 const { uploadVideoToYoutube } = require("../utils/youtube/youtubeUpload");
+const { defaultNarratorVoice } = require("../utils/youtube/narratorVoices");
 
 let io = null;
-
-// No official voice list is stable enough to hardcode broadly — these are just sane per-locale
-// narrator defaults, confirmed live against edge-tts-universal's VoicesManager during development.
-const NARRATOR_VOICE_BY_LOCALE = {
-  "en-US": "en-US-AndrewNeural",
-  "th-TH": "th-TH-NiwatNeural",
-};
-const DEFAULT_NARRATOR_VOICE = "en-US-AndrewNeural";
 
 // edge-tts-universal has no documented rate limit, but firing dozens of lines back-to-back with
 // zero spacing (now that episodes run 8-12 scenes instead of 3-5) is what made NoAudioReceived
@@ -82,13 +80,10 @@ const EXPRESSION_DETAILS = {
   embarrassed: "bright red blushing cheeks, awkward closed-mouth smile, eyes glancing sideways avoiding contact, one hand rubbing back of neck, shoulders hunched inward shyly",
 };
 //
-// Pollinations' documented GET endpoint (image.pollinations.ai/prompt/...) has no negative-prompt
-// param despite some third-party docs claiming otherwise — confirmed against the official
-// APIDOCS.md, which only lists prompt/model/width/height/seed/nologo/enhance/private. So the only
-// lever against the model's tendency to populate a scene with extra background figures is
-// repeating the single-subject constraint in plain positive language, several times, in different
-// words, front and back of the prompt. Spot-checked several generations with this phrasing —
-// consistently single-character, a clear improvement over a single "solo" mention.
+// Repeating the single-subject constraint in plain positive language, several times, in different
+// words, front and back of the prompt, is the reliable lever against the model's tendency to
+// populate a portrait with extra background figures — spot-checked several generations with this
+// phrasing, consistently single-character, a clear improvement over a single "solo" mention.
 function buildSpritePrompt(character, expression) {
   const expressionDetail = EXPRESSION_DETAILS[expression] || `${expression} expression`;
   return `kids' animated cartoon character portrait in the style of a children's TV cartoon show, exactly one (1) person only, ${character.description}, ${expressionDetail}, exaggerated clearly readable emotion, upper body portrait, head shoulders and chest only, cropped at the waist, close-up bust shot, solo, alone, no other people, no second character, no crowd, no background figures, isolated on a plain white background, bold thick clean outlines, flat bright saturated colors, big expressive cartoon eyes, simple flat vector cartoon character illustration, NOT realistic, NOT photographic, NOT 3D render, character reference sheet`;
@@ -127,11 +122,10 @@ async function generateSpriteImage(character, expression, seed, referenceUrl) {
 // Per-character mutex: generateCharacterSprites/regenerateCharacterSprite/backfillMissingSprites
 // each load a character, mutate its in-memory `sprites` array, and .save() it — but nothing
 // serialized that read-modify-write cycle across concurrent callers. Several episodes can be in
-// flight at once (see pollinations.js) and can share a character, or the episode pipeline can race
-// a manual click on the Series page. When that happened, each caller started from its own already-
-// stale snapshot of `sprites`, so whichever .save() landed second silently clobbered or duplicated
-// whatever the first one wrote — the actual cause of duplicate sprite entries (Pollinations' rate
-// limit above only serializes the HTTP calls, not this). Routing every mutation through a
+// flight at once and can share a character, or the episode pipeline can race a manual click on the
+// Series page. When that happened, each caller started from its own already-stale snapshot of
+// `sprites`, so whichever .save() landed second silently clobbered or duplicated whatever the
+// first one wrote — the actual cause of duplicate sprite entries. Routing every mutation through a
 // per-character queue, and re-reading the character fresh from the DB the moment it gets its turn
 // (never trusting whatever snapshot the caller passed in), closes this: only one read-modify-write
 // cycle for a given character is ever in flight.
@@ -281,32 +275,55 @@ function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS
   });
 }
 
-// Free-tier draft phase deliberately accepts that Pollinations won't render a character
-// identically pose-to-pose the way fal.ai's instant-character image-to-image did for the old
-// sprite system — see the plan discussion this replaced. Consistency instead comes from repeating
-// the same locked `description` text for a character in every prompt it appears in, across every
-// scene.
+// Every scene image is now conditioned on each on-screen character's locked reference photo
+// (FLUX.2 multi-reference editing — see generateSceneWithReferences in utils/youtube/fal.js)
+// instead of relying purely on repeating their text description, which let the image model
+// reinvent the character's exact look on every scene. Generated lazily, once, the first time this
+// character is actually needed for a scene — reused for every scene/episode after.
+//
+// Two episodes sharing a character could theoretically race this on their very first shared use
+// and both generate one — harmless (whichever save lands last just wins, no corruption, and the
+// loser's image is simply never referenced again), not worth extra locking machinery for a
+// one-time cost.
+async function ensureCharacterReferenceImage(character) {
+  if (character.referenceImageUrl) return character.referenceImageUrl;
+  // Reuses buildSpritePrompt's "neutral" prompt — already exactly a clean, single-subject,
+  // no-background identity portrait, which is exactly what a reference photo needs to be.
+  const prompt = buildSpritePrompt(character, "neutral");
+  const seed = Math.floor(Math.random() * 1e9);
+  const rawBuffer = await generateCharacterReferenceImage(prompt, { seed });
+  const meta = await sharp(rawBuffer).metadata();
+  const height = meta.height || 1024;
+  const buffer = await sharp(rawBuffer)
+    .extract({ left: 0, top: 0, width: meta.width || 1024, height: Math.round(height * UPPER_BODY_CROP_FRACTION) })
+    .jpeg()
+    .toBuffer();
+  const url = await uploadToB2(buffer, `youtube/characters/${character._id}/reference-${seed}.jpg`, "image/jpeg");
+  character.referenceImageUrl = url;
+  await Character.updateOne({ _id: character._id }, { referenceImageUrl: url });
+  return url;
+}
+
 // Falls back to a kids' animated cartoon look when a series hasn't set its own artStyle — matches
 // the style generateStoryOutline's own prompt suggests by example, and matches buildSpritePrompt's
 // character style so scenes and characters read as the same consistent show rather than a
 // storybook/painterly background clashing with cartoon characters.
 const DEFAULT_SPREAD_STYLE = "kids' animated cartoon style, bold thick clean outlines, flat bright saturated colors, rounded friendly shapes, children's cartoon show background art, NOT realistic, NOT photographic, NOT painterly";
-// Matches the 1280x720 (16:9) Remotion composition width/height ratio directly, generated a bit
-// larger for quality headroom when Img scales it to fit the frame.
-const SCENE_WIDTH = 1600;
-const SCENE_HEIGHT = 900;
 
-function buildCastLine(scene, byId) {
-  const cast = scene.charactersOnScreen
-    .map((id) => byId.get(String(id)))
-    .filter(Boolean)
-    .map((c) => `${c.name}: ${c.description}`)
-    .join("; ");
-  // The consistency instruction lives right next to the descriptions it governs, repeated in
-  // every scene prompt a character appears in — the only lever this free-tier text-to-image setup
-  // has for keeping a character recognizable across scenes, since there's no image-to-image/
-  // reference-image input available (see the comment above this function).
-  return cast ? ` On-screen characters — draw each EXACTLY as described here, every time, so they stay visually recognizable as the same character across every scene: ${cast}.` : "";
+// Characters actually on screen in this scene, in a stable order — both buildCastLine's numbered
+// "Reference image N" text and the image_urls array passed to generateSceneWithReferences iterate
+// this same list, in this same order, so the model can bind each photo to the right name.
+function sceneCast(scene, byId) {
+  return scene.charactersOnScreen.map((id) => byId.get(String(id))).filter(Boolean);
+}
+
+function buildCastLine(cast) {
+  if (!cast.length) return "";
+  // Numbered so it lines up 1:1 with the reference images actually sent alongside this prompt
+  // (see generateSceneWithReferences) — the model has no other way to know which uploaded photo
+  // is supposed to be which named character in a multi-reference call.
+  const lines = cast.map((c, i) => `Reference image ${i + 1} shows ${c.name}: ${c.description}.`).join(" ");
+  return ` On-screen characters, each shown in a numbered reference image alongside this prompt — draw them with the exact same face, colors, and proportions as their reference photo, every time: ${lines}`;
 }
 
 // One full-frame illustration per scene (previously a two-page spread split across leftPageUrl/
@@ -314,9 +331,9 @@ function buildCastLine(scene, byId) {
 // clearly readable — with the background as secondary context rather than the main composition,
 // and character info placed early in the prompt (word order carries real weight for a
 // text-to-image model) so it doesn't get diluted by the scene description that follows.
-function buildScenePrompt(scene, series, byId) {
+function buildScenePrompt(scene, series, cast) {
   const styleSuffix = `, ${series.artStyle || DEFAULT_SPREAD_STYLE}`;
-  const castLine = buildCastLine(scene, byId);
+  const castLine = buildCastLine(cast);
   // Narrator-only scenes (no dialogue attributed to any character) have nothing on screen to
   // prioritize — falls back to a plain establishing shot instead of asking for a "primary
   // character subject" that doesn't exist here, which would just invite the model to hallucinate
@@ -327,11 +344,20 @@ function buildScenePrompt(scene, series, byId) {
   return `${framing}${styleSuffix}, children's animated cartoon illustration, one consistent scene, single widescreen frame`;
 }
 
-// script -> images: generates one full-frame image per scene, via Pollinations (free tier, see
-// pollinations.js). Replaces the old separate sprite-generation and background-generation steps
-// entirely — there's no per-character sprite to swap in anymore, each image is one fully-composed
-// frame with its on-screen characters already baked in. Skipped per-scene if already present, so
-// an interrupted run resumes without re-paying for images it already has.
+// Generates one scene's image: with references for whoever's on screen, or a plain generation for
+// an empty establishing shot — both go through FLUX.2 either way, so every scene in an episode
+// shares one consistent look regardless of which path a given scene takes.
+async function generateSceneImageBuffer(scene, series, cast, seed) {
+  const prompt = buildScenePrompt(scene, series, cast);
+  if (!cast.length) return generateSceneImage(prompt, { seed });
+  return generateSceneWithReferences(prompt, cast.map((c) => c.referenceImageUrl), { seed });
+}
+
+// script -> images: generates one full-frame image per scene. Replaces the old separate
+// sprite-generation and background-generation steps entirely — there's no per-character sprite to
+// swap in anymore, each image is one fully-composed frame with its on-screen characters already
+// baked in. Skipped per-scene if already present, so an interrupted run resumes without re-paying
+// for images it already has.
 async function stepImages(episode) {
   const series = await Series.findById(episode.series);
   const characterIds = [
@@ -339,6 +365,17 @@ async function stepImages(episode) {
   ];
   const characters = await Character.find({ _id: { $in: characterIds } });
   const byId = new Map(characters.map((c) => [String(c._id), c]));
+
+  // Every character in this episode needs its reference photo locked in before any scene using
+  // them is generated, not just the first one to need it — otherwise the same character could get
+  // a different reference (and therefore a visibly different look) partway through the episode.
+  for (const character of characters) {
+    if (character.referenceImageUrl) continue;
+    episode.statusDetail = `reference portrait for ${character.name}`;
+    await episode.save();
+    await emit(episode);
+    await ensureCharacterReferenceImage(character);
+  }
 
   for (const scene of episode.scenes) {
     if (!scene.imageUrl) {
@@ -348,7 +385,8 @@ async function stepImages(episode) {
       // A fresh random seed per image — see generateCharacterSprites' seed=1 bug comment above for
       // why a fixed/omitted seed produces near-identical-looking images across calls.
       const seed = Math.floor(Math.random() * 1e9);
-      const buffer = await generateImage(buildScenePrompt(scene, series, byId), { width: SCENE_WIDTH, height: SCENE_HEIGHT, seed });
+      const cast = sceneCast(scene, byId);
+      const buffer = await generateSceneImageBuffer(scene, series, cast, seed);
       scene.imageUrl = await uploadToB2(
         buffer,
         `youtube/episodes/${episode._id}/scene${scene.order}.jpg`,
@@ -369,9 +407,12 @@ async function regenerateSceneImage(episode, scene) {
   const series = await Series.findById(episode.series);
   const characters = await Character.find({ _id: { $in: scene.charactersOnScreen } });
   const byId = new Map(characters.map((c) => [String(c._id), c]));
+  for (const character of characters) {
+    if (!character.referenceImageUrl) await ensureCharacterReferenceImage(character);
+  }
   const seed = Math.floor(Math.random() * 1e9);
-  const prompt = buildScenePrompt(scene, series, byId);
-  const buffer = await generateImage(prompt, { width: SCENE_WIDTH, height: SCENE_HEIGHT, seed });
+  const cast = sceneCast(scene, byId);
+  const buffer = await generateSceneImageBuffer(scene, series, cast, seed);
   const oldUrl = scene.imageUrl;
   scene.imageUrl = await uploadToB2(
     buffer,
@@ -386,26 +427,22 @@ async function regenerateSceneImage(episode, scene) {
   if (oldUrl) await deleteB2File(b2KeyFromUrl(oldUrl)).catch(() => {});
 }
 
-// images -> review: one audio file per dialogue line, then STOPS at "review" instead of
-// going straight into rendering — gives a human a chance to read the dialogue, look at the
-// scene images, and edit anything before the render (which is comparatively expensive/slow) runs.
-// Narrator lines use a per-locale default voice; character lines use that character's own locked
-// voiceName.
+// images -> review: one audio file per narration segment, all read by the series' single
+// narratorVoice, then STOPS at "review" instead of going straight into rendering — gives a human
+// a chance to read the narration, look at the scene images, and edit anything before the render
+// (which is comparatively expensive/slow) runs.
 async function stepTts(episode) {
   const series = await Series.findById(episode.series);
-  const characters = await Character.find({ series: episode.series });
-  const byId = new Map(characters.map((c) => [String(c._id), c]));
-  const narratorVoice = NARRATOR_VOICE_BY_LOCALE[series.voiceLocale] || DEFAULT_NARRATOR_VOICE;
+  const narratorVoice = series.narratorVoice || defaultNarratorVoice(series.voiceLocale);
 
   for (const scene of episode.scenes) {
-    for (let i = 0; i < scene.dialogue.length; i++) {
-      const line = scene.dialogue[i];
+    for (let i = 0; i < scene.narration.length; i++) {
+      const line = scene.narration[i];
       if (line.audioUrl) continue; // already generated — resuming after an interruption
       episode.statusDetail = `narration for scene ${scene.order + 1} line ${i + 1}`;
       await episode.save();
       await emit(episode);
-      const voice = line.character ? byId.get(String(line.character))?.voiceName || narratorVoice : narratorVoice;
-      const { buffer, durationMs } = await synthesize(line.text, voice, line.expression);
+      const { buffer, durationMs } = await synthesize(line.text, narratorVoice, line.expression);
       line.audioUrl = await uploadToB2(
         buffer,
         `youtube/episodes/${episode._id}/scene${scene.order}-line${i}.mp3`,
@@ -434,7 +471,10 @@ async function stepRenderAndUpload(episode) {
   const props = {
     scenes: episode.scenes.map((scene) => ({
       imageUrl: scene.imageUrl,
-      dialogue: scene.dialogue.map((line) => ({
+      // Remotion's SceneProps still calls this `dialogue` (see remotion/src/types.ts) — it only
+      // cares about an ordered list of {audioUrl, durationMs, text} segments to sequence, not who
+      // said them, so the DB's `narration` field maps straight onto it unchanged.
+      dialogue: scene.narration.map((line) => ({
         audioUrl: line.audioUrl,
         durationMs: line.durationMs,
         text: line.text,
@@ -464,29 +504,42 @@ async function stepRenderAndUpload(episode) {
 // episode, there's no reason to pause between them — same one-call-does-several-hops reasoning as
 // stepRenderAndUpload chaining rendering -> uploading -> rendered below. Re-fetches the video
 // buffer from B2 (rather than threading it through from stepRenderAndUpload) since each step
-// reloads the episode fresh from Mongo. Only reached via the explicit POST
-// /episodes/:id/upload-youtube route below (same "momentary handoff" trick as approve-render uses
-// with "tts": that route sets status to "uploading" and triggers the scheduler, which dispatches
-// straight to this handler) — never automatically, since "rendered" itself has no STEP_HANDLERS
-// entry.
+// reloads the episode fresh from Mongo. Reached via the explicit POST /episodes/:id/upload-youtube
+// route (same "momentary handoff" trick as approve-render uses with "tts"), a startup resume for
+// an episode still at "uploading" when the process died mid-step (see start() below), or a
+// POST /episodes/:id/retry after either of those failed partway.
+//
+// Both of those resume paths can re-enter this handler after the YouTube upload itself already
+// succeeded (e.g. summarizeEpisode/series.save() is what actually failed) — unlike
+// stepImages/stepTts, which already skip whatever they find per-scene/per-line, this used to
+// re-run the upload unconditionally, publishing the same episode to the channel a second time as
+// an untracked duplicate video. Skip the upload once youtubeVideoId is already saved, and skip
+// re-appending the continuity summary once this episode's entry is already in the log, so
+// re-entering this step after a partial success only redoes whatever didn't actually finish.
 async function stepPublishToYoutube(episode) {
   const series = await Series.findById(episode.series);
-  episode.statusDetail = "uploading to YouTube";
-  await episode.save();
-  await emit(episode);
 
-  const meta = await generateYoutubeMetadata(series, episode);
-  const { data: mp4Buffer } = await axios.get(episode.videoUrl, { responseType: "arraybuffer" });
-  const { videoId, url } = await uploadVideoToYoutube(Buffer.from(mp4Buffer), meta);
-  episode.youtubeVideoId = videoId;
-  episode.youtubeUrl = url;
-  episode.statusDetail = "";
-  await episode.save();
-  await emit(episode);
+  if (!episode.youtubeVideoId) {
+    episode.statusDetail = "uploading to YouTube";
+    await episode.save();
+    await emit(episode);
 
-  const summary = await summarizeEpisode(series, episode);
-  series.continuityLog.push({ episodeNumber: episode.episodeNumber, summary });
-  await series.save();
+    const meta = await generateYoutubeMetadata(series, episode);
+    const { data: mp4Buffer } = await axios.get(episode.videoUrl, { responseType: "arraybuffer" });
+    const { videoId, url } = await uploadVideoToYoutube(Buffer.from(mp4Buffer), meta);
+    episode.youtubeVideoId = videoId;
+    episode.youtubeUrl = url;
+    episode.statusDetail = "";
+    await episode.save();
+    await emit(episode);
+  }
+
+  const alreadySummarized = series.continuityLog.some((e) => e.episodeNumber === episode.episodeNumber);
+  if (!alreadySummarized) {
+    const summary = await summarizeEpisode(series, episode);
+    series.continuityLog.push({ episodeNumber: episode.episodeNumber, summary });
+    await series.save();
+  }
   episode.status = "done";
   episode.statusDetail = "";
 }

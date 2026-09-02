@@ -85,7 +85,7 @@ router.post('/upload-images', async (req, res) => {
       }
       if (hasGif) existingUrls = [];
     } catch (e) {
-      console.log('upload-images: B2 folder check failed, uploading fresh:', e.message);
+      console.warn('upload-images: B2 folder check failed, uploading fresh:', e.message);
     }
 
     const startIndex = existingUrls.length;
@@ -203,7 +203,14 @@ async function getAccessToken() {
     tokens.expires_at = Date.now() + data.expires_in * 1000;
     await saveTokens();
     return tokens.access_token;
-  } catch {
+  } catch (err) {
+    // Any failure here — transient network blip, eBay 5xx, or a genuinely invalid/expired
+    // refresh_token — wipes the in-memory AND persisted token, disconnecting eBay entirely
+    // until someone re-authorizes via /auth/login. This module keeps its own copy of `tokens`
+    // independent from jobs/ebayPriceSync.js's copy, so a failure here can silently kill
+    // listing creation/editing while the price-sync cron keeps working, or vice versa —
+    // always log so a wipe doesn't go unnoticed.
+    console.error('ebay-auth: token refresh failed, disconnecting eBay:', err.response?.status, err.response?.data || err.message);
     tokens = { access_token: null, refresh_token: null, expires_at: 0 };
     await saveTokens();
     throw authError();
@@ -420,7 +427,9 @@ async function getValidAspectValues(catId) {
     console.log(`getValidAspectValues: fetched ${Object.keys(result).length} aspects for cat ${catId} — cached 7 days`);
     return result;
   } catch (e) {
-    console.log('getValidAspectValues failed:', e.message);
+    // Upstream of enrichAspectsWithAI/buildAspects — a failure here means a listing publishes
+    // with sparser/missing item specifics, hurting eBay's item-specifics-based search ranking.
+    console.warn(`getValidAspectValues: failed for category ${catId}:`, e.response?.data || e.message);
     return {};
   }
 }
@@ -553,7 +562,9 @@ ${JSON.stringify(missing)}`;
     }
     if (count) console.log(`enrichAspectsWithAI: filled ${count} aspects`);
   } catch (e) {
-    console.log('enrichAspectsWithAI failed:', e.message);
+    // Listing still publishes on failure here, just with sparser item specifics — hurts
+    // search ranking silently unless this is visible in logs.
+    console.warn('enrichAspectsWithAI failed:', e.message);
   }
 }
 
@@ -686,6 +697,9 @@ async function lookupCategory(title, upc) {
     console.log('lookupCategory: taxonomy API failed:', e.response?.data?.error_description || e.response?.data || e.message);
   }
 
+  // All 4 fallbacks (UPC, full title, short keywords, Taxonomy API) exhausted — a listing
+  // published without any categoryId is effectively invisible to eBay category browse/filter.
+  console.warn(`lookupCategory: ALL fallbacks failed, no category found for "${title.slice(0, 60)}" (upc=${upc || 'none'})`);
   return null;
 }
 
@@ -945,9 +959,13 @@ router.post('/create-listing', async (req, res) => {
           console.log(`create-listing: deleted draft ${found.offerId}, will create fresh`);
           return { deleted: true };
         } catch (e) {
-          console.log('create-listing: handleExistingOffer error:', e.response?.data?.errors?.[0]?.message || e.message);
+          console.warn('create-listing: handleExistingOffer error:', e.response?.data?.errors?.[0]?.message || e.message);
         }
       }
+      // Both lookup attempts failed to find or delete the conflicting draft — the caller
+      // surfaces a generic "please delete it manually" message with no trace of WHY the
+      // automated lookup/delete didn't work; the per-attempt warnings above are the only record.
+      console.warn(`create-listing: handleExistingOffer exhausted both lookups for sku="${safeSKU}" — falling back to manual-delete message`);
       return null;
     }
 
@@ -976,6 +994,7 @@ router.post('/create-listing', async (req, res) => {
 
     step = 'publishing offer';
     let published;
+    let degradedReason = null; // set when a 25019 retry had to strip title/aspects/images to publish
     try {
       ({ data: published } = await axios.post(
         `https://api.ebay.com/sell/inventory/v1/offer/${offerData.offerId}/publish`,
@@ -1052,6 +1071,7 @@ router.post('/create-listing', async (req, res) => {
             }
           }
           ({ data: published } = await tryPublish());
+          if (published) degradedReason = `stripped title/aspects (title="${strippedTitle}")`;
         } catch (e1) {
           console.log('create-listing: stripped retry failed:', e1.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e1.message);
         }
@@ -1071,6 +1091,7 @@ router.post('/create-listing', async (req, res) => {
             try {
               await putStripped(noBrandTitle);
               ({ data: published } = await tryPublish());
+              if (published) degradedReason = `stripped title/aspects/brand (title="${noBrandTitle}")`;
             } catch (e2) {
               console.log('create-listing: no-brand retry failed:', e2.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e2.message);
             }
@@ -1085,6 +1106,7 @@ router.post('/create-listing', async (req, res) => {
           try {
             await putStripped(strippedTitle, allImageUrls);
             ({ data: published } = await tryPublish());
+            if (published) degradedReason = 'stripped title/aspects, unproxied images';
           } catch (e3) {
             console.log('create-listing: direct-image retry failed:', e3.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e3.message);
           }
@@ -1096,6 +1118,7 @@ router.post('/create-listing', async (req, res) => {
           try {
             await putStripped(strippedTitle, []);
             ({ data: published } = await tryPublish());
+            if (published) degradedReason = 'stripped title/aspects, ZERO IMAGES';
           } catch (e4) {
             console.log('create-listing: no-image retry failed:', e4.response?.data?.errors?.map(e => `[${e.errorId}] ${e.longMessage || e.message}`).join(' | ') || e4.message);
           }
@@ -1146,7 +1169,13 @@ router.post('/create-listing', async (req, res) => {
       }
     }
 
-    res.json({ listingId: published.listingId, url: `https://www.ebay.com/itm/${published.listingId}` });
+    if (degradedReason) {
+      // Published, but only after the 25019 retry cascade stripped data to force it through —
+      // a live listing that looks like a normal success but may have no photos and/or a
+      // mangled generic title, which effectively can't sell. Flag it so it doesn't go unnoticed.
+      console.warn(`create-listing: listing ${published.listingId} published DEGRADED — ${degradedReason}`);
+    }
+    res.json({ listingId: published.listingId, url: `https://www.ebay.com/itm/${published.listingId}`, ...(degradedReason ? { degraded: degradedReason } : {}) });
   } catch (err) {
     if (err.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
@@ -2094,7 +2123,14 @@ router.get('/selling-limits', async (req, res) => {
         }, 0);
         revenueSource = 'live';
       }
-    } catch { /* sell.finances scope not yet granted — use estimate from QuantitySold */ }
+    } catch (err) {
+      // Falls back to the QuantitySold estimate below — expected on a fresh connect before
+      // the sell.finances scope is granted, but ALSO silently swallows every other failure
+      // mode (expired scope, API deprecation, rate limiting). This feeds the dashboard used
+      // to avoid exceeding eBay's monthly selling caps, so a persistent silent fallback is a
+      // real risk — log so a "stuck on estimated" pattern is visible, not just a one-time miss.
+      console.warn('selling-limits: Finances API failed, falling back to estimate:', err.response?.status, err.response?.data || err.message);
+    }
 
     console.log(`selling-limits: ${usedItems} items, $${usedRevUsd.toFixed(2)} revenue (${revenueSource})`);
 
@@ -3726,7 +3762,7 @@ router.get('/listings/views', async (req, res) => {
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
-  const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+  const start = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
   // Return cached results for all IDs that are still fresh
   const result = {};
@@ -4164,7 +4200,14 @@ router.post('/promoted-listings/setup', async (req, res) => {
     const base = 'https://api.ebay.com/sell/marketing/v1';
 
     // Check for existing active campaign with same name
-    const { data: existing } = await axios.get(`${base}/ad_campaign`, { headers }).catch(() => ({ data: { campaigns: [] } }));
+    let campaignListFailed = false;
+    const { data: existing } = await axios.get(`${base}/ad_campaign`, { headers }).catch(err => {
+      // If this list call fails, the code below proceeds as if NO campaign exists — a
+      // failure here can silently create a DUPLICATE paid campaign, doubling ad spend.
+      console.error('promoted-listings/setup: failed to list existing campaigns (may create a duplicate):', err.response?.data || err.message);
+      campaignListFailed = true;
+      return { data: { campaigns: [] } };
+    });
     let campaignId = existing.campaigns?.find(c => c.campaignName === campaignName && c.campaignStatus === 'RUNNING')?.campaignId;
 
     // Create campaign if none exists
@@ -4197,7 +4240,7 @@ router.post('/promoted-listings/setup', async (req, res) => {
 
     const done = results.filter(r => r.ok).length;
     console.log(`promoted-listings: campaign=${campaignId} rate=${adRate}% added=${done}/${listingIds.length}`);
-    res.json({ campaignId, adRate, done, total: listingIds.length, results });
+    res.json({ campaignId, adRate, done, total: listingIds.length, results, ...(campaignListFailed ? { warning: 'could not verify no duplicate campaign exists' } : {}) });
   } catch (err) {
     if (err.response?.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });
@@ -4211,7 +4254,14 @@ router.post('/promoted-listings/end-all', async (req, res) => {
     const token = await getAccessToken();
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
     const base = 'https://api.ebay.com/sell/marketing/v1';
-    const { data } = await axios.get(`${base}/ad_campaign`, { headers }).catch(() => ({ data: { campaigns: [] } }));
+    let campaignListFailed = false;
+    const { data } = await axios.get(`${base}/ad_campaign`, { headers }).catch(err => {
+      // If this list call fails, the code below reports "0 running campaigns" — indistinguishable
+      // from genuinely nothing to end — while any actually-running campaigns keep spending.
+      console.error('promoted-listings/end-all: failed to list campaigns (may leave running campaigns spending):', err.response?.data || err.message);
+      campaignListFailed = true;
+      return { data: { campaigns: [] } };
+    });
     const active = (data.campaigns || []).filter(c => c.campaignStatus === 'RUNNING');
     const results = [];
     for (const c of active) {
@@ -4223,7 +4273,7 @@ router.post('/promoted-listings/end-all', async (req, res) => {
         results.push({ campaignId: c.campaignId, name: c.campaignName, ended: false, error: e.response?.data?.errors?.[0]?.message || e.message });
       }
     }
-    res.json({ total: active.length, results });
+    res.json({ total: active.length, results, ...(campaignListFailed ? { warning: 'could not list campaigns — some may still be running' } : {}) });
   } catch (err) {
     if (err.response?.status === 401 || err.message === 'not_authenticated')
       return res.status(401).json({ error: 'not_authenticated' });

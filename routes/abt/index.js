@@ -649,10 +649,12 @@ router.get('/egp-proxy', async (req, res) => {
 })
 
 async function bgEnrichNational(links) {
+  let attempted = 0, failed = 0, lastErr = null
   for (const link of links) {
     try {
       const exists = await AbtEgpPdfCache.findOne({ link }).lean()
       if (!exists) {
+        attempted++
         const info = await enrichAnnouncement(link)
         await AbtEgpPdfCache.findOneAndUpdate(
           { link },
@@ -660,8 +662,16 @@ async function bgEnrichNational(links) {
           { upsert: true }
         )
       }
-    } catch { /* skip and continue */ }
+    } catch (err) { failed++; lastErr = err.message } // skip and continue
     await new Promise((r) => setTimeout(r, 400))
+  }
+  // This pipeline is entirely fire-and-forget with no other visibility — if enrichAnnouncement
+  // starts failing consistently (e.g. the source site's markup changes), agency/budget columns
+  // would just silently stop populating forever with no trace anywhere. Only log when there's
+  // something to see: every attempt in this batch failed (a total-breakage signal), not a
+  // one-off miss.
+  if (attempted > 0 && failed === attempted) {
+    console.error(`bgEnrichNational: ALL ${attempted} enrichment attempts failed this batch — pipeline may be broken. Last error:`, lastErr)
   }
 }
 

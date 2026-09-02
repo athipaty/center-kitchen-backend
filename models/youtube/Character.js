@@ -26,11 +26,19 @@ const characterSchema = new mongoose.Schema(
     // instead of just handing back the flattened text. Null for characters created by typing the
     // description manually — the edit form falls back to plain-text editing for those.
     attrs: { type: mongoose.Schema.Types.Mixed, default: null },
-    voiceName: { type: String, required: true }, // exact edge-tts voice id, e.g. 'en-US-GuyNeural'
-    // Extra voice ids this character can be quick-switched to (episode review's voice picker,
-    // or a future re-roll) without overwriting `voiceName`, which stays the actual active pick
-    // used by every render until someone explicitly changes it.
-    voiceOptions: { type: [String], default: [] },
+    // No longer read by the render pipeline — every episode is now narrated by the series' single
+    // narratorVoice instead of each character speaking in their own voice. Left in place (optional,
+    // not required) rather than removed so existing character docs don't need a migration; new
+    // characters simply don't set it.
+    voiceName: { type: String, default: "" },
+    voiceOptions: { type: [String], default: [] }, // unused, same reasoning as voiceName above
+    // The identity anchor every scene image featuring this character is conditioned on (FLUX.2
+    // multi-reference editing — see generateSceneWithReferences in utils/youtube/fal.js). A plain
+    // text description alone let the image model reinvent the character's exact look on every
+    // scene; this locks it to one actual photo instead. Generated lazily on this character's first
+    // use in stepImages, not at character-creation time, so a character that's never actually
+    // rendered in a scene never pays for one.
+    referenceImageUrl: { type: String, default: null },
     sprites: [spriteSchema], // 5-8 expressions, generated once during the 'sprites' pipeline step
     status: { type: String, enum: ["pending", "generating_sprites", "ready", "error"], default: "pending" },
     spriteError: { type: String, default: null },

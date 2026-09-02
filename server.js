@@ -56,6 +56,7 @@ app.use(
       "https://youtube-tan-sigma.vercel.app",
       "https://modu-high-1pde.vercel.app",
       "https://profile-kappa-sand.vercel.app",
+      "https://craft-adventure.vercel.app",
     ],
     credentials: true,
   }),
@@ -78,6 +79,9 @@ app.use('/api/forecast', require('./routes/forecast'));
 
 // --- Milk ---
 app.use('/api/milk', require('./routes/milk'));
+
+// --- Craft Adventure (game) ---
+app.use('/api/craft-adventure', require('./routes/craftAdventure'));
 
 // --- Product Portal ---
 app.use('/api/products', require('./routes/productportal'));
@@ -133,6 +137,9 @@ app.use('/api/youtube', require('./routes/youtube'));
 // --- Profile (portfolio site binary assets: photo, certificate) ---
 app.use('/api/profile', require('./routes/profile'));
 
+// --- Grocery (Singapore supermarket price tracker) ---
+app.use('/api/grocery', require('./routes/grocery'));
+
 /* =====================
    DATABASE
 ===================== */
@@ -143,6 +150,7 @@ mongoose
     require("./jobs/trackerScheduler").start(io);
     require("./jobs/youtubeEpisodeScheduler").start(io);
     require("./jobs/egpCacheRefresh").start();
+    require("./jobs/groceryPriceCheck").start();
     require("./jobs/abtContactCleanup").start();
     // egpPhayaoRefresh disabled — the nationwide RSS it scans is too sparse for the
     // keyword-match approach to ever reliably find Phayao items (0 hits after 24+

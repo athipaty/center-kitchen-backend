@@ -3,6 +3,7 @@ const router = express.Router();
 const axios = require("axios");
 const crypto = require("crypto");
 const Product = require("../../models/tracker/Product");
+const ScraperCache = require("../../models/tracker/ScraperCache");
 
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
@@ -41,6 +42,14 @@ router.get("/", async (req, res) => {
 });
 
 
+// Preview results are cached here (keyed by ASIN) so a same-ASIN POST / (add) within the
+// TTL reuses this scrape instead of paying for another ScraperAPI autoparse call — previously
+// /preview and POST / each did their own fetchProduct() for the identical page, doubling the
+// 5-credit cost of every listing added. 20 minutes covers "preview, step away, come back and
+// click Add" without leaving much room for a stale price/stock snapshot to matter — any gap
+// left is closed by the next 6-hourly resync anyway.
+const PREVIEW_CACHE_TTL_MS = 20 * 60 * 1000;
+
 // POST preview a URL — returns scraped info + variants without saving anything
 router.post("/preview", async (req, res) => {
   try {
@@ -56,7 +65,22 @@ router.post("/preview", async (req, res) => {
       url: `${baseDomain}/dp/${v.asin}`,
     }));
     const groupId = extractAsin(cleanedUrl);
-    const fulfillment = await fetchFulfillment(cleanedUrl);
+    // Derived from fetchProduct()'s own autoparse response (scraper.js now surfaces
+    // shipsFrom/soldBy) instead of a second fetchFulfillment() ScraperAPI call for the
+    // identical page — that used to double /preview's cost on top of the preview/add
+    // duplication fixed above.
+    const fulfillment = {
+      shipsFrom: info.shipsFrom ?? null,
+      soldBy: info.soldBy ?? null,
+      isAmazonFulfilled: isAmazonFulfilled(info.shipsFrom, info.soldBy),
+    };
+    if (groupId) {
+      ScraperCache.findByIdAndUpdate(
+        groupId,
+        { data: info, expiresAt: new Date(Date.now() + PREVIEW_CACHE_TTL_MS) },
+        { upsert: true }
+      ).catch(e => console.warn(`preview-cache: failed to store ${groupId}:`, e.message));
+    }
     res.json({
       title: info.title, price: info.price, currency: info.currency, image: info.image,
       isPrime: info.isPrime || false, upc: info.upc || null, variants, groupId,
@@ -69,6 +93,12 @@ router.post("/preview", async (req, res) => {
   }
 });
 
+// Shipping/seller info changes far less often than price, so a standalone fulfillment lookup
+// can safely outlive PREVIEW_CACHE_TTL_MS. Stored under a "fulfillment:" prefixed id in the same
+// ScraperCache collection so it can never collide with a plain-ASIN preview cache entry — POST /
+// expects that one to hold a full fetchProduct() result, not just shipsFrom/soldBy.
+const FULFILLMENT_CACHE_TTL_MS = 60 * 60 * 1000;
+
 // GET on-demand Amazon fulfillment lookup for one candidate — backs the "Check shipping" button
 // on a tracked product. Deliberately a per-click lookup rather than enriching every search
 // result automatically — the codebase's existing image-scrape queue (queueImageUpload) already
@@ -78,7 +108,33 @@ router.get("/fulfillment", async (req, res) => {
   try {
     const { url } = req.query;
     if (!url) return res.status(400).json({ error: "url is required" });
-    const fulfillment = await fetchFulfillment(cleanUrl(url));
+    const cleanedUrl = cleanUrl(url);
+    const asin = extractAsin(cleanedUrl);
+
+    if (asin) {
+      // A still-fresh /preview scrape for this exact ASIN already carries shipsFrom/soldBy
+      // (see scraper.js) — reuse it for free instead of paying for any lookup at all.
+      const previewCached = await ScraperCache.findById(asin).lean();
+      if (previewCached && previewCached.expiresAt > new Date() && previewCached.data?.shipsFrom !== undefined) {
+        const { shipsFrom, soldBy } = previewCached.data;
+        return res.json({ shipsFrom, soldBy: soldBy ?? null, isAmazonFulfilled: isAmazonFulfilled(shipsFrom, soldBy) });
+      }
+
+      // Otherwise reuse an earlier standalone lookup for this ASIN, if still fresh.
+      const fulfillmentCached = await ScraperCache.findById(`fulfillment:${asin}`).lean();
+      if (fulfillmentCached && fulfillmentCached.expiresAt > new Date()) {
+        return res.json(fulfillmentCached.data);
+      }
+    }
+
+    const fulfillment = await fetchFulfillment(cleanedUrl);
+    if (asin) {
+      ScraperCache.findByIdAndUpdate(
+        `fulfillment:${asin}`,
+        { data: fulfillment, expiresAt: new Date(Date.now() + FULFILLMENT_CACHE_TTL_MS) },
+        { upsert: true }
+      ).catch(e => console.warn(`fulfillment-cache: failed to store ${asin}:`, e.message));
+    }
     res.json(fulfillment);
   } catch (err) {
     res.status(502).json({ error: err.message });
@@ -88,7 +144,7 @@ router.get("/fulfillment", async (req, res) => {
 // POST add a product to track
 router.post("/", async (req, res) => {
   try {
-    const { url, groupId, fulfillment } = req.body;
+    const { url, groupId, fulfillment, variant: variantHint } = req.body;
     if (!url) return res.status(400).json({ error: "url is required" });
 
     const cleanedUrl = cleanUrl(url);
@@ -96,7 +152,46 @@ router.post("/", async (req, res) => {
     const existing = await Product.findOne({ url: cleanedUrl });
     if (existing) return res.status(409).json({ error: "Already tracking this product.", product: existing });
 
-    const info = await fetchProduct(cleanedUrl);
+    // Reuse the /preview scrape for this ASIN if it's still fresh, instead of paying for
+    // another ScraperAPI autoparse call for the identical page — see PREVIEW_CACHE_TTL_MS.
+    const asinForCache = extractAsin(cleanedUrl);
+    const cached = asinForCache ? await ScraperCache.findById(asinForCache).lean() : null;
+
+    // Sibling-variant fast path: when tracking several variants from one preview (e.g. every
+    // color), each sibling used to pay for its own full 5-credit autoparse even though the
+    // frontend already knows its label/attributes/image from the parent scrape's
+    // customization_options (see /preview). Once one variant in the group is saved, every
+    // later one in this group can inherit title/specs/bullets/images from it and only needs a
+    // cheap price/stock check for its own ASIN — the same free-first waterfall checkProduct
+    // uses (fetchProduct priceOnly), not a second full scrape of a near-identical page.
+    let sibling = null;
+    if (!cached && variantHint && groupId) {
+      sibling = await Product.findOne({ groupId }).lean();
+    }
+
+    let info;
+    if (sibling) {
+      const priceInfo = await fetchProduct(cleanedUrl, { priceOnly: true });
+      info = {
+        title: sibling.title,
+        price: priceInfo.price,
+        currency: sibling.currency,
+        listPrice: null, // per-variant list price isn't known from the cheap check — leave unset rather than guess
+        image: variantHint.image || sibling.image || null,
+        images: sibling.images || [],
+        upc: null,
+        isPrime: sibling.isPrime,
+        variant: variantHint.label || null,
+        attributes: variantHint.attributes || [],
+        specs: sibling.specs || {},
+        bullets: sibling.bullets || [],
+      };
+    } else {
+      info = (cached && cached.expiresAt > new Date())
+        ? cached.data
+        : await fetchProduct(cleanedUrl);
+      if (cached) ScraperCache.deleteOne({ _id: asinForCache }).catch(() => {});
+    }
 
     const product = new Product({
       url: cleanedUrl,
@@ -747,7 +842,11 @@ async function fetchAndUploadImages(product, seedImages = [], { forceUpload = fa
         await Product.findByIdAndUpdate(product._id, { image: existingUrls[0], images: existingUrls, cloudinaryFolder: folder });
         return existingUrls;
       }
-    } catch {}
+    } catch (err) {
+      // Falls through to a full re-upload below — harmless but burns ScraperAPI/B2 write cost
+      // every time this fires. Worth knowing if it's happening routinely vs. a one-off blip.
+      console.warn(`fetchAndUploadImages: B2 pre-check failed for ${folder}, forcing full re-upload:`, err.message);
+    }
 
     // Counts don't match (stale/corrupted folder from a prior scrape, or first upload) —
     // wipe and re-upload the full fresh set rather than resuming from existingUrls.length,
@@ -1073,6 +1172,119 @@ router.post("/fix-oos-qty", async (req, res) => {
       }
     }
     res.json({ fixed: results.length, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST force a full price resync for every eBay-linked listing, recomputing every
+// variant's live price fresh from the DB. Needed after a bug (fixed 2026-08-24) where
+// checkProduct() called syncEbayPrice() before saving the just-scraped price — the variant
+// that triggered a sync got priced on eBay from its OLD price while the DB recorded it as
+// synced to the NEW price, so the mismatch never retried and the wrong price stuck on the
+// live listing. Day-to-day syncing only re-prices a listing when one of its own variants'
+// Amazon price changes again, so an already-stuck variant won't self-heal on its own —
+// this does one full pass to correct any listing left mispriced by that bug.
+router.post("/resync-ebay-prices", async (req, res) => {
+  try {
+    const { syncEbayPrice } = require("../../jobs/ebayPriceSync");
+    const products = await Product.find(
+      { ebayListingId: { $exists: true, $ne: null } },
+      'ebayListingId variant current'
+    ).lean();
+
+    const byListing = {};
+    for (const p of products) {
+      if (!byListing[p.ebayListingId]) byListing[p.ebayListingId] = [];
+      byListing[p.ebayListingId].push(p);
+    }
+    const listingIds = Object.keys(byListing);
+    res.json({ started: true, total: listingIds.length });
+
+    let done = 0;
+    for (const listingId of listingIds) {
+      const primary = byListing[listingId][0];
+      try {
+        // For multi-variation listings syncEbayPrice re-derives EVERY variation's price
+        // from its own matched DB record — the primary variant here only matters for the
+        // single-SKU-listing fallback path.
+        await syncEbayPrice(listingId, primary.current, primary.variant);
+        done++;
+        console.log(`resync-ebay-prices [${done}/${listingIds.length}] ${listingId} ✓`);
+      } catch (e) {
+        done++;
+        console.error(`resync-ebay-prices [${done}/${listingIds.length}] ${listingId} failed:`, e.message);
+      }
+      await new Promise(r => setTimeout(r, 5000)); // stay within eBay's per-minute rate limit
+    }
+    console.log(`resync-ebay-prices: done — ${listingIds.length} listings processed`);
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// GET a digest of eBay price corrections applied over the last N hours (default 24) —
+// listings/variants whose live price actually differed from what it should have been and
+// got overwritten by syncEbayPrice(). Recurring audit runs (POST /resync-ebay-prices on a
+// schedule) fix mispriced listings immediately and silently; this is what turns that into
+// something a human can review once a day instead of reading raw logs.
+router.get("/price-sync-digest", async (req, res) => {
+  try {
+    const PriceCorrection = require("../../models/tracker/PriceCorrection");
+    const hours = Number(req.query.hours) || 24;
+    const since = new Date(Date.now() - hours * 3600 * 1000);
+    const corrections = await PriceCorrection.find({ createdAt: { $gte: since } }).sort({ createdAt: 1 }).lean();
+    const listingsAffected = [...new Set(corrections.map(c => c.listingId))];
+    res.json({ hours, count: corrections.length, listingsAffected: listingsAffected.length, corrections });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST re-run the digest and, only if corrections were actually found, push an ntfy alert
+// summarizing them (optionally with a link back to wherever this was triggered from, e.g.
+// a chat session). Kept separate from the plain GET digest so routine polling never spams
+// a notification — only a call to this route can trigger one, and only when count > 0.
+router.post("/price-sync-digest/notify", async (req, res) => {
+  try {
+    const PriceCorrection = require("../../models/tracker/PriceCorrection");
+    const { ntfyPush } = require("../../utils/ntfy");
+    const hours = Number(req.body?.hours) || 24;
+    const chatUrl = req.body?.chatUrl || null;
+    const since = new Date(Date.now() - hours * 3600 * 1000);
+    const corrections = await PriceCorrection.find({ createdAt: { $gte: since } }).sort({ createdAt: 1 }).lean();
+    const listingsAffected = [...new Set(corrections.map(c => c.listingId))];
+
+    let notified = false;
+    if (corrections.length) {
+      const lines = corrections.slice(0, 10).map(c =>
+        `${c.listingId} "${c.variant || '?'}" $${c.fromPrice.toFixed(2)} → $${c.toPrice.toFixed(2)}`
+      );
+      const more = corrections.length > 10 ? `\n…and ${corrections.length - 10} more` : '';
+      const body = `${corrections.length} correction(s) across ${listingsAffected.length} listing(s) in the last ${hours}h:\n${lines.join('\n')}${more}`
+        + (chatUrl ? `\n\nOpen chat: ${chatUrl}` : '');
+      notified = await ntfyPush('⚠️ eBay price-sync: corrections made', body, { priority: 'default', tags: ['warning', 'moneybag'] });
+    }
+
+    res.json({ hours, count: corrections.length, listingsAffected: listingsAffected.length, notified });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST send a clearly-labeled test ntfy alert, bypassing PriceCorrection entirely — lets a
+// human confirm NTFY_TOPIC is configured and ntfy.sh delivery actually works end-to-end
+// without writing fake correction data into the real digest.
+router.post("/price-sync-digest/notify-test", async (req, res) => {
+  try {
+    const { ntfyPush } = require("../../utils/ntfy");
+    const chatUrl = req.body?.chatUrl || null;
+    const sent = await ntfyPush(
+      '🧪 eBay price-sync: test alert',
+      `This is a manual test of the price-sync digest alert — no real corrections were found. If you got this, ntfy delivery is working.${chatUrl ? `\n\nOpen chat: ${chatUrl}` : ''}`,
+      { priority: 'default', tags: ['test_tube'] }
+    );
+    res.json({ sent });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

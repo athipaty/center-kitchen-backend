@@ -87,6 +87,17 @@ async function checkProduct(p, syncedListings = null) {
     p.failCount = 0;
     p.unavailableSince = null;
 
+    // Persist the freshly scraped price now, before any eBay sync below. syncEbayPrice()
+    // re-prices every sibling variant on this listing with its own fresh Product.find() —
+    // if this product's new `current` isn't in the DB yet, that read still sees the OLD
+    // price for the very variant that triggered the sync, so eBay gets priced from stale
+    // data while p.ebayPrice is then recorded as if the new price synced correctly. Since
+    // future runs only compare against p.ebayPrice, that wrong live price never gets
+    // retried. Confirmed live on listing 358852561875, where the "eBay price synced" log
+    // (fresh price) and the sync's own per-variant plan (stale DB price) disagreed for
+    // whichever variant had just triggered the batch.
+    await p.save();
+
     const priceChanged  = info.price !== oldPrice;
     const justRestocked = previousStatus !== 'active';
 
