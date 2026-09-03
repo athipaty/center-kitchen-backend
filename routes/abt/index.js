@@ -1012,7 +1012,7 @@ router.get('/stock-transactions', async (req, res) => {
 
 router.post('/stock-transactions', requireAuth, async (req, res) => {
   try {
-    const { itemId, type, qty, date, party, docNo, note } = req.body
+    const { itemId, type, qty, date, party, docNo, note, unitPrice } = req.body
     if (!itemId || !type || !['รับ', 'จ่าย'].includes(type)) {
       return res.status(400).json({ error: 'ข้อมูลไม่ครบถ้วน' })
     }
@@ -1026,8 +1026,20 @@ router.post('/stock-transactions', requireAuth, async (req, res) => {
       return res.status(400).json({ error: `วัสดุคงเหลือไม่พอ (คงเหลือ ${item.balance} ${item.unit})` })
     }
 
+    // A "รับ" (receive) can arrive at a different price than the last batch — if one is given,
+    // record the transaction at that real price and roll it forward as the item's current cost
+    // (last-cost valuation), instead of silently stamping every receipt with the old price.
+    // "จ่าย" (withdraw) always values out at the item's current cost; it never changes it.
+    // (Number('') is 0, not NaN, so an explicit empty-string/null must be treated the same as
+    // "not provided" here rather than coerced into a real ฿0 price.)
+    const priceGiven = unitPrice !== undefined && unitPrice !== null && unitPrice !== ''
+    const priceNum = priceGiven ? Number(unitPrice) : NaN
+    const hasValidPrice = type === 'รับ' && !isNaN(priceNum) && priceNum >= 0
+    const txnUnitPrice = hasValidPrice ? priceNum : item.unitPrice
+
     const newBalance = type === 'รับ' ? item.balance + qtyNum : item.balance - qtyNum
     item.balance = newBalance
+    if (hasValidPrice) item.unitPrice = priceNum
     await item.save()
 
     const txn = await AbtStockTransaction.create({
@@ -1040,8 +1052,8 @@ router.post('/stock-transactions', requireAuth, async (req, res) => {
       docNo: docNo || '',
       qty: qtyNum,
       unit: item.unit,
-      unitPrice: item.unitPrice,
-      amount: qtyNum * item.unitPrice,
+      unitPrice: txnUnitPrice,
+      amount: qtyNum * txnUnitPrice,
       balanceAfter: newBalance,
       note: note || '',
     })
