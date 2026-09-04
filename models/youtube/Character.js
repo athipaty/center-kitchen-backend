@@ -32,12 +32,12 @@ const characterSchema = new mongoose.Schema(
     // characters simply don't set it.
     voiceName: { type: String, default: "" },
     voiceOptions: { type: [String], default: [] }, // unused, same reasoning as voiceName above
-    // The identity anchor every scene image featuring this character is conditioned on (FLUX.2
-    // multi-reference editing — see generateSceneWithReferences in utils/youtube/fal.js). A plain
-    // text description alone let the image model reinvent the character's exact look on every
-    // scene; this locks it to one actual photo instead. Generated lazily on this character's first
-    // use in stepImages, not at character-creation time, so a character that's never actually
-    // rendered in a scene never pays for one.
+    // The identity anchor every scene image featuring this character is conditioned on (Gemini
+    // 2.5 Flash Image multi-reference generation — see generateSceneWithReferences in
+    // utils/youtube/gemini.js). A plain text description alone let the image model reinvent the
+    // character's exact look on every scene; this locks it to one actual photo instead. Generated
+    // lazily on this character's first use in stepImages, not at character-creation time, so a
+    // character that's never actually rendered in a scene never pays for one.
     referenceImageUrl: { type: String, default: null },
     sprites: [spriteSchema], // 5-8 expressions, generated once during the 'sprites' pipeline step
     status: { type: String, enum: ["pending", "generating_sprites", "ready", "error"], default: "pending" },
