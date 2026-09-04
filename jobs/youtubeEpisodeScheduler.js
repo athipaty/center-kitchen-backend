@@ -3,12 +3,13 @@ const axios = require("axios");
 const Series = require("../models/youtube/Series");
 const Character = require("../models/youtube/Character");
 const Episode = require("../models/youtube/Episode");
-const { generateImageFlux, generateCharacterImage } = require("../utils/youtube/fal");
 const {
+  generateImageFlux,
+  generateCharacterImage,
   generateCharacterReferenceImage,
   generateSceneImage,
   generateSceneWithReferences,
-} = require("../utils/youtube/gemini");
+} = require("../utils/youtube/fal");
 const { synthesize } = require("../utils/youtube/edgeTts");
 const { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS } = require("../utils/youtube/claudeScript");
 const { renderEpisodeToBuffer } = require("../utils/youtube/remotionRender");
@@ -275,11 +276,10 @@ function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS
 }
 
 // Every scene image is now conditioned on each on-screen character's locked reference photo
-// (Gemini 2.5 Flash Image multi-reference generation — see generateSceneWithReferences in
-// utils/youtube/gemini.js) instead of relying purely on repeating their text description, which
-// let the image model reinvent the character's exact look on every scene. Generated lazily, once,
-// the first time this character is actually needed for a scene — reused for every scene/episode
-// after.
+// (FLUX.2 multi-reference editing — see generateSceneWithReferences in utils/youtube/fal.js)
+// instead of relying purely on repeating their text description, which let the image model
+// reinvent the character's exact look on every scene. Generated lazily, once, the first time this
+// character is actually needed for a scene — reused for every scene/episode after.
 //
 // Two episodes sharing a character could theoretically race this on their very first shared use
 // and both generate one — harmless (whichever save lands last just wins, no corruption, and the
@@ -290,10 +290,8 @@ async function ensureCharacterReferenceImage(character) {
   // Reuses buildSpritePrompt's "neutral" prompt — already exactly a clean, single-subject,
   // no-background identity portrait, which is exactly what a reference photo needs to be.
   const prompt = buildSpritePrompt(character, "neutral");
-  // Only used to keep this reference's B2 key unique from any future one for the same character —
-  // Gemini itself takes no seed param, a fresh call is non-deterministic on its own.
   const seed = Math.floor(Math.random() * 1e9);
-  const rawBuffer = await generateCharacterReferenceImage(prompt);
+  const rawBuffer = await generateCharacterReferenceImage(prompt, { seed });
   const meta = await sharp(rawBuffer).metadata();
   const height = meta.height || 1024;
   const buffer = await sharp(rawBuffer)
@@ -347,17 +345,12 @@ function buildScenePrompt(scene, series, cast) {
 }
 
 // Generates one scene's image: with references for whoever's on screen, or a plain generation for
-// an empty establishing shot — both go through Gemini either way, so every scene in an episode
-// shares one consistent look regardless of which path a given scene takes. Re-encoded through
-// sharp so the bytes actually uploaded are genuine JPEG regardless of whatever format Gemini
-// happened to return (it isn't guaranteed to be JPEG) — every caller uploads this with an
-// "image/jpeg" content type and a .jpg key, so the real bytes need to match that.
-async function generateSceneImageBuffer(scene, series, cast) {
+// an empty establishing shot — both go through FLUX.2 either way, so every scene in an episode
+// shares one consistent look regardless of which path a given scene takes.
+async function generateSceneImageBuffer(scene, series, cast, seed) {
   const prompt = buildScenePrompt(scene, series, cast);
-  const rawBuffer = cast.length
-    ? await generateSceneWithReferences(prompt, cast.map((c) => c.referenceImageUrl))
-    : await generateSceneImage(prompt);
-  return sharp(rawBuffer).jpeg().toBuffer();
+  if (!cast.length) return generateSceneImage(prompt, { seed });
+  return generateSceneWithReferences(prompt, cast.map((c) => c.referenceImageUrl), { seed });
 }
 
 // script -> images: generates one full-frame image per scene. Replaces the old separate
@@ -389,8 +382,11 @@ async function stepImages(episode) {
       episode.statusDetail = `scene ${scene.order + 1}/${episode.scenes.length}`;
       await episode.save();
       await emit(episode);
+      // A fresh random seed per image — see generateCharacterSprites' seed=1 bug comment above for
+      // why a fixed/omitted seed produces near-identical-looking images across calls.
+      const seed = Math.floor(Math.random() * 1e9);
       const cast = sceneCast(scene, byId);
-      const buffer = await generateSceneImageBuffer(scene, series, cast);
+      const buffer = await generateSceneImageBuffer(scene, series, cast, seed);
       scene.imageUrl = await uploadToB2(
         buffer,
         `youtube/episodes/${episode._id}/scene${scene.order}.jpg`,
@@ -414,11 +410,9 @@ async function regenerateSceneImage(episode, scene) {
   for (const character of characters) {
     if (!character.referenceImageUrl) await ensureCharacterReferenceImage(character);
   }
-  // Only used to keep this regenerated image's B2 key unique from the one it replaces (see the
-  // function comment above) — Gemini itself takes no seed param.
   const seed = Math.floor(Math.random() * 1e9);
   const cast = sceneCast(scene, byId);
-  const buffer = await generateSceneImageBuffer(scene, series, cast);
+  const buffer = await generateSceneImageBuffer(scene, series, cast, seed);
   const oldUrl = scene.imageUrl;
   scene.imageUrl = await uploadToB2(
     buffer,
