@@ -40,7 +40,19 @@ async function callGemini(parts, aspectRatio) {
       return Buffer.from(imagePart.inlineData.data, "base64");
     } catch (err) {
       const status = err.response?.status;
-      if (status !== 429 || attempt >= MAX_RETRIES) throw err;
+      // axios's own err.message is just "Request failed with status code 429" — useless for
+      // telling a transient per-minute rate limit apart from a hard quota/billing block, both of
+      // which return the same HTTP status. Google's actual reason lives in the response body, so
+      // surface it (in logs now, and in the thrown error once retries are exhausted) instead of
+      // guessing.
+      const googleMessage = err.response?.data?.error?.message;
+      if (status === 429) {
+        console.error(`Gemini 429 (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`, googleMessage || err.message);
+      }
+      if (status !== 429 || attempt >= MAX_RETRIES) {
+        if (googleMessage) throw new Error(`Gemini ${status ?? ""}: ${googleMessage}`.trim());
+        throw err;
+      }
       const retryAfterSec = Number(err.response.headers?.["retry-after"]);
       const delayMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
         ? retryAfterSec * 1000
