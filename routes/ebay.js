@@ -3690,6 +3690,57 @@ router.get('/listing/:id/prices', async (req, res) => {
   }
 });
 
+// ── Live inventory (Quantity / QuantitySold / available) for one listing ──────────
+// Diagnostic: eBay's item page shows "available" (Quantity - QuantitySold), not the
+// raw Quantity field, so this surfaces both to make stock discrepancies inspectable.
+router.get('/listing/:id/inventory', async (req, res) => {
+  const cleanId = String(req.params.id).replace(/\D/g, '');
+  if (!cleanId) return res.status(400).json({ error: 'Invalid listing ID' });
+  try {
+    const token = await getAccessToken();
+    const { data: xml } = await axios.post('https://api.ebay.com/ws/api.dll',
+      `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${token}</eBayAuthToken></RequesterCredentials><ItemID>${cleanId}</ItemID></GetItemRequest>`,
+      { headers: { 'X-EBAY-API-SITEID': '0', 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-CALL-NAME': 'GetItem', 'X-EBAY-API-IAF-TOKEN': token, 'Content-Type': 'text/xml' } }
+    );
+
+    if (/<Ack>Failure<\/Ack>/.test(xml)) {
+      const errCode = xml.match(/<ErrorCode>(\d+)<\/ErrorCode>/)?.[1];
+      const longMsg = (xml.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/)?.[1] || '').toLowerCase();
+      const isGone = errCode === '17' || longMsg.includes('no such') || longMsg.includes('invalid item') || longMsg.includes('not found for itemid');
+      return res.status(isGone ? 404 : 400).json({ error: isGone ? 'not_found' : 'api_error' });
+    }
+
+    const varBlocks = [...xml.matchAll(/<Variation>([\s\S]*?)<\/Variation>/g)].map(m => m[1]);
+
+    if (varBlocks.length === 0) {
+      const sellingStatus = xml.match(/<SellingStatus>([\s\S]*?)<\/SellingStatus>/)?.[1] || '';
+      const quantity = parseInt(xml.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0', 10);
+      const quantitySold = parseInt(sellingStatus.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
+      return res.json({ listingId: cleanId, type: 'single', quantity, quantitySold, available: quantity - quantitySold });
+    }
+
+    const variations = varBlocks.map(block => {
+      const specs = {};
+      const nvRe = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+      let nv;
+      while ((nv = nvRe.exec(block)) !== null) {
+        const name = nv[1].match(/<Name>([\s\S]*?)<\/Name>/)?.[1];
+        const value = nv[1].match(/<Value>([\s\S]*?)<\/Value>/)?.[1];
+        if (name && value) specs[name] = value;
+      }
+      const quantity = parseInt(block.match(/<Quantity>(\d+)<\/Quantity>/)?.[1] || '0', 10);
+      const quantitySold = parseInt(block.match(/<QuantitySold>(\d+)<\/QuantitySold>/)?.[1] || '0', 10);
+      return { specs, quantity, quantitySold, available: quantity - quantitySold };
+    });
+
+    res.json({ listingId: cleanId, type: 'variation', variations });
+  } catch (err) {
+    if (err.status === 401 || err.message === 'not_authenticated')
+      return res.status(401).json({ error: 'not_authenticated' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Batch live prices for multiple listings — one call per listing (GetItem) ──────
 // ?ids=123,456,789  Returns { "123": { base, variations }, ... }
 router.get('/listings/prices-batch', async (req, res) => {
