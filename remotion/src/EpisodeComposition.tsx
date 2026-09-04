@@ -61,7 +61,7 @@ export const EpisodeVideo: React.FC<EpisodeProps> = ({ scenes, bgmUrl }) => {
       {bgmUrl && <Audio src={bgmUrl} loop volume={0.15} />}
       {scenes.map((scene, i) => (
         <Sequence key={i} from={starts[i]} durationInFrames={durations[i]} layout="none">
-          <Scene {...scene} durationInFrames={durations[i]} />
+          <Scene {...scene} durationInFrames={durations[i]} index={i} />
         </Sequence>
       ))}
       {/* One page-flip overlay per scene boundary, straddling it symmetrically (half the
