@@ -7,28 +7,47 @@ const axios = require("axios");
 // per-image cost (see git history for that prior iteration).
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent";
 
-// responseModalities: ["Image"] tells this (text+image-capable) model to actually return an
-// image part rather than defaulting to a text reply. aspectRatio is one of Gemini's own fixed
-// set (1:1, 16:9, 9:16, etc.) — "16:9" for scenes matches this app's episode frame; "1:1" for a
-// single-character reference portrait.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The free tier's ~10 requests/min cap is easy to trip mid-episode now that stepImages generates
+// one image per scene back-to-back (more scenes per episode since the scene-count fix) plus a
+// reference portrait per new character — all in one sequential run. Rather than failing the whole
+// episode on the first 429, back off and retry: Gemini's own Retry-After header (when present)
+// tells us exactly how long the current minute-window has left; otherwise fall back to increasing
+// delays. Any other error (bad prompt, no image returned, etc.) is not retried — it won't succeed
+// on a second try.
+const MAX_RETRIES = 5;
+
 async function callGemini(parts, aspectRatio) {
-  const { data } = await axios.post(ENDPOINT, {
-    contents: [{ parts }],
-    generationConfig: {
-      responseModalities: ["Image"],
-      imageConfig: { aspectRatio },
-    },
-  }, {
-    headers: {
-      "x-goog-api-key": process.env.GEMINI_API_KEY,
-      "Content-Type": "application/json",
-    },
-    timeout: 120000,
-  });
-  const responseParts = data?.candidates?.[0]?.content?.parts || [];
-  const imagePart = responseParts.find((p) => p.inlineData?.data);
-  if (!imagePart) throw new Error("Gemini generateContent returned no image");
-  return Buffer.from(imagePart.inlineData.data, "base64");
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const { data } = await axios.post(ENDPOINT, {
+        contents: [{ parts }],
+        generationConfig: {
+          responseModalities: ["Image"],
+          imageConfig: { aspectRatio },
+        },
+      }, {
+        headers: {
+          "x-goog-api-key": process.env.GEMINI_API_KEY,
+          "Content-Type": "application/json",
+        },
+        timeout: 120000,
+      });
+      const responseParts = data?.candidates?.[0]?.content?.parts || [];
+      const imagePart = responseParts.find((p) => p.inlineData?.data);
+      if (!imagePart) throw new Error("Gemini generateContent returned no image");
+      return Buffer.from(imagePart.inlineData.data, "base64");
+    } catch (err) {
+      const status = err.response?.status;
+      if (status !== 429 || attempt >= MAX_RETRIES) throw err;
+      const retryAfterSec = Number(err.response.headers?.["retry-after"]);
+      const delayMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+        ? retryAfterSec * 1000
+        : 2 ** attempt * 5000; // 5s, 10s, 20s, 40s, 80s
+      await sleep(delayMs);
+    }
+  }
 }
 
 // Fetches an existing image (a B2-hosted reference photo URL) and base64-encodes it into an
