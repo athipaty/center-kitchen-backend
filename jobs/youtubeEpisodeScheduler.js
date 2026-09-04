@@ -392,6 +392,15 @@ async function stepImages(episode) {
         `youtube/episodes/${episode._id}/scene${scene.order}.jpg`,
         "image/jpeg"
       );
+      // Persisted right away rather than left for the eventual end-of-step save: if a later scene
+      // in this same episode fails (a 429 that outlasts retries, a transient upload error, the
+      // process itself getting restarted mid-run), this scene's image is already paid for and
+      // already uploaded — losing the DB record on top of that would mean silently re-generating
+      // (and re-paying fal.ai for) it on the next retry, even though `if (!scene.imageUrl)` above
+      // exists specifically to skip exactly that.
+      episode.markModified("scenes");
+      await episode.save();
+      await emit(episode);
     }
   }
   episode.status = "images";
