@@ -508,9 +508,22 @@ async function stepRenderAndUpload(episode) {
   await episode.save();
   await emit(episode);
 
-  episode.videoUrl = await uploadToB2(mp4Buffer, `youtube/episodes/${episode._id}/final.mp4`, "video/mp4");
+  // B2 uploads default to a full year of "immutable" caching (see uploadToB2's cacheControl
+  // default) - fine for a file that's genuinely never overwritten, but a rerender DOES overwrite
+  // this exact video, and a fixed "final.mp4" key means the browser (and any CDN in front of B2)
+  // keeps serving the old cached bytes at that same URL long after the new one's been uploaded,
+  // even on a hard refresh. Same cache-busting fix already used for scene images/character
+  // portraits: tag the key uniquely per render and clean up the old file, instead of overwriting
+  // the same URL in place.
+  const oldVideoUrl = episode.videoUrl;
+  episode.videoUrl = await uploadToB2(
+    mp4Buffer,
+    `youtube/episodes/${episode._id}/final-${Date.now()}.mp4`,
+    "video/mp4"
+  );
   episode.status = "rendered";
   episode.statusDetail = "";
+  if (oldVideoUrl) await deleteB2File(b2KeyFromUrl(oldVideoUrl)).catch(() => {});
 }
 
 // uploading -> done: pushes the B2-hosted MP4 to the actual YouTube channel via the Data API
