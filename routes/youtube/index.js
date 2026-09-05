@@ -494,6 +494,66 @@ router.post("/episodes/:id/scenes/:order/regenerate-image", async (req, res) => 
   }
 });
 
+// Redo EVERY scene's image in one go — for when the whole episode's art should be rerolled (e.g.
+// after switching art style, or just wanting a fresh take on the whole set) rather than one scene
+// at a time via the per-scene endpoint above. Keeps the script and each character's locked
+// referenceImageUrl untouched (identity stays consistent) — only the scene compositions reroll.
+// Reuses stepImages' own "already generated" skip via the same resumable mechanism as
+// regenerate-script: clear what needs to redo, drop status back to the step before it, and let the
+// scheduler's normal per-scene loop (and its incremental per-scene save) do the work. Allowed
+// anywhere images already exist ("images", "review", "rendered") — not once published.
+router.post("/episodes/:id/regenerate-images", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (!["images", "review", "rendered"].includes(episode.status)) {
+      return res.status(409).json({ error: "This episode isn't at a step where images can be regenerated." });
+    }
+    for (const scene of episode.scenes) scene.imageUrl = null;
+    episode.markModified("scenes");
+    episode.status = "script"; // stepImages picks up from here and re-rolls every scene
+    episode.statusDetail = "";
+    await episode.save();
+    scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
+    const fresh = await Episode.findById(episode._id).populate("scenes.charactersOnScreen", "name sprites");
+    res.json(fresh);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Redo EVERY narration line's audio in one go — for when the audio itself should be rerolled
+// without touching the text (e.g. after changing the series' narratorVoice, so an already-generated
+// episode can catch up to the new voice) rather than editing each line's text to force a redo.
+// Same resumable-reset pattern as regenerate-images above: clear what needs to redo, drop status
+// back to the step before TTS, let stepTts's own per-line skip/resume loop do the work. Allowed at
+// "review" (audio already exists) and "rendered" (redo audio without touching the finished video
+// until re-approving render) — not "images" (TTS hasn't run yet, nothing to redo).
+router.post("/episodes/:id/regenerate-narration", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (!["review", "rendered"].includes(episode.status)) {
+      return res.status(409).json({ error: "This episode isn't at a step where narration audio can be regenerated." });
+    }
+    for (const scene of episode.scenes) {
+      for (const line of scene.narration) {
+        line.audioUrl = null;
+        line.durationMs = null;
+      }
+    }
+    episode.markModified("scenes");
+    episode.status = "images"; // stepTts picks up from here and re-rolls every line
+    episode.statusDetail = "";
+    await episode.save();
+    scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
+    const fresh = await Episode.findById(episode._id).populate("scenes.charactersOnScreen", "name sprites");
+    res.json(fresh);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Approves an episode paused at "review" and kicks off the actual render/upload/publish chain.
 // Sets status to "tts" only as a momentary internal handoff — STEP_HANDLERS.tts (stepRenderAndUpload)
 // picks it up immediately via triggerNow, so it's never visibly stuck there.

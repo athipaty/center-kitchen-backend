@@ -458,6 +458,15 @@ async function stepTts(episode) {
         "audio/mpeg"
       );
       line.durationMs = durationMs;
+      // Persisted right away, same reasoning as stepImages' per-scene save: without this, a line's
+      // audio only became durable on the NEXT line's pre-generation save (or the outer step's final
+      // save for the very last line) - if the process restarted mid-run before that, an
+      // already-synthesized (and already B2-uploaded) line would silently redo the TTS call on
+      // retry, even though `if (line.audioUrl) continue` above exists specifically to skip exactly
+      // that.
+      episode.markModified("scenes");
+      await episode.save();
+      await emit(episode);
       await sleep(TTS_DELAY_MS);
     }
   }
