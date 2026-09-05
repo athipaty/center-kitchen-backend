@@ -1,7 +1,8 @@
 import { AbsoluteFill, Audio, CalculateMetadataFunction, Composition, Sequence } from "remotion";
 import { Scene } from "./Scene";
 import { PageFlip } from "./PageFlip";
-import type { EpisodeProps } from "./types";
+import { IntroCard } from "./IntroCard";
+import type { EpisodeProps, IntroProps } from "./types";
 
 export const FPS = 30;
 const WIDTH = 1280;
@@ -17,8 +18,14 @@ const sceneDurationInFrames = (scene: EpisodeProps["scenes"][number]) => {
   return Math.max(FPS, Math.round((totalMs / 1000) * FPS)); // at least 1s even if a scene has no dialogue
 };
 
+// 0 when there's no intro at all (older episodes made before this feature) — the title card is
+// skipped entirely rather than showing an empty card. At least 2s even with no audio duration yet
+// (shouldn't happen — TTS always runs before render — but a floor is cheap insurance).
+const introDurationInFrames = (intro: IntroProps | null | undefined) =>
+  intro?.text ? Math.max(FPS * 2, Math.round(((intro.durationMs || 0) / 1000) * FPS)) : 0;
+
 const totalDurationInFrames = (props: EpisodeProps) =>
-  props.scenes.reduce((sum, scene) => sum + sceneDurationInFrames(scene), 0);
+  introDurationInFrames(props.intro) + props.scenes.reduce((sum, scene) => sum + sceneDurationInFrames(scene), 0);
 
 const calculateMetadata: CalculateMetadataFunction<EpisodeProps> = ({ props }) => {
   return { durationInFrames: Math.max(FPS, totalDurationInFrames(props)) };
@@ -36,17 +43,18 @@ export const EpisodeCompositionRoot: React.FC = () => {
       width={WIDTH}
       height={HEIGHT}
       durationInFrames={FPS * 10} // placeholder — calculateMetadata overrides this per-render
-      defaultProps={{ scenes: [], bgmUrl: null } as EpisodeProps}
+      defaultProps={{ title: "", intro: null, scenes: [], bgmUrl: null } as EpisodeProps}
       calculateMetadata={calculateMetadata}
     />
   );
 };
 
-export const EpisodeVideo: React.FC<EpisodeProps> = ({ scenes, bgmUrl }) => {
+export const EpisodeVideo: React.FC<EpisodeProps> = ({ title, intro, scenes, bgmUrl }) => {
+  const introFrames = introDurationInFrames(intro);
   const durations = scenes.map(sceneDurationInFrames);
   const starts: number[] = [];
   {
-    let cursor = 0;
+    let cursor = introFrames;
     for (const d of durations) {
       starts.push(cursor);
       cursor += d;
@@ -59,6 +67,16 @@ export const EpisodeVideo: React.FC<EpisodeProps> = ({ scenes, bgmUrl }) => {
           licensing it properly) — bgmUrl is optional, pass one in per-episode if you have a
           track, otherwise the episode renders with just narration/dialogue audio. */}
       {bgmUrl && <Audio src={bgmUrl} loop volume={0.15} />}
+      {introFrames > 0 && (
+        <Sequence durationInFrames={introFrames} layout="none">
+          <IntroCard
+            durationInFrames={introFrames}
+            title={title || ""}
+            audioUrl={intro?.audioUrl ?? null}
+            imageUrl={scenes[0]?.imageUrl ?? null}
+          />
+        </Sequence>
+      )}
       {scenes.map((scene, i) => (
         <Sequence key={i} from={starts[i]} durationInFrames={durations[i]} layout="none">
           <Scene {...scene} durationInFrames={durations[i]} index={i} />

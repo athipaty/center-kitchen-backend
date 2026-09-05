@@ -122,14 +122,20 @@ character (or whichever character would naturally know) gives the real answer in
 sentences: a small, accurate, age-appropriate fact, not a lecture. Keep it fun and brief, matching
 the rest of the episode's tone.
 
-Write the title and every narration segment in ${scriptLanguage}, regardless of what language the
-premise above happens to be written in — the narrator voice can only read ${scriptLanguage}.
-backgroundPrompt (image generation prompts) should stay in English regardless, since the image
-model doesn't need to match the narration language.
+Also write a one-sentence spoken intro: a short, punchy hook read aloud before the story starts,
+naming the episode title naturally and teasing what's about to happen — like a bedtime-story
+narrator saying "Tonight's tale: [title]..." before diving in. One sentence, not a summary of the
+whole plot.
+
+Write the title, intro, and every narration segment in ${scriptLanguage}, regardless of what
+language the premise above happens to be written in — the narrator voice can only read
+${scriptLanguage}. backgroundPrompt (image generation prompts) should stay in English regardless,
+since the image model doesn't need to match the narration language.
 
 Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
 {
   "title": "short episode title",
+  "intro": "one short, punchy spoken sentence introducing this episode by title before the story starts",
   "scenes": [
     {
       "backgroundPrompt": "a vivid visual description of the setting for this scene, no characters",
@@ -169,7 +175,11 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
     };
   });
 
-  return { title: parsed.title || premise.slice(0, 60), scenes };
+  return {
+    title: parsed.title || premise.slice(0, 60),
+    intro: { text: (parsed.intro || "").trim() },
+    scenes,
+  };
 }
 
 // Summarizes a finished episode into a couple of sentences for the series' continuity log —
