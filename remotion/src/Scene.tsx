@@ -17,11 +17,11 @@ const KEN_BURNS_PATTERNS = [
 ];
 
 // A scene is a full-frame illustration with a slow Ken Burns pan/zoom — no per-line portrait
-// overlay. Motion between scenes additionally comes from the page-flip transition (PageFlip.tsx)
-// at the composition level. The per-line <Audio> Sequence loop is kept unchanged from the old
-// per-line-sprite system — it's still what drives total scene duration and narration sync; a
-// burned-in subtitle rides the same from/duration frame math so captions stay in sync with the
-// line currently playing.
+// overlay, no burned-in captions (YouTube's own subtitle/CC feature covers that, and hardcoding
+// text into the video just blocks the picture instead). Motion between scenes additionally comes
+// from the page-flip transition (PageFlip.tsx) at the composition level. The per-line <Audio>
+// Sequence loop is kept unchanged from the old per-line-sprite system — it's still what drives
+// total scene duration and narration sync.
 export const Scene: React.FC<SceneProps & { durationInFrames: number; index: number }> = ({
   imageUrl,
   dialogue,
@@ -57,29 +57,6 @@ export const Scene: React.FC<SceneProps & { durationInFrames: number; index: num
         return (
           <Sequence key={i} from={from} durationInFrames={lineFrames} layout="none">
             <Audio src={line.audioUrl} />
-            {line.text && (
-              <AbsoluteFill
-                style={{ justifyContent: "flex-end", alignItems: "center", padding: "0 60px 48px" }}
-              >
-                <div
-                  style={{
-                    maxWidth: "85%",
-                    padding: "10px 24px",
-                    borderRadius: 12,
-                    backgroundColor: "rgba(0,0,0,0.65)",
-                    color: "#fff",
-                    fontFamily: "'Noto Sans Thai', 'Noto Sans', sans-serif",
-                    fontSize: 32,
-                    fontWeight: 700,
-                    textAlign: "center",
-                    lineHeight: 1.35,
-                    textShadow: "0 2px 4px rgba(0,0,0,0.6)",
-                  }}
-                >
-                  {line.text}
-                </div>
-              </AbsoluteFill>
-            )}
           </Sequence>
         );
       })}

@@ -451,7 +451,7 @@ async function stepTts(episode) {
       episode.statusDetail = `narration for scene ${scene.order + 1} line ${i + 1}`;
       await episode.save();
       await emit(episode);
-      const { buffer, durationMs } = await synthesize(line.text, narratorVoice, line.expression);
+      const { buffer, durationMs } = await synthesize(line.text, narratorVoice);
       line.audioUrl = await uploadToB2(
         buffer,
         `youtube/episodes/${episode._id}/scene${scene.order}-line${i}.mp3`,

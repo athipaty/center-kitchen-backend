@@ -18,30 +18,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_ATTEMPTS = 4;
 const RETRY_DELAY_MS = 3000;
 
-// Per-expression prosody nudges (rate/pitch/volume) so a line's delivery matches the emotion the
-// script assigned it, instead of every line — happy, sad, angry, whatever — coming out in the same
-// flat neutral read. Values are deliberately mild: edge-tts's prosody SSML is a fixed % shift over
-// the whole line, not real acting, so anything more aggressive starts to sound distorted rather
-// than expressive. Mirrors EXPRESSIONS in claudeScript.js; anything unlisted (or 'neutral') gets no
-// adjustment.
-const EXPRESSION_PROSODY = {
-  happy: { rate: "+8%", pitch: "+15Hz" },
-  excited: { rate: "+15%", pitch: "+25Hz", volume: "+10%" },
-  laughing: { rate: "+10%", pitch: "+20Hz" },
-  sad: { rate: "-12%", pitch: "-20Hz", volume: "-10%" },
-  embarrassed: { rate: "-5%", pitch: "-10Hz" },
-  confused: { rate: "-5%", pitch: "+5Hz" },
-  angry: { rate: "+10%", pitch: "+10Hz", volume: "+15%" },
-  surprised: { rate: "+12%", pitch: "+30Hz" },
-  curious: { rate: "+3%", pitch: "+10Hz" },
-};
-
-async function synthesize(text, voiceName, expression) {
-  const prosody = EXPRESSION_PROSODY[expression];
+async function synthesize(text, voiceName) {
   let lastErr;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const tts = new EdgeTTS(text, voiceName, prosody);
+      const tts = new EdgeTTS(text, voiceName);
       const result = await tts.synthesize();
       const buffer = Buffer.from(await result.audio.arrayBuffer());
       const durationMs = getMp3Duration(buffer);
