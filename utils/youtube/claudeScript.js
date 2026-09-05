@@ -68,9 +68,13 @@ async function generateScript(series, characters, premise) {
   // linear fit through two anchor points instead — (1 min -> 6-8 scenes) and (5 min -> 10-14,
   // preserving the original tuning) — so a picture changes roughly every 8-10s of narration at
   // any target length instead of the old ~25-30s.
+  // Bumped again on top of the original anchors (1 min -> 6-8, 5 min -> 10-14) for faster-cutting
+  // pacing — (1 min -> 8-10, 5 min -> 14-18) — so the picture changes noticeably more often without
+  // re-flattening into a single multiplier, which is what undershot short episodes in the first
+  // place (see the comment above).
   const targetMinutesForScenes = series.targetEpisodeMinutes || 5;
-  const sceneCountLow = Math.max(2, Math.round(targetMinutesForScenes + 5));
-  const sceneCountHigh = Math.max(sceneCountLow + 1, Math.round(targetMinutesForScenes * 1.5 + 6.5));
+  const sceneCountLow = Math.max(2, Math.round(targetMinutesForScenes * 1.5 + 6.5));
+  const sceneCountHigh = Math.max(sceneCountLow + 1, Math.round(targetMinutesForScenes * 2 + 8));
 
   const prompt = `You are writing one episode of an ongoing narrated "motion comic" style story series.
 
@@ -89,22 +93,27 @@ This episode's premise: ${premise}
 
 Write the episode as ${sceneCountLow}-${sceneCountHigh} scenes. Each scene becomes exactly ONE
 illustration that stays on screen for that whole scene's narration — so a scene should cover ONE
-visual moment/beat, not a whole stretch of the story. Roughly 3-6 narration segments per scene is
+visual moment/beat, not a whole stretch of the story. Roughly 1-3 narration segments per scene is
 the target; if a moment needs more than that to play out, split it into an additional scene instead
 of piling more segments onto one — a new development, action, or emotional turn should mean a new
-scene (and therefore a new picture), not more narration crammed under the same static image.
+scene (and therefore a new picture), not more narration crammed under the same static image. More,
+shorter scenes are strongly preferred over fewer, longer ones — the picture should change often.
 
 This is read aloud by ONE storyteller voice, not a cast of voice actors — write it the way a
 bedtime-story narrator reads a picture book aloud, not as a dialogue-driven script. Any character
 speech belongs INSIDE the narration as reported or quoted speech the storyteller voices themselves
 (e.g. "Ruso peeked over the log and whispered, 'Is anyone there?'" or "Milo asked why the sky turns
-orange at sunset."), never as a separate line attributed to that character. Each scene has a
-background description, which characters are visually on screen, and a sequence of narration
-segments telling that scene's beat. At natural narration pace, the total narration across the whole
-script must be AT LEAST ${targetWords} words — treat this as a strict floor, not a suggestion, and
-aim past it (${targetWords}-${targetWordsCeiling} words) for safety margin. Undershooting this —
-writing too few scenes, or too little narration — is the single most common mistake; if you're
-unsure, add more scenes to cover more distinct moments rather than lengthening existing ones.
+orange at sunset."), never as a separate line attributed to that character. Keep every narration
+segment tight and economical: state the beat plainly in 1-2 short sentences and move on. Do not
+restate what the image already shows, over-explain a character's feelings, or pad a segment once its
+point is made — if the episode needs more length, reach it with more scenes covering more distinct
+moments, never with longer or more repetitive sentences. Each scene has a background description,
+which characters are visually on screen, and a sequence of narration segments telling that scene's
+beat. At natural narration pace, the total narration across the whole script must be AT LEAST
+${targetWords} words (up to about ${targetWordsCeiling} words) — treat the floor as a strict
+minimum met by adding more scenes/beats, not by writing longer or more elaborate sentences.
+Undershooting this — writing too few scenes, or too little narration — is the single most common
+mistake; if you're unsure, add more (short) scenes to cover more distinct moments.
 
 Somewhere in the episode, include one "curiosity beat": a character notices something (an animal,
 object, or place) and asks a genuine, kid-friendly "why" or "how" question about it. Another
@@ -127,7 +136,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
       "charactersOnScreen": ["exact name from the list above, for every character actually visible/present in this scene — including ones who are silently reacting, listening, or just standing there, not only whoever is mentioned speaking"],
       "cameraMove": "one of: ${CAMERA_MOVES.join(", ")}",
       "narration": [
-        { "expression": "one of: ${EXPRESSIONS.join(", ")} — the storyteller's vocal tone for this segment", "text": "1-3 sentence chunk of story narration for this beat, third-person storyteller voice; quoted character speech inside it is fine" }
+        { "text": "1-2 short, concise sentences of story narration for this beat, third-person storyteller voice; quoted character speech inside it is fine" }
       ]
     }
   ]
@@ -143,10 +152,7 @@ Return ONLY a raw JSON object (no markdown fences) in exactly this shape:
   const byName = new Map(characters.map((c) => [c.name.toLowerCase(), c]));
 
   const scenes = (parsed.scenes || []).map((s, i) => {
-    const narration = (s.narration || []).map((n) => ({
-      expression: EXPRESSIONS.includes(n.expression) ? n.expression : "neutral",
-      text: n.text || "",
-    }));
+    const narration = (s.narration || []).map((n) => ({ text: n.text || "" }));
     // Nothing speaks a line anymore (one storyteller voices the whole episode), so
     // charactersOnScreen is purely Claude's explicit list of who's visually present this scene —
     // there's no dialogue-derived signal left to union it with.

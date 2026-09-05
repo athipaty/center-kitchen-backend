@@ -7,7 +7,6 @@ const mongoose = require("mongoose");
 // audioUrl/durationMs, which is what drives that scene's on-screen timing in Remotion.
 const narrationLineSchema = new mongoose.Schema(
   {
-    expression: { type: String, default: "neutral" }, // narrator's vocal tone for this segment — prosody nudge in edgeTts.js
     text: { type: String, required: true },
     audioUrl: { type: String, default: null }, // B2 URL, filled during the 'tts' step
     durationMs: { type: Number, default: null }, // filled during the 'tts' step, drives scene timing

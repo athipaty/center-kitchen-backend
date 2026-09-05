@@ -366,7 +366,7 @@ router.get("/episodes/:id", async (req, res) => {
   }
 });
 
-// Edit narration text/expression and/or background prompts at any checkpoint that already has
+// Edit narration text and/or background prompts at any checkpoint that already has
 // scene data to show — "script" (script only), "images" (+ scene art), "review" (+ narration
 // audio), or "rendered" (+ finished video, which an edit here does NOT touch; re-approving render
 // afterward is what actually replaces it). Only touches what actually changed and re-enters the
@@ -411,9 +411,6 @@ router.put("/episodes/:id/scenes", async (req, res) => {
           line.durationMs = null;
           needsTts = true;
         }
-        if (editedLine.expression && editedLine.expression !== line.expression) {
-          line.expression = editedLine.expression; // free — just a prosody nudge for the next TTS pass, not a new image
-        }
       });
     }
 
@@ -430,8 +427,8 @@ router.put("/episodes/:id/scenes", async (req, res) => {
     const targetStatus = Object.keys(STATUS_POSITION).find((k) => STATUS_POSITION[k] === targetPos);
     const willRegenerate = targetStatus !== episode.status;
     episode.status = targetStatus;
-    // else: only expressions changed (or nothing did, or an edit at "script"/"images" didn't
-    // invalidate anything that's actually been generated yet) — status stays put, nothing to redo.
+    // else: nothing changed, or an edit at "script"/"images" didn't invalidate anything that's
+    // actually been generated yet — status stays put, nothing to redo.
     await episode.save();
 
     if (willRegenerate) {
