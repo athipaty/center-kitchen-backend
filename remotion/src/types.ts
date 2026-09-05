@@ -12,7 +12,15 @@ export type SceneProps = {
   dialogue: DialogueLineProps[];
 };
 
+export type IntroProps = {
+  text: string;
+  audioUrl: string | null;
+  durationMs: number | null;
+};
+
 export type EpisodeProps = {
+  title?: string;
+  intro?: IntroProps | null;
   scenes: SceneProps[];
   bgmUrl?: string | null;
 };

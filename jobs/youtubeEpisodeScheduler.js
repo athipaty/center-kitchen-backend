@@ -43,8 +43,9 @@ async function stepScript(episode) {
   await episode.save();
   await emit(episode);
 
-  const { title, scenes } = await generateScript(series, characters, episode.premise);
+  const { title, intro, scenes } = await generateScript(series, characters, episode.premise);
   episode.title = title;
+  episode.intro = intro;
   episode.scenes = scenes;
   episode.status = "script";
   episode.statusDetail = "";
@@ -387,9 +388,14 @@ async function stepImages(episode) {
       const seed = Math.floor(Math.random() * 1e9);
       const cast = sceneCast(scene, byId);
       const buffer = await generateSceneImageBuffer(scene, series, cast, seed);
+      // Seed-tagged key (not a fixed "sceneN.jpg") for the same reason regenerateSceneImage below
+      // uses one: uploadToB2 defaults to a year of "immutable" caching, and this exact upload path
+      // now also runs on a redo (an edited backgroundPrompt, or the bulk "regenerate all images"
+      // action both null out imageUrl and re-enter here) - a fixed key would mean the browser/CDN
+      // keeps serving the old cached image forever, the same bug just fixed for rerendered video.
       scene.imageUrl = await uploadToB2(
         buffer,
-        `youtube/episodes/${episode._id}/scene${scene.order}.jpg`,
+        `youtube/episodes/${episode._id}/scene${scene.order}-${seed}.jpg`,
         "image/jpeg"
       );
       // Persisted right away rather than left for the eventual end-of-step save: if a later scene
@@ -444,6 +450,29 @@ async function stepTts(episode) {
   const series = await Series.findById(episode.series);
   const narratorVoice = series.narratorVoice || defaultNarratorVoice(series.voiceLocale);
 
+  // The title-card intro line, if this episode has one (older episodes from before the intro
+  // feature won't) — same "already generated, skip it" resume guard as every line below.
+  if (episode.intro?.text && !episode.intro.audioUrl) {
+    episode.statusDetail = "narration for intro";
+    await episode.save();
+    await emit(episode);
+    const { buffer, durationMs } = await synthesize(episode.intro.text, narratorVoice);
+    // Timestamp-tagged key, not a fixed "intro.mp3" - same immutable-cache reasoning as the
+    // per-line key below and the video render fix: this can be redone (an edited intro line, or
+    // the bulk "redo all narration" action), and a fixed key would serve the stale cached audio
+    // forever after a redo.
+    episode.intro.audioUrl = await uploadToB2(
+      buffer,
+      `youtube/episodes/${episode._id}/intro-${Date.now()}.mp3`,
+      "audio/mpeg"
+    );
+    episode.intro.durationMs = durationMs;
+    episode.markModified("intro");
+    await episode.save();
+    await emit(episode);
+    await sleep(TTS_DELAY_MS);
+  }
+
   for (const scene of episode.scenes) {
     for (let i = 0; i < scene.narration.length; i++) {
       const line = scene.narration[i];
@@ -452,9 +481,13 @@ async function stepTts(episode) {
       await episode.save();
       await emit(episode);
       const { buffer, durationMs } = await synthesize(line.text, narratorVoice);
+      // Timestamp-tagged key, not a fixed "sceneN-lineI.mp3" - this upload also runs on a redo (an
+      // edited line, or the bulk "redo all narration" action both null out audioUrl and re-enter
+      // here), and uploadToB2 defaults to a year of "immutable" caching - the same bug just fixed
+      // for rerendered video, so it needs the same fix.
       line.audioUrl = await uploadToB2(
         buffer,
-        `youtube/episodes/${episode._id}/scene${scene.order}-line${i}.mp3`,
+        `youtube/episodes/${episode._id}/scene${scene.order}-line${i}-${Date.now()}.mp3`,
         "audio/mpeg"
       );
       line.durationMs = durationMs;
@@ -487,6 +520,13 @@ async function stepRenderAndUpload(episode) {
   await emit(episode);
 
   const props = {
+    // Title card up front, over scene 1's own image (no extra image-gen cost) — see IntroCard.tsx.
+    // Older episodes made before this feature have no intro.text, so there's nothing to show and
+    // EpisodeComposition.tsx skips the card entirely.
+    title: episode.title,
+    intro: episode.intro?.text
+      ? { text: episode.intro.text, audioUrl: episode.intro.audioUrl, durationMs: episode.intro.durationMs }
+      : null,
     scenes: episode.scenes.map((scene) => ({
       imageUrl: scene.imageUrl,
       // Remotion's SceneProps still calls this `dialogue` (see remotion/src/types.ts) — it only

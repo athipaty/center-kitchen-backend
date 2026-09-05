@@ -390,9 +390,17 @@ router.put("/episodes/:id/scenes", async (req, res) => {
       return res.status(409).json({ error: "This episode isn't at a step that can be revised right now." });
     }
 
-    const { scenes: editedScenes = [] } = req.body;
+    const { scenes: editedScenes = [], intro: editedIntro } = req.body;
     let needsImages = false;
     let needsTts = false;
+
+    if (
+      editedIntro && typeof editedIntro.text === "string" &&
+      editedIntro.text.trim() !== (episode.intro?.text || "").trim()
+    ) {
+      episode.intro = { text: editedIntro.text.trim(), audioUrl: null, durationMs: null };
+      needsTts = true;
+    }
 
     for (const edited of editedScenes) {
       const scene = episode.scenes.find((s) => s.order === edited.order);
@@ -522,9 +530,10 @@ router.post("/episodes/:id/regenerate-images", async (req, res) => {
   }
 });
 
-// Redo EVERY narration line's audio in one go — for when the audio itself should be rerolled
-// without touching the text (e.g. after changing the series' narratorVoice, so an already-generated
-// episode can catch up to the new voice) rather than editing each line's text to force a redo.
+// Redo EVERY narration line's audio (and the intro line's, if this episode has one) in one go —
+// for when the audio itself should be rerolled without touching the text (e.g. after changing the
+// series' narratorVoice, so an already-generated episode can catch up to the new voice) rather than
+// editing each line's text to force a redo.
 // Same resumable-reset pattern as regenerate-images above: clear what needs to redo, drop status
 // back to the step before TTS, let stepTts's own per-line skip/resume loop do the work. Allowed at
 // "review" (audio already exists) and "rendered" (redo audio without touching the finished video
@@ -542,8 +551,13 @@ router.post("/episodes/:id/regenerate-narration", async (req, res) => {
         line.durationMs = null;
       }
     }
+    if (episode.intro?.text) {
+      episode.intro.audioUrl = null;
+      episode.intro.durationMs = null;
+      episode.markModified("intro");
+    }
     episode.markModified("scenes");
-    episode.status = "images"; // stepTts picks up from here and re-rolls every line
+    episode.status = "images"; // stepTts picks up from here and re-rolls every line (and the intro)
     episode.statusDetail = "";
     await episode.save();
     scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
@@ -633,7 +647,8 @@ router.post("/episodes/:id/rerender", async (req, res) => {
 function resumeStatusAfterError(episode) {
   if (!episode.scenes?.length) return "pending";
   if (!episode.scenes.every((s) => s.imageUrl)) return "script";
-  if (!episode.scenes.every((s) => s.narration.every((d) => d.audioUrl))) return "images";
+  const introDone = !episode.intro?.text || episode.intro.audioUrl;
+  if (!introDone || !episode.scenes.every((s) => s.narration.every((d) => d.audioUrl))) return "images";
   if (!episode.videoUrl) return "tts";
   return "uploading"; // rendered, only the YouTube publish step was left to fail
 }

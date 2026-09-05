@@ -14,6 +14,19 @@ const narrationLineSchema = new mongoose.Schema(
   { timestamps: false }
 );
 
+// A short spoken hook read before scene 1 - written by Claude alongside the script (see
+// generateScript in claudeScript.js), synthesized during the 'tts' step just like any narration
+// line. Rendered over scene 1's own image as a title card (see EpisodeComposition.tsx's IntroCard)
+// rather than generating a separate image for it, so it costs nothing extra to add.
+const introSchema = new mongoose.Schema(
+  {
+    text: { type: String, default: "" },
+    audioUrl: { type: String, default: null }, // B2 URL, filled during the 'tts' step
+    durationMs: { type: Number, default: null }, // filled during the 'tts' step, drives title card timing
+  },
+  { timestamps: false, _id: false }
+);
+
 const sceneSchema = new mongoose.Schema(
   {
     order: { type: Number, required: true },
@@ -34,6 +47,7 @@ const episodeSchema = new mongoose.Schema(
     episodeNumber: { type: Number, required: true },
     premise: { type: String, required: true }, // the one-line prompt that kicked off this episode
     title: { type: String, default: "" }, // filled in by Claude during the 'script' step
+    intro: { type: introSchema, default: () => ({}) },
     scenes: [sceneSchema],
     // Drives the render job pipeline (jobs/youtubeEpisodeScheduler.js) — each status is one
     // completed pipeline step; the scheduler picks up anything not in ['done','error'] and
