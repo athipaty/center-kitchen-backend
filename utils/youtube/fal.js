@@ -3,13 +3,26 @@ const axios = require("axios");
 // Verified directly against the live API (fal.ai's own docs pages kept 429-ing) — both endpoints
 // return { images: [{ url, width, height, content_type }], seed, ... } on success.
 async function callFal(model, body) {
-  const { data } = await axios.post(`https://fal.run/${model}`, body, {
-    headers: {
-      Authorization: `Key ${process.env.FAL_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    timeout: 240000, // observed real calls taking 60-150s+ despite sub-second reported "inference" time
-  });
+  let data;
+  try {
+    ({ data } = await axios.post(`https://fal.run/${model}`, body, {
+      headers: {
+        Authorization: `Key ${process.env.FAL_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 240000, // observed real calls taking 60-150s+ despite sub-second reported "inference" time
+    }));
+  } catch (err) {
+    // axios's own err.message ("Request failed with status code 422") can't tell a bad parameter
+    // apart from a rejected image URL apart from a content-policy block, all of which return
+    // different HTTP statuses but the same useless message — fal.ai's actual reason lives in the
+    // response body (FastAPI-style {"detail": ...} on a 422, or {"detail": {"error": ...}} on
+    // others), so surface it in both the logs and the thrown error instead of guessing.
+    const detail = err.response?.data?.detail;
+    const reason = typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : err.message;
+    console.error(`fal.ai ${model} failed (${err.response?.status ?? "?"}):`, reason);
+    throw new Error(`fal.ai ${model} ${err.response?.status ?? ""}: ${reason}`.trim());
+  }
   const url = data?.images?.[0]?.url;
   if (!url) throw new Error(`fal.ai ${model} returned no image`);
   const { data: imgData } = await axios.get(url, { responseType: "arraybuffer", timeout: 60000 });
