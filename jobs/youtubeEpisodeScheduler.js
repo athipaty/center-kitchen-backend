@@ -672,19 +672,34 @@ function start(socketIo) {
   io = socketIo;
   // No ongoing background sweep — every stage (script, sprites, backgrounds, narration,
   // approve-render, upload) only ever runs when a human explicitly triggers it (a button click
-  // hitting triggerNow via routes/youtube/index.js), one step at a time. A server restart mid-
-  // MANUAL step (pending/script/images) just leaves that episode idle at its last-saved status
-  // until the next manual click resumes it — safe, since every step already skips whatever it
-  // finds already generated.
+  // hitting triggerNow via routes/youtube/index.js), one step at a time.
   //
-  // 'tts'/'rendering'/'uploading' are different: once a human clicks "Approve & render", the
-  // pipeline is supposed to run straight through to 'done' with no further clicks, so the
-  // frontend shows no button for these — just a progress spinner. If the process dies mid-step
-  // (e.g. a redeploy landing mid-render), the episode is left stuck forever: inFlightEpisodes is
-  // gone (a fresh Set every boot) but nothing is left to ever call triggerNow again. Right after a
-  // fresh boot is the one moment it's safe to assume nothing else could legitimately still be
-  // working on these — there's no other instance that could be — so resume any found here, once.
-  Episode.find({ status: { $in: ["tts", "rendering", "uploading"] } })
+  // A server restart mid-MANUAL step (pending/script/images) is NOT actually safe to just leave
+  // idle, despite this comment previously claiming otherwise: status only advances to the next
+  // value once the WHOLE step finishes (e.g. status stays "script" for the entire scene-by-scene
+  // loop in stepImages, only becoming "images" once every scene is done) — so a step killed
+  // partway through leaves statusDetail non-empty ("scene 9/16") with no live process behind it.
+  // The frontend's isManualStep/isAdvancing check treats any non-empty statusDetail on a manual
+  // status as "currently running" and hides the Advance button specifically to avoid a double-
+  // click racing the real run — which means an interrupted step shows as permanently "working" in
+  // the UI with no button left to click. Resuming these here, alongside 'tts'/'rendering'/
+  // 'uploading' below, is what actually makes that safe: right after a fresh boot is the one
+  // moment nothing else could legitimately still be working on any of these (inFlightEpisodes is a
+  // fresh Set every boot), so anything with a non-empty statusDetail is unambiguously interrupted
+  // work, not a genuinely-idle episode waiting on its next manual click (those keep statusDetail
+  // cleared to "").
+  //
+  // 'tts'/'rendering'/'uploading' are different in *why* they need this (once a human clicks
+  // "Approve & render" the pipeline is supposed to run straight through to 'done' with no further
+  // clicks at all, so the frontend shows no button for these ever, manual-step or not) but the
+  // same fix applies for the same underlying reason: nothing is left to ever call triggerNow again
+  // otherwise.
+  Episode.find({
+    $or: [
+      { status: { $in: ["tts", "rendering", "uploading"] } },
+      { status: { $in: ["pending", "script", "images"] }, statusDetail: { $ne: "" } },
+    ],
+  })
     .then((stuck) => {
       for (const episode of stuck) {
         processOne(episode).catch((e) => console.error(`startup resume failed for ${episode._id}:`, e.message));
