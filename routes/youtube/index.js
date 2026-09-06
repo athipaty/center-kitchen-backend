@@ -208,6 +208,24 @@ router.patch("/characters/:id", async (req, res) => {
   }
 });
 
+// Reroll a character's locked reference portrait (the identity anchor every scene image featuring
+// them is conditioned on — see Character.referenceImageUrl) without touching anything else about
+// the character. Single image, awaited inline like the per-scene regenerate-image route below,
+// unlike the multi-image sprite batch further down which needs the 202+socket pattern. Main use
+// case: fal.ai's content checker false-flagging a scene that uses this character's photo — a fresh
+// generation can dodge the same probabilistic classifier since the actual image bytes change even
+// though the character's text description doesn't.
+router.post("/characters/:id/regenerate-reference", async (req, res) => {
+  try {
+    const character = await Character.findById(req.params.id);
+    if (!character) return res.status(404).json({ error: "Character not found" });
+    await scheduler.regenerateCharacterReferenceImage(character);
+    res.json(character);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Kicks off sprite generation in the background instead of awaiting it inline — a full 5-sprite
 // batch takes 80-150s+ (Pollinations' ~16s sequential rate limit), too long to hold open as a
 // single HTTP request without it being fragile to any connection blip (a dev-server restart, a

@@ -286,8 +286,7 @@ function backfillMissingSprites(character, onProgress, expressions = EXPRESSIONS
 // and both generate one — harmless (whichever save lands last just wins, no corruption, and the
 // loser's image is simply never referenced again), not worth extra locking machinery for a
 // one-time cost.
-async function ensureCharacterReferenceImage(character) {
-  if (character.referenceImageUrl) return character.referenceImageUrl;
+async function generateAndSaveCharacterReference(character) {
   // Reuses buildSpritePrompt's "neutral" prompt — already exactly a clean, single-subject,
   // no-background identity portrait, which is exactly what a reference photo needs to be.
   const prompt = buildSpritePrompt(character, "neutral");
@@ -302,6 +301,25 @@ async function ensureCharacterReferenceImage(character) {
   const url = await uploadToB2(buffer, `youtube/characters/${character._id}/reference-${seed}.jpg`, "image/jpeg");
   character.referenceImageUrl = url;
   await Character.updateOne({ _id: character._id }, { referenceImageUrl: url });
+  return url;
+}
+
+async function ensureCharacterReferenceImage(character) {
+  if (character.referenceImageUrl) return character.referenceImageUrl;
+  return generateAndSaveCharacterReference(character);
+}
+
+// Manual reroll of an already-generated reference portrait — e.g. when fal.ai's content checker
+// false-flags a scene that references this character's photo (see fal.js's callFal error
+// surfacing): the checker evaluates the actual image bytes, not just the text prompt, so a fresh
+// generation can dodge the same probabilistic classifier even though the character's text
+// description hasn't changed. Existing scene images already generated from the old portrait are
+// untouched (only future generations pick up the new one) — deletes the old B2 file once the new
+// one is safely uploaded, same cleanup pattern as regenerateSceneImage.
+async function regenerateCharacterReferenceImage(character) {
+  const oldUrl = character.referenceImageUrl;
+  const url = await generateAndSaveCharacterReference(character);
+  if (oldUrl) await deleteB2File(b2KeyFromUrl(oldUrl)).catch(() => {});
   return url;
 }
 
@@ -713,4 +731,4 @@ async function triggerNow(episodeId) {
   if (episode) await processOne(episode);
 }
 
-module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneImage, isEpisodeInFlight };
+module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneImage, regenerateCharacterReferenceImage, isEpisodeInFlight };
