@@ -57,6 +57,16 @@ async function generateCharacterImage(prompt, referenceImageUrl, { seed = null }
 const SCENE_IMAGE_SIZE = "landscape_16_9";
 const PORTRAIT_IMAGE_SIZE = "square_hd";
 
+// fal.ai's content checker defaults to safety_tolerance 2 (1 strictest - 5 most permissive), which
+// false-positived on a completely benign kids' cartoon prompt ("kids' cartoon illustration... A
+// young fox kit... A small hedgehog...") - multi-reference identity-preserving editing seems to
+// trip this filter more readily than plain text-to-image. Every prompt this app sends is
+// constrained to the same "children's animated cartoon illustration" framing (see
+// buildScenePrompt/buildSpritePrompt in youtubeEpisodeScheduler.js), so there's no genuine safety
+// need for the strict default here - set to the maximum permissiveness fal.ai allows to stop
+// legitimate content from being blocked.
+const SAFETY_TOLERANCE = "5";
+
 // A character's single locked reference portrait — the identity anchor every scene referencing
 // them gets conditioned on via generateSceneWithReferences below. Plain text-to-image, nothing to
 // reference yet (this IS the reference).
@@ -64,6 +74,7 @@ async function generateCharacterReferenceImage(prompt, { seed = null } = {}) {
   return callFal("fal-ai/flux-2-pro", {
     prompt,
     image_size: PORTRAIT_IMAGE_SIZE,
+    safety_tolerance: SAFETY_TOLERANCE,
     ...(seed != null ? { seed } : {}),
   });
 }
@@ -75,6 +86,7 @@ async function generateSceneImage(prompt, { seed = null } = {}) {
   return callFal("fal-ai/flux-2-pro", {
     prompt,
     image_size: SCENE_IMAGE_SIZE,
+    safety_tolerance: SAFETY_TOLERANCE,
     ...(seed != null ? { seed } : {}),
   });
 }
@@ -91,6 +103,7 @@ async function generateSceneWithReferences(prompt, referenceImageUrls, { seed = 
     prompt,
     image_urls: referenceImageUrls.slice(0, 9),
     image_size: SCENE_IMAGE_SIZE,
+    safety_tolerance: SAFETY_TOLERANCE,
     ...(seed != null ? { seed } : {}),
   });
 }
