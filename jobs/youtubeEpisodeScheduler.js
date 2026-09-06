@@ -597,7 +597,11 @@ async function stepPublishToYoutube(episode) {
 
     const meta = await generateYoutubeMetadata(series, episode);
     const { data: mp4Buffer } = await axios.get(episode.videoUrl, { responseType: "arraybuffer" });
-    const { videoId, url } = await uploadVideoToYoutube(Buffer.from(mp4Buffer), meta);
+    const { videoId, url } = await uploadVideoToYoutube(Buffer.from(mp4Buffer), {
+      ...meta,
+      privacyStatus: episode.youtubePrivacyStatus,
+      selfDeclaredMadeForKids: episode.youtubeMadeForKids,
+    });
     episode.youtubeVideoId = videoId;
     episode.youtubeUrl = url;
     episode.statusDetail = "";

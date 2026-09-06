@@ -63,6 +63,13 @@ const episodeSchema = new mongoose.Schema(
     videoUrl: { type: String, default: null }, // final B2 MP4 URL
     youtubeVideoId: { type: String, default: null }, // filled during the 'uploading' step
     youtubeUrl: { type: String, default: null },
+    // Chosen on the pre-upload review dialog (see routes/youtube/index.js's POST
+    // /episodes/:id/upload-youtube) and read by stepPublishToYoutube when it actually uploads.
+    // Defaults match this app's actual content (kids' fables, meant to go live once rendered) —
+    // "public" and "made for kids: true" rather than YouTube API's own private/false defaults,
+    // which would otherwise leave every upload sitting unpublished and incorrectly self-declared.
+    youtubePrivacyStatus: { type: String, enum: ["public", "unlisted", "private"], default: "public" },
+    youtubeMadeForKids: { type: Boolean, default: true },
     durationMs: { type: Number, default: null },
   },
   { timestamps: true }

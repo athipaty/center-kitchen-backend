@@ -587,12 +587,16 @@ router.post("/episodes/:id/approve-render", async (req, res) => {
   }
 });
 
+const PRIVACY_STATUSES = ["public", "unlisted", "private"];
+
 // Kicks off the actual YouTube publish for an episode paused at "rendered" — split out from the
 // render step (see stepRenderAndUpload's comment) so a human can watch the B2-hosted MP4 in the
 // episode card's player and confirm it's good before it goes to the channel, instead of every
 // render publishing automatically the moment it finishes. Same "momentary handoff" pattern as
 // approve-render: sets status to "uploading" and triggers the scheduler, which dispatches straight
-// to stepPublishToYoutube.
+// to stepPublishToYoutube. privacyStatus/madeForKids come from the frontend's pre-upload review
+// dialog — optional, since the episode's own defaults (public/made-for-kids, see Episode.js) are
+// already right for this app's content; only overridden if the human actually changed them there.
 router.post("/episodes/:id/upload-youtube", async (req, res) => {
   try {
     const episode = await Episode.findById(req.params.id);
@@ -600,6 +604,14 @@ router.post("/episodes/:id/upload-youtube", async (req, res) => {
     if (episode.status !== "rendered") {
       return res.status(409).json({ error: "This episode isn't ready to upload yet." });
     }
+    const { privacyStatus, madeForKids } = req.body;
+    if (privacyStatus !== undefined) {
+      if (!PRIVACY_STATUSES.includes(privacyStatus)) {
+        return res.status(400).json({ error: "privacyStatus must be one of: " + PRIVACY_STATUSES.join(", ") });
+      }
+      episode.youtubePrivacyStatus = privacyStatus;
+    }
+    if (typeof madeForKids === "boolean") episode.youtubeMadeForKids = madeForKids;
     episode.status = "uploading";
     await episode.save();
     scheduler.triggerNow(episode._id).catch((e) => console.error("episode triggerNow failed:", e.message));
