@@ -426,6 +426,10 @@ router.put("/episodes/:id/scenes", async (req, res) => {
       if (typeof edited.backgroundPrompt === "string" && edited.backgroundPrompt.trim() !== scene.backgroundPrompt.trim()) {
         scene.backgroundPrompt = edited.backgroundPrompt.trim();
         scene.imageUrl = null;
+        // A previously-animated clip was generated from the old image and the old prompt — stale
+        // either way once the prompt changes, same reasoning as regenerateSceneImage.
+        scene.animatedClipUrl = null;
+        scene.animatedClipDurationMs = null;
         needsImages = true;
       }
       (edited.narration || []).forEach((editedLine, i) => {
@@ -520,6 +524,32 @@ router.post("/episodes/:id/scenes/:order/regenerate-image", async (req, res) => 
   }
 });
 
+// Opt-in upgrade for one scene: generates a short real-motion clip from its already-generated
+// image (Kling 2.5 Turbo Pro image-to-video, see utils/youtube/falVideo.js) instead of leaving it
+// as a static pan/zoomed picture. Meaningfully higher cost than a scene image (~$0.07/sec of
+// output, so roughly $0.35-$0.70 per clip) — this only ever runs from an explicit click on the
+// review panel, never automatically. Same status gating as regenerate-image above (image has to
+// already exist to animate it, and not once published).
+router.post("/episodes/:id/scenes/:order/animate", async (req, res) => {
+  try {
+    const episode = await Episode.findById(req.params.id);
+    if (!episode) return res.status(404).json({ error: "Episode not found" });
+    if (!["images", "review", "rendered"].includes(episode.status)) {
+      return res.status(409).json({ error: "This episode isn't at a step where this scene can be animated." });
+    }
+    const order = Number(req.params.order);
+    const scene = episode.scenes.find((s) => s.order === order);
+    if (!scene) return res.status(404).json({ error: "Scene not found" });
+    if (!scene.imageUrl) return res.status(409).json({ error: "This scene doesn't have an image yet." });
+
+    await scheduler.animateScene(episode, scene);
+    const fresh = await Episode.findById(episode._id).populate("scenes.charactersOnScreen", "name sprites");
+    res.json(fresh);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Redo EVERY scene's image in one go — for when the whole episode's art should be rerolled (e.g.
 // after switching art style, or just wanting a fresh take on the whole set) rather than one scene
 // at a time via the per-scene endpoint above. Keeps the script and each character's locked
@@ -535,7 +565,13 @@ router.post("/episodes/:id/regenerate-images", async (req, res) => {
     if (!["images", "review", "rendered"].includes(episode.status)) {
       return res.status(409).json({ error: "This episode isn't at a step where images can be regenerated." });
     }
-    for (const scene of episode.scenes) scene.imageUrl = null;
+    for (const scene of episode.scenes) {
+      scene.imageUrl = null;
+      // Stale once the image they were generated from is gone — see regenerateSceneImage's
+      // reasoning for the same cleanup on the single-scene reroll.
+      scene.animatedClipUrl = null;
+      scene.animatedClipDurationMs = null;
+    }
     episode.markModified("scenes");
     episode.status = "script"; // stepImages picks up from here and re-rolls every scene
     episode.statusDetail = "";

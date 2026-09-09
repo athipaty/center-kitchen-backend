@@ -35,6 +35,16 @@ const sceneSchema = new mongoose.Schema(
     // locked description baked into a single prompt for consistency. Filled during the 'images'
     // step (jobs/youtubeEpisodeScheduler.js).
     imageUrl: { type: String, default: null },
+    // Optional opt-in upgrade over the static imageUrl above — a short real-motion clip generated
+    // from it (Kling 2.5 Turbo Pro image-to-video, see utils/youtube/falVideo.js), triggered only
+    // by the review panel's per-scene "Animate this scene" button, never automatically (meaningfully
+    // higher cost per scene than the base illustration). When set, Remotion plays this instead of
+    // panning/zooming imageUrl for this scene — imageUrl itself is kept regardless, both as the
+    // source frame this was generated from and as the fallback if the clip is ever cleared.
+    // Invalidated (cleared) whenever imageUrl is regenerated, since a clip only makes sense
+    // alongside the exact frame it was generated from.
+    animatedClipUrl: { type: String, default: null },
+    animatedClipDurationMs: { type: Number, default: null }, // one of Kling's fixed 5s/10s clip lengths
     charactersOnScreen: [{ type: mongoose.Schema.Types.ObjectId, ref: "YoutubeCharacter" }],
     narration: [narrationLineSchema],
   },

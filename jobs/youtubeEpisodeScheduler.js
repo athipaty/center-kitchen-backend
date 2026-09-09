@@ -10,6 +10,7 @@ const {
   generateSceneImage,
   generateSceneWithReferences,
 } = require("../utils/youtube/fal");
+const { generateSceneVideo } = require("../utils/youtube/falVideo");
 const { synthesize } = require("../utils/youtube/edgeTts");
 const { generateScript, summarizeEpisode, generateYoutubeMetadata, EXPRESSIONS } = require("../utils/youtube/claudeScript");
 const { renderEpisodeToBuffer } = require("../utils/youtube/remotionRender");
@@ -447,17 +448,50 @@ async function regenerateSceneImage(episode, scene) {
   const cast = sceneCast(scene, byId);
   const buffer = await generateSceneImageBuffer(scene, series, cast, seed);
   const oldUrl = scene.imageUrl;
+  const oldClipUrl = scene.animatedClipUrl;
   scene.imageUrl = await uploadToB2(
     buffer,
     `youtube/episodes/${episode._id}/scene${scene.order}-${seed}.jpg`,
     "image/jpeg"
   );
+  // A previously-animated clip was generated FROM the old frame — it no longer matches once the
+  // image changes, so clear it rather than leave a stale clip silently playing over a picture that
+  // no longer resembles it. The human can re-animate the new image from the review panel if they
+  // still want motion on this scene.
+  scene.animatedClipUrl = null;
+  scene.animatedClipDurationMs = null;
   episode.markModified("scenes");
   await episode.save();
 
   // Best-effort — an old file surviving as an orphan is harmless, so a delete failure here
   // shouldn't affect the (already-successful) regeneration result.
   if (oldUrl) await deleteB2File(b2KeyFromUrl(oldUrl)).catch(() => {});
+  if (oldClipUrl) await deleteB2File(b2KeyFromUrl(oldClipUrl)).catch(() => {});
+}
+
+// Opt-in upgrade for one scene: turns its already-generated static image into a short real-motion
+// clip (Kling 2.5 Turbo Pro image-to-video) instead of Remotion's own CSS pan/zoom — meaningfully
+// higher cost than the base illustration (~$0.07/sec), so this only ever runs from the review
+// panel's explicit "Animate this scene" button, never automatically alongside the rest of the
+// episode. Targets the scene's actual narration length when TTS has already run (so the clip
+// roughly covers the scene without needing to loop much); falls back to a flat 5s if narration
+// audio doesn't exist yet (this is allowed before TTS too, same gating as regenerateSceneImage).
+async function animateScene(episode, scene) {
+  const totalNarrationMs = scene.narration.reduce((sum, n) => sum + (n.durationMs || 0), 0);
+  const targetDurationSec = totalNarrationMs > 0 ? totalNarrationMs / 1000 : 5;
+  const motionPrompt = `Animate this scene with natural, subtle character motion matching the described action. Smooth continuous movement, no jarring cuts, no camera shake, no text overlays, no scene changes. ${scene.backgroundPrompt}`;
+  const { buffer, durationSec } = await generateSceneVideo(scene.imageUrl, motionPrompt, targetDurationSec);
+  const oldClipUrl = scene.animatedClipUrl;
+  scene.animatedClipUrl = await uploadToB2(
+    buffer,
+    `youtube/episodes/${episode._id}/scene${scene.order}-clip-${Date.now()}.mp4`,
+    "video/mp4"
+  );
+  scene.animatedClipDurationMs = durationSec * 1000;
+  episode.markModified("scenes");
+  await episode.save();
+
+  if (oldClipUrl) await deleteB2File(b2KeyFromUrl(oldClipUrl)).catch(() => {});
 }
 
 // images -> review: one audio file per narration segment, all read by the series' single
@@ -547,6 +581,11 @@ async function stepRenderAndUpload(episode) {
       : null,
     scenes: episode.scenes.map((scene) => ({
       imageUrl: scene.imageUrl,
+      // Optional opt-in real-motion clip (Kling image-to-video) - Scene.tsx plays this instead of
+      // panning/zooming imageUrl when present. Most scenes won't have one (it's per-scene, paid,
+      // manually triggered), so this is null far more often than not.
+      videoUrl: scene.animatedClipUrl || null,
+      videoDurationMs: scene.animatedClipDurationMs || null,
       // Remotion's SceneProps still calls this `dialogue` (see remotion/src/types.ts) — it only
       // cares about an ordered list of {audioUrl, durationMs, text} segments to sequence, not who
       // said them, so the DB's `narration` field maps straight onto it unchanged.
@@ -731,4 +770,4 @@ async function triggerNow(episodeId) {
   if (episode) await processOne(episode);
 }
 
-module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneImage, regenerateCharacterReferenceImage, isEpisodeInFlight };
+module.exports = { start, triggerNow, generateCharacterSprites, regenerateCharacterSprite, backfillMissingSprites, regenerateSceneImage, regenerateCharacterReferenceImage, animateScene, isEpisodeInFlight };
