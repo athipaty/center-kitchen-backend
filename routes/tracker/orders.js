@@ -105,6 +105,26 @@ router.post("/check-new", async (req, res) => {
   }
 });
 
+// GET full order history (bypasses the DELIVERED_RETENTION_DAYS filter that getOrdersList()
+// applies) so we can audit tracking-upload status across older delivered/notified orders too —
+// e.g. to cross-check against eBay's "tracking uploaded on time and validated" seller metric,
+// which getOrdersList()'s working-queue view can't see once an order has aged off it.
+router.get("/history", async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days, 10) || 90, 365);
+    const since = new Date(Date.now() - days * 86400000);
+    const orders = await Order.find({
+      $or: [{ createTimeEbay: { $gte: since } }, { createTimeEbay: null, createdAt: { $gte: since } }],
+    })
+      .sort({ createTimeEbay: -1, createdAt: -1 })
+      .select('ebayOrderId ebayItemId title status trackingNumber carrier createTimeEbay createdAt updatedAt deliveredAt')
+      .lean();
+    res.json(orders.map(o => ({ ...o, hasTracking: Boolean(o.trackingNumber) })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE remove an order from the list once it's fully handled
 router.delete("/:id", async (req, res) => {
   try {
