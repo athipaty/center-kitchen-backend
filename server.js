@@ -33,34 +33,34 @@ const checkLimiter      = rateLimit({ windowMs: 60_000, max: 60, standardHeaders
 /* =====================
    MIDDLEWARE
 ===================== */
-app.use(
-  cors({
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "https://athipaty-center-kitchen-frontend.vercel.app",
-      "https://supplier-nine.vercel.app",
-      "https://milk-tracker-rho-topaz.vercel.app",
-      "https://wc7fr.csb.app",
-      "https://frtstock.vercel.app",
-      "https://productportal-jade.vercel.app",
-      "https://frtforecast.vercel.app",
-      "https://sgostock.vercel.app",
-      "https://expense-six-red.vercel.app",
-      "https://maesaiphayao.vercel.app",
-      "https://my-react-app-eight-rust.vercel.app",
-      "https://tong-alpha.vercel.app",
-      "https://amazon-theta-liard.vercel.app",
-      "https://puthailand.vercel.app",
-      "https://egp-steel.vercel.app",
-      "https://youtube-tan-sigma.vercel.app",
-      "https://modu-high-1pde.vercel.app",
-      "https://profile-kappa-sand.vercel.app",
-      "https://craft-adventure.vercel.app",
-    ],
-    credentials: true,
-  }),
-);
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "https://athipaty-center-kitchen-frontend.vercel.app",
+  "https://supplier-nine.vercel.app",
+  "https://milk-tracker-rho-topaz.vercel.app",
+  "https://wc7fr.csb.app",
+  "https://frtstock.vercel.app",
+  "https://productportal-jade.vercel.app",
+  "https://frtforecast.vercel.app",
+  "https://sgostock.vercel.app",
+  "https://expense-six-red.vercel.app",
+  "https://maesaiphayao.vercel.app",
+  "https://my-react-app-eight-rust.vercel.app",
+  "https://tong-alpha.vercel.app",
+  "https://amazon-theta-liard.vercel.app",
+  "https://puthailand.vercel.app",
+  "https://egp-steel.vercel.app",
+  "https://youtube-tan-sigma.vercel.app",
+  "https://modu-high-1pde.vercel.app",
+  "https://profile-kappa-sand.vercel.app",
+  "https://craft-adventure.vercel.app",
+];
+// Set once the market frontend is deployed (e.g. to Vercel) so its real
+// origin doesn't need to be hardcoded here ahead of time.
+if (process.env.MARKET_FRONTEND_URL) allowedOrigins.push(process.env.MARKET_FRONTEND_URL);
+
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 
 /* =====================
@@ -139,6 +139,13 @@ app.use('/api/profile', require('./routes/profile'));
 
 // --- Grocery (Singapore supermarket price tracker) ---
 app.use('/api/grocery', require('./routes/grocery'));
+
+// --- Market (local marketplace: nearby listings + in-app chat) ---
+app.use('/api/market/auth', require('./routes/market/auth'));
+app.use('/api/market/listings', require('./routes/market/listings'));
+app.use('/api/market/conversations', require('./routes/market/conversations'));
+app.use('/api/market/uploads', require('./routes/market/uploads'));
+require('./routes/market/chatSocket').attachMarketChat(io);
 
 /* =====================
    DATABASE
