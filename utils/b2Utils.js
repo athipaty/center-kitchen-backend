@@ -190,4 +190,36 @@ function b2Enabled() {
   return !!(process.env.B2_KEY_ID && process.env.B2_APP_KEY && process.env.B2_BUCKET && process.env.B2_IMAGES_ENABLED === 'true');
 }
 
-module.exports = { uploadToB2, copyB2File, deleteB2Prefix, deleteB2File, b2KeyFromUrl, listB2Files, b2PublicUrl, b2Enabled };
+// Sums size and count of every current file version in the bucket, paginating
+// through b2_list_file_names (1000 per page). Also breaks totals down by
+// top-level folder (e.g. "market-listings", "recipe-images") so usage across
+// projects sharing this bucket is visible at a glance. Only current versions
+// are counted, not old versions of overwritten files — matches how every
+// caller in this file uses content-addressed keys that are never overwritten.
+async function getBucketUsage() {
+  const b2 = await getAuth();
+  let nextFileName;
+  let totalBytes = 0;
+  let fileCount = 0;
+  const byPrefix = {};
+
+  while (true) {
+    const body = { bucketId: b2.bucketId, maxFileCount: 1000 };
+    if (nextFileName) body.startFileName = nextFileName;
+    const { data } = await axios.post(`${b2.apiUrl}/b2api/v3/b2_list_file_names`,
+      body, { headers: { Authorization: b2.authToken }, timeout: 20000 }
+    );
+    for (const f of data.files || []) {
+      const size = f.contentLength || 0;
+      totalBytes += size;
+      fileCount += 1;
+      const topFolder = f.fileName.includes('/') ? f.fileName.split('/')[0] : '(root)';
+      byPrefix[topFolder] = (byPrefix[topFolder] || 0) + size;
+    }
+    if (data.nextFileName) { nextFileName = data.nextFileName; } else { break; }
+  }
+
+  return { totalBytes, fileCount, byPrefix };
+}
+
+module.exports = { uploadToB2, copyB2File, deleteB2Prefix, deleteB2File, b2KeyFromUrl, listB2Files, b2PublicUrl, b2Enabled, getBucketUsage };

@@ -111,6 +111,7 @@ app.use('/api/modu-high/auth',             require('./routes/moduHigh/auth'));
 
 // --- Shared ---
 app.use('/auth', require('./routes/shared/auth'));
+app.use('/api/admin', require('./routes/shared/storage'));
 
 // --- Accounting (Express) ---
 app.use('/api/accounting/auth',      require('./routes/accounting/auth'));
