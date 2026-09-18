@@ -1505,21 +1505,21 @@ router.delete('/documents/:id', requireAuth, async (req, res) => {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const DEFAULT_MENU = [
-  { title: 'à¹€à¸à¸µà¹ˆà¸¢à¸§à¸à¸±à¸š à¸­à¸šà¸•.à¹à¸¡à¹ˆà¹ƒà¸ª',             slug: 'builtin-about',       icon: 'ðŸ›ï¸', path: '/about',          isBuiltin: true, order: 0,  showInNavbar: true  },
-  { title: 'à¸‚à¹ˆà¸²à¸§à¸ªà¸²à¸£/à¸›à¸£à¸°à¸Šà¸²à¸ªà¸±à¸¡à¸žà¸±à¸™à¸˜à¹Œ',            slug: 'builtin-news',        icon: 'ðŸ“°', path: '/news',           isBuiltin: true, order: 1,  showInNavbar: false },
-  { title: 'à¸à¸²à¸£à¹€à¸‡à¸´à¸™/à¸à¸²à¸£à¸„à¸¥à¸±à¸‡',                  slug: 'builtin-finance',     icon: 'ðŸ’°', path: '/finance',        isBuiltin: true, order: 3,  showInNavbar: false },
-  { title: 'à¸ˆà¸±à¸”à¸‹à¸·à¹‰à¸­à¸ˆà¸±à¸”à¸ˆà¹‰à¸²à¸‡',                   slug: 'builtin-procurement', icon: 'ðŸ“‹', path: '/procurement',    isBuiltin: true, order: 4,  showInNavbar: false },
-  { title: 'à¸šà¸¸à¸„à¸¥à¸²à¸à¸£',                           slug: 'builtin-staff',       icon: 'ðŸ‘¥', path: '/staff',          isBuiltin: true, order: 5,  showInNavbar: true  },
-  { title: 'à¸šà¸£à¸´à¸à¸²à¸£à¸ªà¸²à¸˜à¸²à¸£à¸“à¸°',                    slug: 'builtin-public',      icon: 'ðŸŒ', path: '/public-service', isBuiltin: true, order: 6,  showInNavbar: false, isActive: false },
-  { title: 'e-Service',                        slug: 'builtin-eservice',    icon: 'ðŸŒ', path: '/eservice',       isBuiltin: true, order: 7,  showInNavbar: true  },
-  { title: 'à¸£à¹‰à¸­à¸‡à¹€à¸£à¸µà¸¢à¸™/à¸£à¹‰à¸­à¸‡à¸—à¸¸à¸à¸‚à¹Œ',              slug: 'builtin-complaint',   icon: 'ðŸ“®', path: '/complaint',      isBuiltin: true, order: 8,  showInNavbar: true  },
-  { title: 'à¸£à¹‰à¸­à¸‡à¹€à¸£à¸µà¸¢à¸™à¸à¸²à¸£à¸—à¸¸à¸ˆà¸£à¸´à¸•à¹à¸¥à¸°à¸›à¸£à¸°à¸žà¸¤à¸•à¸´à¸¡à¸´à¸Šà¸­à¸š', slug: 'builtin-corruption',  icon: 'ðŸš¨', path: '/corruption',     isBuiltin: true, order: 9,  showInNavbar: true  },
-  { title: 'ITA/OIT',                          slug: 'builtin-ita',         icon: 'ðŸ“', path: '/ita',            isBuiltin: true, order: 10, showInNavbar: false },
-  { title: 'à¸¨à¸¹à¸™à¸¢à¹Œà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸‚à¹ˆà¸²à¸§à¸ªà¸²à¸£',               slug: 'builtin-info',        icon: 'ðŸ“š', path: '/info-center',    isBuiltin: true, order: 11, showInNavbar: false },
-  { title: 'à¸à¸Žà¸«à¸¡à¸²à¸¢/à¸‚à¹‰à¸­à¸šà¸±à¸à¸à¸±à¸•à¸´',                slug: 'builtin-laws',        icon: 'âš–ï¸', path: '/laws',           isBuiltin: true, order: 12, showInNavbar: false },
-  { title: 'à¸•à¸´à¸”à¸•à¹ˆà¸­à¹€à¸£à¸²',                        slug: 'builtin-contact',     icon: 'ðŸ“ž', path: '/contact',        isBuiltin: true, order: 13, showInNavbar: true  },
-  { title: 'à¸ªà¸´à¸™à¸„à¹‰à¸² OTOP',                     slug: 'builtin-products',    icon: 'ðŸ›ï¸', path: '/products',       isBuiltin: true, order: 14, showInNavbar: false },
-  { title: 'à¹à¸«à¸¥à¹ˆà¸‡à¸—à¹ˆà¸­à¸‡à¹€à¸—à¸µà¹ˆà¸¢à¸§',                  slug: 'builtin-travel',      icon: 'ðŸ—ºï¸', path: '/travel',         isBuiltin: true, order: 15, showInNavbar: false },
+  { title: 'à¹€à¸à¸µà¹ˆà¸¢à¸§à¸à¸±à¸š à¸­à¸šà¸•.à¹à¸¡à¹ˆà¹ƒà¸ª',             slug: 'builtin-about',       icon: 'ðŸ›ï¸', path: '/page/builtin-about',          isBuiltin: true, order: 0,  showInNavbar: true  },
+  { title: 'à¸‚à¹ˆà¸²à¸§à¸ªà¸²à¸£/à¸›à¸£à¸°à¸Šà¸²à¸ªà¸±à¸¡à¸žà¸±à¸™à¸˜à¹Œ',            slug: 'builtin-news',        icon: 'ðŸ“°', path: '/page/builtin-news',           isBuiltin: true, order: 1,  showInNavbar: false },
+  { title: 'à¸à¸²à¸£à¹€à¸‡à¸´à¸™/à¸à¸²à¸£à¸„à¸¥à¸±à¸‡',                  slug: 'builtin-finance',     icon: 'ðŸ’°', path: '/page/builtin-finance',        isBuiltin: true, order: 3,  showInNavbar: false },
+  { title: 'à¸ˆà¸±à¸”à¸‹à¸·à¹‰à¸­à¸ˆà¸±à¸”à¸ˆà¹‰à¸²à¸‡',                   slug: 'builtin-procurement', icon: 'ðŸ“‹', path: '/page/builtin-procurement',    isBuiltin: true, order: 4,  showInNavbar: false },
+  { title: 'à¸šà¸¸à¸„à¸¥à¸²à¸à¸£',                           slug: 'builtin-staff',       icon: 'ðŸ‘¥', path: '/page/builtin-staff',          isBuiltin: true, order: 5,  showInNavbar: true  },
+  { title: 'à¸šà¸£à¸´à¸à¸²à¸£à¸ªà¸²à¸˜à¸²à¸£à¸“à¸°',                    slug: 'builtin-public',      icon: 'ðŸŒ', path: '/page/builtin-public', isBuiltin: true, order: 6,  showInNavbar: false, isActive: false },
+  { title: 'e-Service',                        slug: 'builtin-eservice',    icon: 'ðŸŒ', path: '/page/builtin-eservice',       isBuiltin: true, order: 7,  showInNavbar: true  },
+  { title: 'à¸£à¹‰à¸­à¸‡à¹€à¸£à¸µà¸¢à¸™/à¸£à¹‰à¸­à¸‡à¸—à¸¸à¸à¸‚à¹Œ',              slug: 'builtin-complaint',   icon: 'ðŸ“®', path: '/page/builtin-complaint',      isBuiltin: true, order: 8,  showInNavbar: true  },
+  { title: 'à¸£à¹‰à¸­à¸‡à¹€à¸£à¸µà¸¢à¸™à¸à¸²à¸£à¸—à¸¸à¸ˆà¸£à¸´à¸•à¹à¸¥à¸°à¸›à¸£à¸°à¸žà¸¤à¸•à¸´à¸¡à¸´à¸Šà¸­à¸š', slug: 'builtin-corruption',  icon: 'ðŸš¨', path: '/page/builtin-corruption',     isBuiltin: true, order: 9,  showInNavbar: true  },
+  { title: 'ITA/OIT',                          slug: 'builtin-ita',         icon: 'ðŸ“', path: '/page/builtin-ita',            isBuiltin: true, order: 10, showInNavbar: false },
+  { title: 'à¸¨à¸¹à¸™à¸¢à¹Œà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸‚à¹ˆà¸²à¸§à¸ªà¸²à¸£',               slug: 'builtin-info',        icon: 'ðŸ“š', path: '/page/builtin-info',    isBuiltin: true, order: 11, showInNavbar: false },
+  { title: 'à¸à¸Žà¸«à¸¡à¸²à¸¢/à¸‚à¹‰à¸­à¸šà¸±à¸à¸à¸±à¸•à¸´',                slug: 'builtin-laws',        icon: 'âš–ï¸', path: '/page/builtin-laws',           isBuiltin: true, order: 12, showInNavbar: false },
+  { title: 'à¸•à¸´à¸”à¸•à¹ˆà¸­à¹€à¸£à¸²',                        slug: 'builtin-contact',     icon: 'ðŸ“ž', path: '/page/builtin-contact',        isBuiltin: true, order: 13, showInNavbar: true  },
+  { title: 'à¸ªà¸´à¸™à¸„à¹‰à¸² OTOP',                     slug: 'builtin-products',    icon: 'ðŸ›ï¸', path: '/page/builtin-products',       isBuiltin: true, order: 14, showInNavbar: false },
+  { title: 'à¹à¸«à¸¥à¹ˆà¸‡à¸—à¹ˆà¸­à¸‡à¹€à¸—à¸µà¹ˆà¸¢à¸§',                  slug: 'builtin-travel',      icon: 'ðŸ—ºï¸', path: '/page/builtin-travel',         isBuiltin: true, order: 15, showInNavbar: false },
 ]
 
 router.get('/pages', async (req, res) => {
@@ -1532,6 +1532,11 @@ router.get('/pages', async (req, res) => {
       await AbtPage.updateOne({ slug: 'builtin-staff', title: 'à¸šà¸¸à¸„à¸¥à¸²à¸à¸£/à¸à¸´à¸ˆà¸à¸²à¸£à¸ªà¸ à¸²' }, { $set: { title: 'à¸šà¸¸à¸„à¸¥à¸²à¸à¸£' } })
       // Permanently remove development plan page
       await AbtPage.deleteOne({ slug: 'builtin-plan' })
+      // Migrate builtin pages from their old fixed URLs (e.g. /about) to the
+      // /page/<slug> pattern -- same URL scheme as pages created in admin.
+      await Promise.all(DEFAULT_MENU.map(d =>
+        AbtPage.updateOne({ slug: d.slug, isBuiltin: true, path: { $ne: d.path } }, { $set: { path: d.path } })
+      ))
       pages = await AbtPage.find().sort({ order: 1, createdAt: 1 })
     }
     res.json(pages)
