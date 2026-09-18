@@ -290,6 +290,10 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
       const direct = await fetchDirectPriceOnly(asin, baseDomain);
       if (direct.price) {
         console.log(`direct: fetched ${asin} — price=${direct.price}`);
+        // 0 credits, but still recorded so the landing page can tell "checked, landed the
+        // free tier" apart from "not checked in this window at all" — both would otherwise
+        // look identical (absent from the usage map).
+        recordUsage(asin, 0);
         return {
           title: null, price: direct.price, currency: "$",
           image: null, images: [], upc: null,
