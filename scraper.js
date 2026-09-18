@@ -1,7 +1,24 @@
 const axios = require("axios");
+const ScraperUsage = require("./models/tracker/ScraperUsage");
 
 // ── ScraperAPI constants ────────────────────────────────────────────────────
 const SCRAPER_API_BASE = "https://api.scraperapi.com/";
+
+// Fire-and-forget credit-usage tracking, keyed by UTC day so the landing page can show
+// "tokens used today" per item without a separate reset job. Billed on request completion
+// (ScraperAPI charges once it gets a response, whether or not that response had a usable
+// price on it), so this is called right after each axios call resolves, not after we've
+// decided whether the response was useful — that's also why it's void of any try/catch
+// around the caller: a failed usage write should never break a scrape.
+function recordUsage(asin, credits) {
+  if (!asin) return;
+  const date = new Date().toISOString().slice(0, 10);
+  ScraperUsage.findByIdAndUpdate(
+    `${date}:${asin}`,
+    { $inc: { credits, checks: 1 }, $setOnInsert: { date, asin } },
+    { upsert: true }
+  ).catch(() => {});
+}
 
 // ── URL helpers ──────────────────────────────────────────────────────────────
 function cleanUrl(url) {
@@ -77,7 +94,7 @@ function getVariants(data, baseDomain) {
 // autoparse=true on an Amazon product page — verified live: 5 credits/request (not the
 // 1-credit "free plan" rate an old comment here used to claim), no render=true needed since
 // Amazon PDPs are server-rendered HTML.
-async function callScraperApi(amazonUrl) {
+async function callScraperApi(amazonUrl, asinForUsage) {
   const key = process.env.SCRAPER_API_KEY;
   if (!key) throw new Error("SCRAPER_API_KEY not set");
 
@@ -85,6 +102,7 @@ async function callScraperApi(amazonUrl) {
     params: { api_key: key, url: amazonUrl, autoparse: 'true' },
     timeout: 60000,
   });
+  recordUsage(asinForUsage, 5);
 
   if (!data || (!data.name && !data.pricing)) {
     throw new Error(`ScraperAPI: no product data returned for ${amazonUrl}`);
@@ -94,7 +112,7 @@ async function callScraperApi(amazonUrl) {
 
 // Raw (non-autoparse) HTML fetch — 1 credit vs autoparse's 5. Used for the multi-dimension
 // variant-matrix fallback, and as the primary path for priceOnly checks (see parsePriceFromRawHtml).
-async function callScraperApiRaw(amazonUrl) {
+async function callScraperApiRaw(amazonUrl, asinForUsage) {
   const key = process.env.SCRAPER_API_KEY;
   if (!key) throw new Error("SCRAPER_API_KEY not set");
 
@@ -102,6 +120,7 @@ async function callScraperApiRaw(amazonUrl) {
     params: { api_key: key, url: amazonUrl },
     timeout: 60000,
   });
+  recordUsage(asinForUsage, 1);
 
   if (typeof data !== 'string' || data.length < 1000) {
     throw new Error(`ScraperAPI: no HTML returned for ${amazonUrl}`);
@@ -281,7 +300,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
       console.log(`direct: failed for ${asin}: ${e.message}`);
     }
 
-    const html = await callScraperApiRaw(`${baseDomain}/dp/${asin}`);
+    const html = await callScraperApiRaw(`${baseDomain}/dp/${asin}`, asin);
     let { price, availabilityText } = parsePriceFromRawHtml(html);
 
     if (price) {
@@ -294,7 +313,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
     }
 
     console.log(`scraperapi(raw): no price for ${asin}, falling back to autoparse`);
-    const data = await callScraperApi(`${baseDomain}/dp/${asin}`);
+    const data = await callScraperApi(`${baseDomain}/dp/${asin}`, asin);
     price = parsePrice(data.pricing) || parsePrice(data.prime_price);
     if (!price) {
       const err = new Error(data.availability_status || availabilityText || "Out of stock / unavailable on Amazon");
@@ -309,7 +328,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
     };
   }
 
-  const data = await callScraperApi(`${baseDomain}/dp/${asin}`);
+  const data = await callScraperApi(`${baseDomain}/dp/${asin}`, asin);
   const price = parsePrice(data.pricing) || parsePrice(data.prime_price);
 
   if (!price) {
@@ -355,7 +374,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
         const vals = new Set((data.customization_options[dim] || []).map(e => e.value).filter(Boolean));
         if (vals.size) knownDimensions[dim] = vals;
       }
-      const html = await callScraperApiRaw(`${baseDomain}/dp/${asin}`);
+      const html = await callScraperApiRaw(`${baseDomain}/dp/${asin}`, asin);
       const fullMatrix = extractFullVariantMatrix(html, baseDomain, knownDimensions);
       if (fullMatrix && fullMatrix.length >= variants.length) {
         // Carry over swatch images already known from customization_options where asins match
