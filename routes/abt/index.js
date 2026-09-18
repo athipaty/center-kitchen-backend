@@ -1532,17 +1532,6 @@ router.get('/pages', async (req, res) => {
       await AbtPage.updateOne({ slug: 'builtin-staff', title: 'à¸šà¸¸à¸„à¸¥à¸²à¸à¸£/à¸à¸´à¸ˆà¸à¸²à¸£à¸ªà¸ à¸²' }, { $set: { title: 'à¸šà¸¸à¸„à¸¥à¸²à¸à¸£' } })
       // Permanently remove development plan page
       await AbtPage.deleteOne({ slug: 'builtin-plan' })
-      // Ensure eservice entry exists
-      const hasEservice = pages.some(p => p.slug === 'builtin-eservice')
-      if (!hasEservice) {
-        await AbtPage.create({ title: 'e-Service', slug: 'builtin-eservice', icon: 'ðŸŒ', path: '/eservice', isBuiltin: true, order: 7, showInNavbar: true })
-      }
-      if (!pages.some(p => p.slug === 'builtin-products')) {
-        await AbtPage.create({ title: 'à¸ªà¸´à¸™à¸„à¹‰à¸² OTOP', slug: 'builtin-products', icon: 'ðŸ›ï¸', path: '/products', isBuiltin: true, order: 14, showInNavbar: false })
-      }
-      if (!pages.some(p => p.slug === 'builtin-travel')) {
-        await AbtPage.create({ title: 'à¹à¸«à¸¥à¹ˆà¸‡à¸—à¹ˆà¸­à¸‡à¹€à¸—à¸µà¹ˆà¸¢à¸§', slug: 'builtin-travel', icon: 'ðŸ—ºï¸', path: '/travel', isBuiltin: true, order: 15, showInNavbar: false })
-      }
       pages = await AbtPage.find().sort({ order: 1, createdAt: 1 })
     }
     res.json(pages)
@@ -1584,7 +1573,10 @@ router.delete('/pages/:id', requireAuth, async (req, res) => {
   try {
     const page = await AbtPage.findById(req.params.id)
     if (!page) return res.status(404).json({ error: 'Not found' })
-    if (page.isBuiltin) return res.status(400).json({ error: 'à¹„à¸¡à¹ˆà¸ªà¸²à¸¡à¸²à¸£à¸–à¸¥à¸šà¸«à¸™à¹‰à¸²à¸£à¸°à¸šà¸šà¹„à¸”à¹‰' })
+    // Builtin pages can now be removed from the menu too. This only deletes the
+    // menu entry (AbtPage doc) -- the underlying route/component (e.g. /about) is
+    // hardcoded in the frontend and keeps working if visited directly; it just
+    // will not be listed in the navbar/sidebar anymore.
     await AbtPage.findByIdAndDelete(req.params.id)
     res.json({ success: true })
   } catch (err) {
