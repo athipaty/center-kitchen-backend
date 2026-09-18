@@ -12,16 +12,19 @@ const scheduler = require("../../jobs/trackerScheduler");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
 const { endListing, removeVariation } = require("../../jobs/ebayPriceSync");
 
-// GET today's ScraperAPI credit usage per ASIN (UTC day) — powers the "tokens used today"
-// meter on the landing page, replacing the old days-listed/views meter.
-router.get("/scraper-usage/today", async (req, res) => {
+// GET ScraperAPI credit usage per ASIN, summed over a trailing window of UTC days
+// (default 7) — powers the token-usage meter on the landing page. ScraperUsage docs are
+// one per (date, asin), so this is a single range query + in-memory sum per ASIN rather
+// than an aggregation pipeline.
+router.get("/scraper-usage", async (req, res) => {
   try {
-    const date = new Date().toISOString().slice(0, 10);
-    const rows = await ScraperUsage.find({ date }).lean();
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 30);
+    const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+    const rows = await ScraperUsage.find({ date: { $gte: since } }).lean();
     const byAsin = {};
     let total = 0;
-    for (const r of rows) { byAsin[r.asin] = r.credits; total += r.credits; }
-    res.json({ date, total, byAsin });
+    for (const r of rows) { byAsin[r.asin] = (byAsin[r.asin] || 0) + r.credits; total += r.credits; }
+    res.json({ days, since, total, byAsin });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
