@@ -4,12 +4,28 @@ const axios = require("axios");
 const crypto = require("crypto");
 const Product = require("../../models/tracker/Product");
 const ScraperCache = require("../../models/tracker/ScraperCache");
+const ScraperUsage = require("../../models/tracker/ScraperUsage");
 
 const TrackerSettings = require("../../models/tracker/TrackerSettings");
 const { cleanUrl, extractAsin, fetchProduct } = require("../../scraper");
 const scheduler = require("../../jobs/trackerScheduler");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
 const { endListing, removeVariation } = require("../../jobs/ebayPriceSync");
+
+// GET today's ScraperAPI credit usage per ASIN (UTC day) — powers the "tokens used today"
+// meter on the landing page, replacing the old days-listed/views meter.
+router.get("/scraper-usage/today", async (req, res) => {
+  try {
+    const date = new Date().toISOString().slice(0, 10);
+    const rows = await ScraperUsage.find({ date }).lean();
+    const byAsin = {};
+    let total = 0;
+    for (const r of rows) { byAsin[r.asin] = r.credits; total += r.credits; }
+    res.json({ date, total, byAsin });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get("/settings", async (req, res) => {
   res.json({});
