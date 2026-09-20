@@ -154,17 +154,28 @@ const DIRECT_HEADERS = {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function jitter(minMs, maxMs) { return minMs + Math.random() * (maxMs - minMs); }
 
+// Retries once on a miss (empty/short response, bot-check page, or no price found) before
+// giving up — spot-checking a sample of ASINs that had racked up paid-tier credits this way
+// showed the identical request succeeding moments later, so most misses here are transient
+// (a one-off soft block or an unlucky render) rather than something structurally wrong with
+// that ASIN's page. A second free attempt is worth it since it costs nothing but time,
+// versus immediately paying for the raw/autoparse tiers below.
 async function fetchDirectPriceOnly(asin, baseDomain) {
   if (!/amazon\.com$/i.test(baseDomain.replace(/^https?:\/\//, ''))) return { price: null };
-  await sleep(jitter(1500, 4000));
-  const resp = await axios.get(`${baseDomain}/dp/${asin}`, {
-    headers: DIRECT_HEADERS,
-    timeout: 15000,
-    validateStatus: () => true,
-  });
-  if (typeof resp.data !== 'string' || resp.data.length < 1000) return { price: null };
-  if (/captcha|robot check|api-services-support@amazon/i.test(resp.data)) return { price: null };
-  return parsePriceFromRawHtml(resp.data);
+  let result = { price: null };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await sleep(jitter(1500, 4000));
+    const resp = await axios.get(`${baseDomain}/dp/${asin}`, {
+      headers: DIRECT_HEADERS,
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    if (typeof resp.data !== 'string' || resp.data.length < 1000) continue;
+    if (/captcha|robot check|api-services-support@amazon/i.test(resp.data)) continue;
+    result = parsePriceFromRawHtml(resp.data);
+    if (result.price) return result;
+  }
+  return result;
 }
 
 // Cheap price/stock extraction straight off raw Amazon HTML (no autoparse). Scoped to the
