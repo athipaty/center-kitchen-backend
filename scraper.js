@@ -4,20 +4,15 @@ const ScraperUsage = require("./models/tracker/ScraperUsage");
 // ── ScraperAPI constants ────────────────────────────────────────────────────
 const SCRAPER_API_BASE = "https://api.scraperapi.com/";
 
-// Fire-and-forget credit-usage tracking, keyed by UTC day so the landing page can show
-// "tokens used today" per item without a separate reset job. Billed on request completion
-// (ScraperAPI charges once it gets a response, whether or not that response had a usable
-// price on it), so this is called right after each axios call resolves, not after we've
-// decided whether the response was useful — that's also why it's void of any try/catch
-// around the caller: a failed usage write should never break a scrape.
-function recordUsage(asin, credits) {
+// Fire-and-forget credit-usage tracking — one event per attempt, not a daily aggregate, so
+// the landing page can show recent individual check history alongside the 7-day total.
+// Billed on request completion (ScraperAPI charges once it gets a response, whether or not
+// that response had a usable price on it), so this is called right after each axios call
+// resolves, not after we've decided whether the response was useful — that's also why it's
+// void of any try/catch around the caller: a failed usage write should never break a scrape.
+function recordUsage(asin, credits, tier) {
   if (!asin) return;
-  const date = new Date().toISOString().slice(0, 10);
-  ScraperUsage.findByIdAndUpdate(
-    `${date}:${asin}`,
-    { $inc: { credits, checks: 1 }, $setOnInsert: { date, asin } },
-    { upsert: true }
-  ).catch(() => {});
+  ScraperUsage.create({ asin, credits, tier }).catch(() => {});
 }
 
 // ── URL helpers ──────────────────────────────────────────────────────────────
@@ -102,7 +97,7 @@ async function callScraperApi(amazonUrl, asinForUsage) {
     params: { api_key: key, url: amazonUrl, autoparse: 'true' },
     timeout: 60000,
   });
-  recordUsage(asinForUsage, 5);
+  recordUsage(asinForUsage, 5, 'autoparse');
 
   if (!data || (!data.name && !data.pricing)) {
     throw new Error(`ScraperAPI: no product data returned for ${amazonUrl}`);
@@ -120,7 +115,7 @@ async function callScraperApiRaw(amazonUrl, asinForUsage) {
     params: { api_key: key, url: amazonUrl },
     timeout: 60000,
   });
-  recordUsage(asinForUsage, 1);
+  recordUsage(asinForUsage, 1, 'raw');
 
   if (typeof data !== 'string' || data.length < 1000) {
     throw new Error(`ScraperAPI: no HTML returned for ${amazonUrl}`);
@@ -304,7 +299,7 @@ async function fetchProduct(url, { priceOnly = false } = {}) {
         // 0 credits, but still recorded so the landing page can tell "checked, landed the
         // free tier" apart from "not checked in this window at all" — both would otherwise
         // look identical (absent from the usage map).
-        recordUsage(asin, 0);
+        recordUsage(asin, 0, 'direct');
         return {
           title: null, price: direct.price, currency: "$",
           image: null, images: [], upc: null,
