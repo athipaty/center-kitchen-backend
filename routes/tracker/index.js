@@ -12,19 +12,26 @@ const scheduler = require("../../jobs/trackerScheduler");
 const { deleteB2Prefix } = require("../../utils/b2Utils");
 const { endListing, removeVariation } = require("../../jobs/ebayPriceSync");
 
-// GET ScraperAPI credit usage per ASIN, summed over a trailing window of UTC days
-// (default 7) — powers the token-usage meter on the landing page. ScraperUsage docs are
-// one per (date, asin), so this is a single range query + in-memory sum per ASIN rather
-// than an aggregation pipeline.
+// GET ScraperAPI credit usage per ASIN over a trailing window of days (default 7) — powers
+// the token-usage meter on the landing page (byAsin: summed credits) and, per variant in the
+// detail view, its last 3 individual check events (recentByAsin: tier + credits + when).
+// ScraperUsage is an append-only event log (one doc per attempt), sorted newest-first here so
+// the first 3 rows encountered per ASIN while summing are already its 3 most recent checks.
 router.get("/scraper-usage", async (req, res) => {
   try {
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 30);
-    const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
-    const rows = await ScraperUsage.find({ date: { $gte: since } }).lean();
+    const since = new Date(Date.now() - days * 86400000);
+    const rows = await ScraperUsage.find({ createdAt: { $gte: since } }).sort({ createdAt: -1 }).lean();
     const byAsin = {};
+    const recentByAsin = {};
     let total = 0;
-    for (const r of rows) { byAsin[r.asin] = (byAsin[r.asin] || 0) + r.credits; total += r.credits; }
-    res.json({ days, since, total, byAsin });
+    for (const r of rows) {
+      byAsin[r.asin] = (byAsin[r.asin] || 0) + r.credits;
+      total += r.credits;
+      const recent = (recentByAsin[r.asin] ||= []);
+      if (recent.length < 3) recent.push({ credits: r.credits, tier: r.tier, at: r.createdAt });
+    }
+    res.json({ days, since: since.toISOString(), total, byAsin, recentByAsin });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

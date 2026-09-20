@@ -1,15 +1,16 @@
 const mongoose = require("mongoose");
 
-// Daily ScraperAPI credit usage per ASIN. _id = "YYYY-MM-DD:ASIN" so a $inc upsert is a
-// single atomic write with no read-modify-write race, and a new UTC day just starts a new
-// doc — no reset job needed. TTL index clears entries after 30 days.
+// One doc per ScraperAPI (or free direct-fetch) attempt, not a daily aggregate — keeping
+// every event lets the landing page show both the 7-day credit total per ASIN and the last
+// few individual check results (tier + outcome), instead of only ever a summed number.
+// TTL index clears entries after 30 days.
 const scraperUsageSchema = new mongoose.Schema({
-  _id: String,
-  date: { type: String, index: true }, // YYYY-MM-DD (UTC)
-  asin: String,
-  credits: { type: Number, default: 0 },
-  checks: { type: Number, default: 0 },
+  asin: { type: String, required: true, index: true },
+  credits: { type: Number, required: true },
+  tier: { type: String, enum: ['direct', 'raw', 'autoparse'], required: true },
   createdAt: { type: Date, default: Date.now, expires: 30 * 86400 },
 }, { versionKey: false });
+
+scraperUsageSchema.index({ asin: 1, createdAt: -1 });
 
 module.exports = mongoose.model("ScraperUsage", scraperUsageSchema);
