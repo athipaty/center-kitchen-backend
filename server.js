@@ -159,7 +159,12 @@ mongoose
     require("./jobs/trackerScheduler").start(io);
     require("./jobs/youtubeEpisodeScheduler").start(io);
     require("./jobs/egpCacheRefresh").start();
-    require("./jobs/groceryPriceCheck").start();
+    // groceryPriceCheck disabled — it shares the same SCRAPER_API_KEY as the Amazon
+    // tracker and its render=true FairPrice requests cost 10 credits each (30/day for
+    // the 3 active products), invisible in the Amazon-only usage dashboard and mistaken
+    // for an unexplained spike there. Re-enable once it's worth spending shared ScraperAPI
+    // budget on again — for now only the Amazon tracker should be drawing on that key.
+    // require("./jobs/groceryPriceCheck").start();
     require("./jobs/abtContactCleanup").start();
     // egpPhayaoRefresh disabled — the nationwide RSS it scans is too sparse for the
     // keyword-match approach to ever reliably find Phayao items (0 hits after 24+
