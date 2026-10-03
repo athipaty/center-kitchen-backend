@@ -56,6 +56,7 @@ const allowedOrigins = [
   "https://profile-kappa-sand.vercel.app",
   "https://craft-adventure.vercel.app",
   "https://market-aj1pbyokx-athipats-projects.vercel.app",
+  "https://abt-global.vercel.app",
 ];
 // Set once the market frontend is deployed (e.g. to Vercel) so its real
 // origin doesn't need to be hardcoded here ahead of time.
