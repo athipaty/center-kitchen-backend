@@ -1064,6 +1064,69 @@ router.post('/stock-transactions', requireAuth, async (req, res) => {
   }
 })
 
+router.put('/stock-transactions/:id', requireAuth, async (req, res) => {
+  try {
+    const txn = await AbtStockTransaction.findById(req.params.id)
+    if (!txn) return res.status(404).json({ error: 'Not found' })
+
+    const { type, qty, date, party, docNo, note, unitPrice } = req.body
+    if (!type || !['รับ', 'จ่าย'].includes(type)) {
+      return res.status(400).json({ error: 'ข้อมูลไม่ครบถ้วน' })
+    }
+    const qtyNum = Number(qty)
+    if (!qtyNum || qtyNum <= 0) return res.status(400).json({ error: 'จำนวนต้องมากกว่า 0' })
+
+    const item = await AbtStockItem.findById(txn.item)
+    if (!item) return res.status(404).json({ error: 'ไม่พบวัสดุ' })
+
+    // Reconstruct the balance this item had before ANY of its transactions, from data
+    // that doesn't depend on the edit below (current balance minus every transaction's
+    // own pre-edit delta, including this one's old values) — so it's correct regardless
+    // of how the edit below changes this transaction's type/qty.
+    const siblings = await AbtStockTransaction.find({ item: item._id, _id: { $ne: txn._id } })
+    const priorDeltaSum = siblings.reduce((sum, t) => sum + (t.type === 'รับ' ? t.qty : -t.qty), 0)
+      + (txn.type === 'รับ' ? txn.qty : -txn.qty)
+    const baseBalance = item.balance - priorDeltaSum
+
+    txn.type = type
+    txn.qty = qtyNum
+    if (date) txn.date = new Date(date)
+    if (party !== undefined) txn.party = party
+    if (docNo !== undefined) txn.docNo = docNo
+    if (note !== undefined) txn.note = note
+    const priceGiven = unitPrice !== undefined && unitPrice !== null && unitPrice !== ''
+    const priceNum = priceGiven ? Number(unitPrice) : NaN
+    const hasValidPrice = type === 'รับ' && !isNaN(priceNum) && priceNum >= 0
+    if (hasValidPrice) txn.unitPrice = priceNum
+    txn.amount = qtyNum * txn.unitPrice
+
+    // Replay every transaction for this item in chronological order to recompute
+    // balanceAfter correctly — editing a transaction that isn't the item's most recent
+    // one would otherwise leave every later transaction's stored balanceAfter (and the
+    // item's current balance) silently wrong.
+    const merged = [...siblings, txn].sort((a, b) =>
+      new Date(a.date) - new Date(b.date) || new Date(a.createdAt) - new Date(b.createdAt)
+    )
+    let running = baseBalance
+    for (const t of merged) {
+      running = t.type === 'รับ' ? running + t.qty : running - t.qty
+      if (running < 0) {
+        return res.status(400).json({ error: `การแก้ไขนี้จะทำให้ยอดคงเหลือติดลบในวันที่ ${new Date(t.date).toISOString().slice(0, 10)}` })
+      }
+      t.balanceAfter = running
+    }
+
+    item.balance = running
+    if (hasValidPrice) item.unitPrice = priceNum
+    await item.save()
+    await Promise.all(merged.map(t => t.save()))
+
+    res.json({ transaction: txn, item })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
 router.delete('/stock-transactions/:id', requireAuth, async (req, res) => {
   try {
     const txn = await AbtStockTransaction.findById(req.params.id)
