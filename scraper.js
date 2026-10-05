@@ -174,8 +174,8 @@ async function fetchDirectPriceOnly(asin, baseDomain) {
 }
 
 // Cheap price/stock extraction straight off raw Amazon HTML (no autoparse). Scoped to the
-// #corePrice_feature_div buybox container, NOT the first "a-offscreen">$X.XX on the whole page —
-// that page-wide scan was the root cause of wildly wrong prices on variant/twister products
+// buybox price container, NOT the first offscreen-priced span on the whole page — that
+// page-wide scan was the root cause of wildly wrong prices on variant/twister products
 // (Color/Size dropdowns): Amazon server-renders that container EMPTY for those listings (price
 // gets hydrated client-side by JS based on the selected variant), so the old page-wide regex
 // silently grabbed an unrelated price from a "customers also bought" carousel or comparison
@@ -183,10 +183,19 @@ async function fetchDirectPriceOnly(asin, baseDomain) {
 // but a couple were variant products with an empty corePrice_feature_div). If the container is
 // missing/empty, callers should fall back to the autoparse path rather than trusting a page-wide
 // match as real — the regex is fragile to Amazon layout changes in a way autoparse isn't.
+//
+// Two container ids checked: `corePrice_feature_div` (the original, class="a-offscreen" for
+// the price span) and `corePriceDisplay_desktop_feature_div` (a newer page template some
+// listings get served under, class="aok-offscreen" instead) — confirmed live 2026-10-05 on
+// ASIN B0BTCWXBDC, which was permanently missing the first container (not a bot-block or a
+// transient miss, just absent every single check) and burning 90 ScraperAPI credits over a
+// handful of days as a result, while its own sibling variants on the old template stayed free.
 function parsePriceFromRawHtml(html) {
-  const containerIdx = html.indexOf('id="corePrice_feature_div"');
-  const searchWindow = containerIdx !== -1 ? html.slice(containerIdx, containerIdx + 3000) : null;
-  const priceMatch = searchWindow ? searchWindow.match(/class="a-offscreen">\s*\$\s*([\d,]+\.\d{2})/) : null;
+  const containerMarker = ['id="corePrice_feature_div"', 'id="corePriceDisplay_desktop_feature_div"']
+    .map(marker => html.indexOf(marker))
+    .find(idx => idx !== -1);
+  const searchWindow = containerMarker !== undefined ? html.slice(containerMarker, containerMarker + 3000) : null;
+  const priceMatch = searchWindow ? searchWindow.match(/class="a(?:ok-|-)offscreen">\s*\$\s*([\d,]+\.\d{2})/) : null;
   const price = priceMatch ? parsePrice(priceMatch[1]) : null;
 
   let availabilityText = null;
