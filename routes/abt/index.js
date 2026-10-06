@@ -979,8 +979,39 @@ router.post('/stock-items', requireAuth, async (req, res) => {
 
 router.put('/stock-items/:id', requireAuth, async (req, res) => {
   try {
-    const item = await AbtStockItem.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    const item = await AbtStockItem.findById(req.params.id)
     if (!item) return res.status(404).json({ error: 'Not found' })
+
+    const { openingBalance, balance, ...rest } = req.body
+
+    // Editing ยอดยกมา shifts every later balance in the item's history — replay all of its
+    // transactions in chronological order from the new opening value, same cascade technique
+    // used by PUT /stock-transactions/:id, so balanceAfter and the item's current balance
+    // both stay consistent with the edited opening balance.
+    if (openingBalance !== undefined && openingBalance !== null) {
+      const openingNum = Number(openingBalance)
+      if (isNaN(openingNum)) return res.status(400).json({ error: 'ยอดยกมาต้องเป็นตัวเลข' })
+
+      const txnsForItem = await AbtStockTransaction.find({ item: item._id })
+        .sort({ date: 1, createdAt: 1 })
+
+      let running = openingNum
+      for (const t of txnsForItem) {
+        running = t.type === 'รับ' ? running + t.qty : running - t.qty
+        if (running < 0) {
+          return res.status(400).json({ error: `การแก้ไขยอดยกมานี้จะทำให้ยอดคงเหลือติดลบในวันที่ ${new Date(t.date).toISOString().slice(0, 10)}` })
+        }
+        t.balanceAfter = running
+      }
+
+      item.openingBalance = openingNum
+      item.balance = running
+      await Promise.all(txnsForItem.map(t => t.save()))
+    }
+
+    Object.assign(item, rest)
+    await item.save()
+
     res.json(item)
   } catch (err) {
     res.status(400).json({ error: err.message })
