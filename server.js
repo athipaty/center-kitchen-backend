@@ -46,6 +46,8 @@ const allowedOrigins = [
   "https://sgostock.vercel.app",
   "https://expense-six-red.vercel.app",
   "https://maesaiphayao.vercel.app",
+  "https://maesaiphayao.go.th",
+  "https://www.maesaiphayao.go.th",
   "https://my-react-app-eight-rust.vercel.app",
   "https://tong-alpha.vercel.app",
   "https://amazon-theta-liard.vercel.app",
