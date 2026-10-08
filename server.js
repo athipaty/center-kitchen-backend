@@ -59,10 +59,14 @@ const allowedOrigins = [
   "https://craft-adventure.vercel.app",
   "https://market-aj1pbyokx-athipats-projects.vercel.app",
   "https://abt-global.vercel.app",
+  "https://direkair.com",
+  "https://www.direkair.com",
 ];
 // Set once the market frontend is deployed (e.g. to Vercel) so its real
 // origin doesn't need to be hardcoded here ahead of time.
 if (process.env.MARKET_FRONTEND_URL) allowedOrigins.push(process.env.MARKET_FRONTEND_URL);
+// Same for the Direk Air shop site until it's live on direkair.com.
+if (process.env.DIREKAIR_FRONTEND_URL) allowedOrigins.push(process.env.DIREKAIR_FRONTEND_URL);
 
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
@@ -147,6 +151,9 @@ app.use('/api/profile', require('./routes/profile'));
 
 // --- Grocery (Singapore supermarket price tracker) ---
 app.use('/api/grocery', require('./routes/grocery'));
+
+// --- Direk Air (shop site: admin login + customer photo gallery) ---
+app.use('/api/direkair', require('./routes/direkair'));
 
 // --- Market (local marketplace: nearby listings + in-app chat) ---
 app.use('/api/market/auth', require('./routes/market/auth'));
