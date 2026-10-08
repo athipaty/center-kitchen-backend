@@ -165,9 +165,14 @@ router.post('/upload-archive', requireAuth, uploadArchive.single('archive'), asy
 
 router.get('/news', async (req, res) => {
   try {
-    const filter = req.query.all === '1' ? {} : { isActive: true }
+    const isAdminAll = req.query.all === '1'
+    const filter = isAdminAll ? {} : { isActive: true }
     if (req.query.dept) filter.department = req.query.dept
-    const limit = parseInt(req.query.limit) || 50
+    // The 50 default is a sane cap for the public feed, which only ever wants recent items —
+    // but it was silently capping the admin list (all=1) too, which needs to see everything to
+    // manage it. .limit(0) means "no limit" in Mongoose/MongoDB, so admin stays uncapped unless
+    // it explicitly asks for a page size.
+    const limit = parseInt(req.query.limit) || (isAdminAll ? 0 : 50)
     const news = await AbtNews.find(filter).sort({ publishedAt: -1 }).limit(limit)
     res.json(news)
   } catch (err) {
