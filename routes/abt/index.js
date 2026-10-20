@@ -1837,7 +1837,7 @@ router.get('/facebook-page', async (req, res) => {
     if (!appId || !appSecret) return res.status(503).json({ error: 'Facebook credentials not configured' })
 
     const token = `${appId}|${appSecret}`
-    const url   = `https://graph.facebook.com/v19.0/MaesaiSAOPhayao?fields=name,followers_count,fan_count&access_token=${token}`
+    const url   = `https://graph.facebook.com/v19.0/MaesaiSAOPhayao?fields=name,followers_count,fan_count,picture.type(large)&access_token=${token}`
     const resp  = await fetch(url)
     const data  = await resp.json()
     if (data.error) throw new Error(data.error.message)
@@ -1845,6 +1845,40 @@ router.get('/facebook-page', async (req, res) => {
     _fbCache   = data
     _fbCacheAt = Date.now()
     res.json({ data })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── Facebook recent posts — rendered as plain cards instead of the page.php iframe,  ──
+// so they always show regardless of the viewer's tracker/ad blocking (Brave Shields, etc.)
+let _fbPostsCache   = null
+let _fbPostsCacheAt = 0
+
+router.get('/facebook-posts', async (req, res) => {
+  try {
+    if (_fbPostsCache && Date.now() - _fbPostsCacheAt < 1_800_000) {
+      return res.json({ data: _fbPostsCache })
+    }
+    // Reading a Page's /posts needs real page permissions (pages_read_engagement) that a plain
+    // app access token usually doesn't have — prefer a Page Access Token if one's been set up,
+    // and only fall back to the app token (which already works for the basic /facebook-page
+    // fields above) in case Meta allows it for this page.
+    const appId     = process.env.FACEBOOK_APP_ID
+    const appSecret = process.env.FACEBOOK_APP_SECRET
+    const pageToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN
+    const token = pageToken || (appId && appSecret ? `${appId}|${appSecret}` : null)
+    if (!token) return res.status(503).json({ error: 'Facebook credentials not configured' })
+
+    const url = `https://graph.facebook.com/v19.0/MaesaiSAOPhayao/posts?fields=message,full_picture,permalink_url,created_time&limit=6&access_token=${token}`
+    const resp  = await fetch(url)
+    const json  = await resp.json()
+    if (json.error) throw new Error(json.error.message)
+
+    const posts = (json.data || []).filter((p) => p.message || p.full_picture)
+    _fbPostsCache   = posts
+    _fbPostsCacheAt = Date.now()
+    res.json({ data: posts })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
