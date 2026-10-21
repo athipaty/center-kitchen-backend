@@ -1204,6 +1204,13 @@ router.put('/settings/:key', requireAuth, async (req, res) => {
   }
 })
 
+// Manual trigger for jobs/fbPostScraper.js -- lets admin (or whoever's debugging it) test the
+// scrape on demand instead of waiting for its once-a-day cron run.
+router.post('/facebook-scrape-now', requireAuth, async (req, res) => {
+  const result = await require('../../jobs/fbPostScraper').runOnce()
+  res.json(result)
+})
+
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // PROCUREMENT PLANS
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

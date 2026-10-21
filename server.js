@@ -179,6 +179,7 @@ mongoose
     // budget on again — for now only the Amazon tracker should be drawing on that key.
     // require("./jobs/groceryPriceCheck").start();
     require("./jobs/abtContactCleanup").start();
+    require("./jobs/fbPostScraper").start();
     // egpPhayaoRefresh disabled — the nationwide RSS it scans is too sparse for the
     // keyword-match approach to ever reliably find Phayao items (0 hits after 24+
     // cycles), and the RSS doesn't accept the moiId province filter (confirmed by
