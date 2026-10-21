@@ -34,8 +34,12 @@ async function setSetting(key, value) {
 async function fetchPageHtml() {
   const key = process.env.SCRAPER_API_KEY
   if (key) {
-    const apiUrl = `https://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(PAGE_URL)}`
-    const res = await fetch(apiUrl, { signal: AbortSignal.timeout(30_000) })
+    // render=true (~10 credits/request instead of 1): the plain HTTP request hit a login
+    // wall even through ScraperAPI's proxy — worth testing whether that's a client-side
+    // overlay that a real headless-browser render can get past, before concluding anonymous
+    // scraping is blocked outright regardless of proxy/rendering.
+    const apiUrl = `https://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(PAGE_URL)}&render=true`
+    const res = await fetch(apiUrl, { signal: AbortSignal.timeout(60_000) })
     if (!res.ok) throw new Error(`ScraperAPI request failed: HTTP ${res.status}`)
     return res.text()
   }
@@ -55,7 +59,8 @@ async function scrapeLatestPost() {
   // No reliable way to read the resolved URL when proxied through ScraperAPI, so the
   // login-wall check is HTML-content-based only (works the same via proxy or direct).
   if (/name="login"/i.test(html) || /<title>\s*Log ?[Ii]n/i.test(html)) {
-    throw new Error('Facebook returned a login wall — anonymous scraping is blocked right now')
+    const titleMatch = html.match(/<title>([^<]*)<\/title>/i)
+    throw new Error(`Facebook returned a login wall — title: "${titleMatch?.[1] || '?'}", length: ${html.length}`)
   }
 
   const $ = cheerio.load(html)
