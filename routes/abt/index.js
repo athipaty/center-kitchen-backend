@@ -1832,11 +1832,15 @@ router.get('/facebook-page', async (req, res) => {
     if (_fbCache && Date.now() - _fbCacheAt < 3_600_000) {
       return res.json({ data: _fbCache })
     }
+    // Same permission requirement as /facebook-posts below — an app-level token (appId|appSecret)
+    // cannot read these fields even with pages_read_engagement configured on the app, since that
+    // permission only takes effect on a Page Access Token granted by an actual page admin login.
     const appId     = process.env.FACEBOOK_APP_ID
     const appSecret = process.env.FACEBOOK_APP_SECRET
-    if (!appId || !appSecret) return res.status(503).json({ error: 'Facebook credentials not configured' })
+    const pageToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN
+    const token = pageToken || (appId && appSecret ? `${appId}|${appSecret}` : null)
+    if (!token) return res.status(503).json({ error: 'Facebook credentials not configured' })
 
-    const token = `${appId}|${appSecret}`
     const url   = `https://graph.facebook.com/v19.0/MaesaiSAOPhayao?fields=name,followers_count,fan_count,picture.type(large)&access_token=${token}`
     const resp  = await fetch(url)
     const data  = await resp.json()
