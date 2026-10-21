@@ -25,7 +25,20 @@ async function setSetting(key, value) {
   await AbtSettings.findOneAndUpdate({ key }, { value }, { upsert: true })
 }
 
-async function scrapeLatestPost() {
+// Routed through ScraperAPI when SCRAPER_API_KEY is set (the same shared key the Amazon/
+// grocery trackers use — see scraper.js) so the request comes from a rotating proxy IP
+// instead of Render's own, which Facebook's anti-bot checks are more likely to flag as a
+// bot. Plain (non-autoparse, non-render) request = 1 credit, same rate as the Amazon
+// raw-HTML fallback — at once/day this barely dents the shared monthly credit pool. Falls
+// back to fetching mbasic directly when no key is configured (e.g. running locally).
+async function fetchPageHtml() {
+  const key = process.env.SCRAPER_API_KEY
+  if (key) {
+    const apiUrl = `https://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(PAGE_URL)}`
+    const res = await fetch(apiUrl, { signal: AbortSignal.timeout(30_000) })
+    if (!res.ok) throw new Error(`ScraperAPI request failed: HTTP ${res.status}`)
+    return res.text()
+  }
   const res = await fetch(PAGE_URL, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36',
@@ -34,10 +47,15 @@ async function scrapeLatestPost() {
     redirect: 'follow',
     signal: AbortSignal.timeout(20_000),
   })
+  return res.text()
+}
 
-  const html = await res.text()
-  if (res.url.includes('/login') || /name="login"/i.test(html)) {
-    throw new Error('Facebook redirected to a login wall — anonymous scraping is blocked right now')
+async function scrapeLatestPost() {
+  const html = await fetchPageHtml()
+  // No reliable way to read the resolved URL when proxied through ScraperAPI, so the
+  // login-wall check is HTML-content-based only (works the same via proxy or direct).
+  if (/name="login"/i.test(html) || /<title>\s*Log ?[Ii]n/i.test(html)) {
+    throw new Error('Facebook returned a login wall — anonymous scraping is blocked right now')
   }
 
   const $ = cheerio.load(html)
