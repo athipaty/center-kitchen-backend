@@ -179,7 +179,13 @@ mongoose
     // budget on again — for now only the Amazon tracker should be drawing on that key.
     // require("./jobs/groceryPriceCheck").start();
     require("./jobs/abtContactCleanup").start();
-    require("./jobs/fbPostScraper").start();
+    // fbPostScraper's daily cron disabled — confirmed dead end: ScraperAPI itself refuses
+    // facebook.com requests outright ("Scraping this url is not allowed", their own ToS,
+    // not a technical block we can route around), so every scheduled run would just burn
+    // 10 credits on a guaranteed failure. The admin's manual "ทดสอบดึงโพสต์ล่าสุดตอนนี้"
+    // button (POST /facebook-scrape-now) still works if this is ever worth revisiting —
+    // the actual latest-post display is the admin-entered ตั้งค่าเว็บไซต์ fields now.
+    // require("./jobs/fbPostScraper").start();
     // egpPhayaoRefresh disabled — the nationwide RSS it scans is too sparse for the
     // keyword-match approach to ever reliably find Phayao items (0 hits after 24+
     // cycles), and the RSS doesn't accept the moiId province filter (confirmed by
