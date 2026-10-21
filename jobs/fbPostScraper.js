@@ -40,7 +40,10 @@ async function fetchPageHtml() {
     // scraping is blocked outright regardless of proxy/rendering.
     const apiUrl = `https://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(PAGE_URL)}&render=true`
     const res = await fetch(apiUrl, { signal: AbortSignal.timeout(60_000) })
-    if (!res.ok) throw new Error(`ScraperAPI request failed: HTTP ${res.status}`)
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new Error(`ScraperAPI request failed: HTTP ${res.status} — ${body.slice(0, 300)}`)
+    }
     return res.text()
   }
   const res = await fetch(PAGE_URL, {
