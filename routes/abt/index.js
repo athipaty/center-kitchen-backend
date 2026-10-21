@@ -1846,6 +1846,7 @@ router.get('/facebook-page', async (req, res) => {
     _fbCacheAt = Date.now()
     res.json({ data })
   } catch (err) {
+    console.error('[facebook-page] error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
@@ -1876,10 +1877,12 @@ router.get('/facebook-posts', async (req, res) => {
     if (json.error) throw new Error(json.error.message)
 
     const posts = (json.data || []).filter((p) => p.message || p.full_picture)
+    console.log(`[facebook-posts] fetched ${json.data?.length ?? 0} raw, ${posts.length} after filtering`)
     _fbPostsCache   = posts
     _fbPostsCacheAt = Date.now()
     res.json({ data: posts })
   } catch (err) {
+    console.error('[facebook-posts] error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
