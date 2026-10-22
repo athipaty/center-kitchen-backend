@@ -408,7 +408,7 @@ async function fetchEgpXml(params) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const { data: buf } = await require('axios').get(EGP_RSS_URL,
-        { params, timeout: 30000, maxRedirects: 5, responseType: 'arraybuffer',
+        { params, timeout: 90000, maxRedirects: 5, responseType: 'arraybuffer',
           headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' } }
       )
       return new TextDecoder('windows-874').decode(buf)
@@ -420,8 +420,25 @@ async function fetchEgpXml(params) {
   throw lastErr
 }
 
+// The e-GP RSS feed only answers outside office hours (17:01–08:59 Bangkok time); during the
+// day every request just times out. Fetches are therefore limited to that window.
+const EGP_TYPES = ['D0', 'P0', 'W0', 'W2', '15', 'B0'] // the sub-tabs ProcurementPage shows
+function isEgpOpen(date = new Date()) {
+  const bkk = new Date(date.getTime() + 7 * 3600_000)        // UTC+7, no DST
+  const mins = bkk.getUTCHours() * 60 + bkk.getUTCMinutes()
+  return mins >= 17 * 60 + 1 || mins < 9 * 60
+}
+
+const egpInFlight = new Set()
+
 // Fetch live RSS and save new items to AbtEgpItem — runs in background after response
 async function bgFetchEgp(anounceType) {
+  if (egpInFlight.has(anounceType)) return
+  egpInFlight.add(anounceType)
+  try { await bgFetchEgpOnce(anounceType) } finally { egpInFlight.delete(anounceType) }
+}
+
+async function bgFetchEgpOnce(anounceType) {
   const cheerio = require('cheerio')
   const deptSetting   = await AbtSettings.findOne({ key: 'egpDeptSubId' })
   const deptIdSetting = await AbtSettings.findOne({ key: 'egpDeptId' })
@@ -497,9 +514,28 @@ async function bgFetchEgp(anounceType) {
       if (pending.length > 1) await new Promise(r => setTimeout(r, 500))
     }
   } catch (err) {
-    console.error('[egp-rss bgFetch] error:', err.message)
+    console.error(`[egp-rss bgFetch] ${anounceType} error:`, err.message)
+    // Keep lastFetchAt (and items) as they were; just record that the latest attempt failed so
+    // the page can say so instead of presenting old data as "ข้อมูลล่าสุด".
+    await AbtSettings.updateOne(
+      { key: metaKey },
+      { $set: { 'value.lastErrorAt': now, 'value.lastError': err.message } },
+      { upsert: true }
+    ).catch(() => {})
   }
 }
+
+// Pull every type once an hour while the feed is open, one at a time so the slow upstream
+// isn't hit with parallel requests. Page views alone almost never land in the open window.
+async function egpScheduledSweep() {
+  if (!isEgpOpen()) return
+  for (const t of EGP_TYPES) {
+    await bgFetchEgp(t).catch(() => {})
+    await new Promise(r => setTimeout(r, 5000))
+  }
+}
+setTimeout(() => egpScheduledSweep().catch(() => {}), 60_000)
+setInterval(() => egpScheduledSweep().catch(() => {}), 60 * 60_000)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // NOTICES (หัวข้อประกาศ)
@@ -613,10 +649,15 @@ router.get('/egp-rss', async (req, res) => {
       stale:     m.maintenance && items.length > 0 ? true : undefined,
       staleAt:   m.maintenance && items.length > 0 ? m.checkedAt : undefined,
       notice:    m.maintenance ? m.notice : undefined,
+      // lastErrorAt is cleared on the next success, so its presence means the newest attempt failed
+      unreachable: m.lastErrorAt ? true : undefined,
+      feedOpen:    isEgpOpen(),
+      feedHours:   '17:01–08:59 น.',
     })
   }
 
-  setImmediate(() => bgFetchEgp(anounceType).catch(() => {}))
+  // Outside the feed's hours a fetch can only time out; the hourly sweep covers the open window.
+  if (isEgpOpen()) setImmediate(() => bgFetchEgp(anounceType).catch(() => {}))
 })
 
 // Proxies an e-GP announcement link server-side for the frontend's inline preview iframe.
