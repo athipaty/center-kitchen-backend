@@ -422,7 +422,7 @@ async function fetchEgpXml(params) {
 
 // The e-GP RSS feed only answers outside office hours (17:01–08:59 Bangkok time); during the
 // day every request just times out. Fetches are therefore limited to that window.
-const EGP_TYPES = ['D0', 'P0', 'W0', 'W2', '15', 'B0'] // the sub-tabs ProcurementPage shows
+const EGP_TYPES = ['D0', 'P0', 'W0', '15', 'B0'] // the sub-tabs ProcurementPage shows
 function isEgpOpen(date = new Date()) {
   const bkk = new Date(date.getTime() + 7 * 3600_000)        // UTC+7, no DST
   const mins = bkk.getUTCHours() * 60 + bkk.getUTCMinutes()
