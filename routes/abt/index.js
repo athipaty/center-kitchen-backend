@@ -1248,7 +1248,9 @@ router.put('/settings/:key', requireAuth, async (req, res) => {
 // Manual trigger for jobs/fbPostScraper.js -- lets admin (or whoever's debugging it) test the
 // scrape on demand instead of waiting for its once-a-day cron run.
 router.post('/facebook-scrape-now', requireAuth, async (req, res) => {
-  const result = await require('../../jobs/fbPostScraper').runOnce()
+  // Prefer the Graph API sync once a Page token is configured; the scraper is the old fallback.
+  const job = process.env.FACEBOOK_PAGE_ACCESS_TOKEN ? '../../jobs/fbGraphSync' : '../../jobs/fbPostScraper'
+  const result = await require(job).runOnce()
   res.json(result)
 })
 
