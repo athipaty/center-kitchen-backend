@@ -69,7 +69,9 @@ if (process.env.MARKET_FRONTEND_URL) allowedOrigins.push(process.env.MARKET_FRON
 if (process.env.DIREKAIR_FRONTEND_URL) allowedOrigins.push(process.env.DIREKAIR_FRONTEND_URL);
 
 app.use(cors({ origin: allowedOrigins, credentials: true }));
-app.use(express.json());
+// Default limit is 100kb; ABT page saves send every block at once, and a full-page HTML block
+// (Thai text, ~3 bytes/char) alone can approach that, so saves would fail with 413.
+app.use(express.json({ limit: '1mb' }));
 
 /* =====================
    ROUTES
