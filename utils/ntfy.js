@@ -10,7 +10,10 @@ const axios = require('axios');
 // literal "?"). The JSON body carries UTF-8 correctly.
 const PRIORITY = { min: 1, low: 2, default: 3, high: 4, urgent: 5 };
 
-async function ntfyPush(title, message, { priority = 'default', tags = [] } = {}) {
+// `attach` — a public image URL — makes ntfy download it and show it as a thumbnail
+// directly inside the push notification (not just a tappable link). No size limit on
+// ntfy's end since it's fetching from the URL itself, not an upload through ntfy.
+async function ntfyPush(title, message, { priority = 'default', tags = [], attach = '' } = {}) {
   const topic = process.env.NTFY_TOPIC;
   if (!topic) {
     console.warn('ntfyPush: NTFY_TOPIC not set — skipping alert:', title, message);
@@ -23,6 +26,7 @@ async function ntfyPush(title, message, { priority = 'default', tags = [] } = {}
       message,
       priority: PRIORITY[priority] ?? PRIORITY.default,
       tags,
+      ...(attach ? { attach } : {}),
     });
     return true;
   } catch (err) {

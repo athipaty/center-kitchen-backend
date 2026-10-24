@@ -1960,7 +1960,7 @@ router.post('/contact-messages', requireAuth, async (req, res) => {
     ntfyPush(
       '📝 คำขอใหม่จากเว็บ อบต.แม่ใส',
       item.title + (item.message ? `\n${item.message}` : ''),
-      { priority: 'high', tags: ['memo'] }
+      { priority: 'high', tags: ['memo'], attach: item.images?.[0] || '' }
     ).catch(() => {})
     res.status(201).json(item)
   } catch (err) {
