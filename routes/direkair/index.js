@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const router    = express.Router();
 const { uploadToB2, deleteB2File, b2Enabled } = require('../../utils/b2Utils');
 const DirekairPhoto = require('../../models/direkair/DirekairPhoto');
+const DirekairSetting = require('../../models/direkair/DirekairSetting');
 
 // Direk Air (ดิเรกแอร์) shop site: admin login + customer-work photo gallery.
 //
@@ -21,6 +22,7 @@ const TOKEN_AUDIENCE = 'direkair';
 const MAX_PHOTOS     = 60;
 const MAX_CAPTION    = 120;
 const B2_PREFIX      = 'direkair-gallery/';
+const THEME_ID       = /^[a-z][a-z0-9-]{1,23}$/; // the site owns the theme list; this only rejects junk
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60_000,
@@ -71,6 +73,33 @@ router.post('/login', loginLimiter, (req, res) => {
 });
 
 router.get('/me', requireAdmin, (_req, res) => res.json({ admin: true }));
+
+/* ---------- settings (theme colour) ---------- */
+
+router.get('/settings', async (_req, res) => {
+  try {
+    const doc = await DirekairSetting.findOne({ key: 'site' }).lean();
+    res.set('Cache-Control', 'no-cache');
+    res.json({ theme: doc?.theme || 'ice' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/settings', requireAdmin, async (req, res) => {
+  const theme = req.body?.theme;
+  if (typeof theme !== 'string' || !THEME_ID.test(theme)) {
+    return res.status(400).json({ error: 'ธีมไม่ถูกต้อง' });
+  }
+  try {
+    const doc = await DirekairSetting.findOneAndUpdate(
+      { key: 'site' }, { theme }, { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+    res.json({ theme: doc.theme });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /* ---------- gallery ---------- */
 
