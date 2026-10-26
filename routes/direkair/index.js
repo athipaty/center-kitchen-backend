@@ -402,6 +402,55 @@ router.patch('/gallery/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// Add or replace the "before" photo of an existing gallery photo.
+// Uses a new file name each time so browsers don't keep showing the old picture.
+router.put('/gallery/:id/before', requireAdmin, (req, res) => {
+  upload.single('before')(req, res, async (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 10MB' : 'อัปโหลดไม่สำเร็จ' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกรูป JPG, PNG หรือ WebP' });
+    if (!b2Enabled()) return res.status(503).json({ error: 'ยังไม่ได้ตั้งค่าที่เก็บรูป (B2)' });
+    try {
+      const photo = await DirekairPhoto.findById(req.params.id);
+      if (!photo) return res.status(404).json({ error: 'ไม่พบรูปนี้' });
+      let image;
+      try {
+        image = await toWebp(req.file.buffer);
+      } catch {
+        return res.status(400).json({ error: 'ไฟล์นี้ไม่ใช่รูปภาพที่รองรับ' });
+      }
+      const oldKey = photo.beforeKey;
+      const beforeKey = `${B2_PREFIX}${Date.now()}-${crypto.randomUUID()}-before.webp`;
+      photo.beforeUrl = await uploadToB2(image, beforeKey, 'image/webp');
+      photo.beforeKey = beforeKey;
+      await photo.save();
+      if (oldKey) await deleteB2File(oldKey);
+      res.json(toPublic(photo));
+    } catch (e) {
+      if (e.name === 'CastError') return res.status(404).json({ error: 'ไม่พบรูปนี้' });
+      console.error('direkair: before upload failed:', e.message);
+      res.status(500).json({ error: 'บันทึกรูปไม่สำเร็จ' });
+    }
+  });
+});
+
+router.delete('/gallery/:id/before', requireAdmin, async (req, res) => {
+  try {
+    const photo = await DirekairPhoto.findById(req.params.id);
+    if (!photo) return res.status(404).json({ error: 'ไม่พบรูปนี้' });
+    const oldKey = photo.beforeKey;
+    photo.beforeUrl = '';
+    photo.beforeKey = '';
+    await photo.save();
+    if (oldKey) await deleteB2File(oldKey);
+    res.json(toPublic(photo));
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(404).json({ error: 'ไม่พบรูปนี้' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete('/gallery/:id', requireAdmin, async (req, res) => {
   try {
     const photo = await DirekairPhoto.findByIdAndDelete(req.params.id);
