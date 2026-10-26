@@ -133,6 +133,7 @@ router.get('/bookings', requireAdmin, async (req, res) => {
     res.json({
       bookings: items.map(toBooking),
       counts: Object.fromEntries(BOOKING_STATUSES.map((s) => [s, counts.find((c) => c._id === s)?.n || 0])),
+      retentionDays: DirekairBooking.RETENTION_DAYS,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

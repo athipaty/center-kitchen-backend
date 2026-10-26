@@ -13,4 +13,10 @@ const DirekairBookingSchema = new mongoose.Schema({
   status:  { type: String, enum: ['new', 'confirmed', 'done', 'cancelled'], default: 'new', index: true },
 }, { timestamps: true });
 
+// PDPA: bookings hold customers' personal data, so MongoDB deletes each one 180 days after it was made
+// (TTL index on createdAt). Booking counts in DirekairStat are kept; they hold no personal data.
+const RETENTION_DAYS = 180;
+DirekairBookingSchema.index({ createdAt: 1 }, { expireAfterSeconds: RETENTION_DAYS * 24 * 60 * 60 });
+DirekairBookingSchema.statics.RETENTION_DAYS = RETENTION_DAYS;
+
 module.exports = mongoose.model('DirekairBooking', DirekairBookingSchema);
