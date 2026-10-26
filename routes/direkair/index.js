@@ -9,6 +9,7 @@ const { uploadToB2, deleteB2File, b2Enabled } = require('../../utils/b2Utils');
 const DirekairPhoto = require('../../models/direkair/DirekairPhoto');
 const DirekairSetting = require('../../models/direkair/DirekairSetting');
 const DirekairBooking = require('../../models/direkair/DirekairBooking');
+const DirekairStat = require('../../models/direkair/DirekairStat');
 
 // Direk Air (ดิเรกแอร์) shop site: admin login + customer-work photo gallery.
 //
@@ -114,6 +115,7 @@ router.post('/bookings', bookingLimiter, async (req, res) => {
       note: field(body.note, 500),
       lang: body.lang === 'en' ? 'en' : 'th',
     });
+    bump('booking', b.lang).catch(() => {});
     res.status(201).json({ ok: true, id: String(b._id) });
   } catch (err) {
     console.error('direkair: booking failed:', err.message);
@@ -163,26 +165,126 @@ router.delete('/bookings/:id', requireAdmin, async (req, res) => {
 
 /* ---------- settings (theme colour) ---------- */
 
+const PHONE_RE = /^[0-9+\-\s()]{6,30}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const publicSettings = (doc) => {
+  const out = { theme: doc?.theme || 'ice' };
+  if (doc?.phones?.length) out.phones = doc.phones.map((p) => ({ number: p.number, type: p.type }));
+  if (doc?.hours && (doc.hours.th || doc.hours.en)) out.hours = { th: doc.hours.th || '', en: doc.hours.en || '' };
+  if (doc?.announcement) {
+    const a = doc.announcement;
+    out.announcement = { enabled: !!a.enabled, th: a.th || '', en: a.en || '', until: a.until || '' };
+  }
+  return out;
+};
+
 router.get('/settings', async (_req, res) => {
   try {
     const doc = await DirekairSetting.findOne({ key: 'site' }).lean();
     res.set('Cache-Control', 'no-cache');
-    res.json({ theme: doc?.theme || 'ice' });
+    res.json(publicSettings(doc));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Partial update: only the fields present in the body are validated and saved.
 router.put('/settings', requireAdmin, async (req, res) => {
-  const theme = req.body?.theme;
-  if (typeof theme !== 'string' || !THEME_ID.test(theme)) {
-    return res.status(400).json({ error: 'ธีมไม่ถูกต้อง' });
+  const body = req.body || {};
+  const update = {};
+  if ('theme' in body) {
+    if (typeof body.theme !== 'string' || !THEME_ID.test(body.theme)) return res.status(400).json({ error: 'ธีมไม่ถูกต้อง' });
+    update.theme = body.theme;
   }
+  if ('phones' in body) {
+    const list = Array.isArray(body.phones) ? body.phones : null;
+    if (!list || list.length < 1 || list.length > 4) return res.status(400).json({ error: 'ใส่เบอร์โทร 1–4 เบอร์' });
+    const phones = [];
+    for (const p of list) {
+      const number = field(p?.number, 30);
+      if (!PHONE_RE.test(number)) return res.status(400).json({ error: `เบอร์โทรไม่ถูกต้อง: ${number || '(ว่าง)'}` });
+      phones.push({ number, type: p?.type === 'mobile' ? 'mobile' : 'shop' });
+    }
+    update.phones = phones;
+  }
+  if ('hours' in body) {
+    const th = field(body.hours?.th, 120), en = field(body.hours?.en, 120);
+    if (!th) return res.status(400).json({ error: 'กรุณาใส่เวลาทำการภาษาไทย' });
+    update.hours = { th, en };
+  }
+  if ('announcement' in body) {
+    const a = body.announcement || {};
+    const until = typeof a.until === 'string' && DATE_RE.test(a.until) ? a.until : '';
+    const th = field(a.th, 200), en = field(a.en, 200);
+    if (a.enabled && !th) return res.status(400).json({ error: 'กรุณาใส่ข้อความประกาศภาษาไทย' });
+    update.announcement = { enabled: !!a.enabled, th, en, until };
+  }
+  if (!Object.keys(update).length) return res.status(400).json({ error: 'ไม่มีข้อมูลที่จะบันทึก' });
   try {
     const doc = await DirekairSetting.findOneAndUpdate(
-      { key: 'site' }, { theme }, { upsert: true, new: true, setDefaultsOnInsert: true },
-    );
-    res.json({ theme: doc.theme });
+      { key: 'site' }, { $set: update }, { upsert: true, new: true, setDefaultsOnInsert: true },
+    ).lean();
+    res.json(publicSettings(doc));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- stats (counts only) ---------- */
+
+const thaiDay = (d = new Date()) => new Date(d.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+const BOT_UA = /bot|crawl|spider|slurp|preview|facebookexternalhit|headless|lighthouse/i;
+const TRACK_EVENTS = ['visit', 'call', 'line', 'map'];
+const trackLimiter = rateLimit({ windowMs: 60 * 60_000, max: 300, standardHeaders: true, legacyHeaders: false });
+
+function bump(event, lang) {
+  return DirekairStat.updateOne(
+    { day: thaiDay(), event, lang: lang === 'en' ? 'en' : 'th' }, { $inc: { n: 1 } }, { upsert: true },
+  );
+}
+
+// Called by the site with navigator.sendBeacon (text/plain body, so no CORS preflight) or fetch (JSON).
+router.post('/track', express.text({ type: 'text/plain', limit: '1kb' }), trackLimiter, async (req, res) => {
+  let body = req.body;
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+  const event = body?.event;
+  if (!TRACK_EVENTS.includes(event)) return res.status(400).end();
+  if (BOT_UA.test(req.headers['user-agent'] || '')) return res.status(204).end();
+  try { await bump(event, body.lang); } catch (err) { console.error('direkair: track failed:', err.message); }
+  res.status(204).end();
+});
+
+router.get('/stats', requireAdmin, async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 7), 90);
+  const today = thaiDay();
+  const from = thaiDay(new Date(Date.now() - (days - 1) * 86400_000));
+  const monthFrom = thaiDay(new Date(Date.now() - 365 * 86400_000)).slice(0, 7) + '-01';
+  try {
+    const [rows, months] = await Promise.all([
+      DirekairStat.find({ day: { $gte: from, $lte: today } }).lean(),
+      DirekairStat.aggregate([
+        { $match: { event: 'booking', day: { $gte: monthFrom } } },
+        { $group: { _id: { $substrCP: ['$day', 0, 7] }, n: { $sum: '$n' } } },
+        { $sort: { _id: 1 } },
+      ]),
+    ]);
+    const blank = () => ({ visit: 0, call: 0, line: 0, map: 0, booking: 0, visitEn: 0 });
+    const byDay = {};
+    for (let i = days - 1; i >= 0; i--) byDay[thaiDay(new Date(Date.now() - i * 86400_000))] = blank();
+    for (const r of rows) {
+      const d = byDay[r.day]; if (!d) continue;
+      d[r.event] += r.n;
+      if (r.event === 'visit' && r.lang === 'en') d.visitEn += r.n;
+    }
+    const series = Object.entries(byDay).map(([day, v]) => ({ day, ...v }));
+    const sum = (list) => list.reduce((t, d) => { for (const k of Object.keys(t)) t[k] += d[k]; return t; }, blank());
+    res.json({
+      today,
+      days: series,
+      last7: sum(series.slice(-7)),
+      lastN: sum(series),
+      bookingsByMonth: months.map((m) => ({ month: m._id, n: m.n })),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
