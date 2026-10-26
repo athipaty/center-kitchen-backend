@@ -8,6 +8,7 @@ const router    = express.Router();
 const { uploadToB2, deleteB2File, b2Enabled } = require('../../utils/b2Utils');
 const DirekairPhoto = require('../../models/direkair/DirekairPhoto');
 const DirekairSetting = require('../../models/direkair/DirekairSetting');
+const DirekairBooking = require('../../models/direkair/DirekairBooking');
 
 // Direk Air (ดิเรกแอร์) shop site: admin login + customer-work photo gallery.
 //
@@ -73,6 +74,92 @@ router.post('/login', loginLimiter, (req, res) => {
 });
 
 router.get('/me', requireAdmin, (_req, res) => res.json({ admin: true }));
+
+/* ---------- bookings ---------- */
+
+// Public booking form: cap per IP so the endpoint can't be used to flood the inbox.
+const bookingLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'ส่งการจองหลายครั้งเกินไป กรุณาโทรหาร้าน' },
+});
+const BOOKING_STATUSES = ['new', 'confirmed', 'done', 'cancelled'];
+const MAX_BOOKINGS = 2000;
+const field = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const toBooking = (b) => ({
+  id: String(b._id), name: b.name, phone: b.phone, car: b.car, service: b.service,
+  date: b.date, note: b.note, lang: b.lang, status: b.status, createdAt: b.createdAt,
+});
+
+router.post('/bookings', bookingLimiter, async (req, res) => {
+  const body = req.body || {};
+  // Hidden "website" field: people never see it, form-filling bots usually do. Pretend success.
+  if (field(body.website, 200)) return res.status(201).json({ ok: true });
+  const name = field(body.name, 80);
+  const phone = field(body.phone, 30);
+  if (!name || !/^[0-9+\-\s()]{6,30}$/.test(phone)) {
+    return res.status(400).json({ error: 'กรุณากรอกชื่อและเบอร์โทรให้ถูกต้อง' });
+  }
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : '';
+  try {
+    if (await DirekairBooking.estimatedDocumentCount() >= MAX_BOOKINGS) {
+      return res.status(503).json({ error: 'ระบบจองเต็ม กรุณาติดต่อร้านทาง LINE หรือโทร' });
+    }
+    const b = await DirekairBooking.create({
+      name, phone, date,
+      car: field(body.car, 80),
+      service: field(body.service, 120),
+      note: field(body.note, 500),
+      lang: body.lang === 'en' ? 'en' : 'th',
+    });
+    res.status(201).json({ ok: true, id: String(b._id) });
+  } catch (err) {
+    console.error('direkair: booking failed:', err.message);
+    res.status(500).json({ error: 'บันทึกการจองไม่สำเร็จ' });
+  }
+});
+
+router.get('/bookings', requireAdmin, async (req, res) => {
+  try {
+    const filter = BOOKING_STATUSES.includes(req.query.status) ? { status: req.query.status } : {};
+    const [items, counts] = await Promise.all([
+      DirekairBooking.find(filter).sort({ createdAt: -1 }).limit(300).lean(),
+      DirekairBooking.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
+    ]);
+    res.json({
+      bookings: items.map(toBooking),
+      counts: Object.fromEntries(BOOKING_STATUSES.map((s) => [s, counts.find((c) => c._id === s)?.n || 0])),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/bookings/:id', requireAdmin, async (req, res) => {
+  const status = req.body?.status;
+  if (!BOOKING_STATUSES.includes(status)) return res.status(400).json({ error: 'สถานะไม่ถูกต้อง' });
+  try {
+    const b = await DirekairBooking.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    if (!b) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+    res.json(toBooking(b));
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/bookings/:id', requireAdmin, async (req, res) => {
+  try {
+    const b = await DirekairBooking.findByIdAndDelete(req.params.id);
+    if (!b) return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(404).json({ error: 'ไม่พบการจองนี้' });
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /* ---------- settings (theme colour) ---------- */
 
