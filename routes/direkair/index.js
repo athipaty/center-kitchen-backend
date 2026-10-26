@@ -54,12 +54,16 @@ function requireAdmin(req, res, next) {
   }
 }
 
-const toPublic = (p) => ({ id: String(p._id), url: p.url, caption: p.caption });
+const PHOTO_CATEGORIES = ['aircon', 'carryboy', 'tint', 'audio', 'other'];
+const toPublic = (p) => ({
+  id: String(p._id), url: p.url, caption: p.caption, category: p.category || 'other',
+  ...(p.beforeUrl ? { beforeUrl: p.beforeUrl } : {}),
+});
 const cleanCaption = (v) => (typeof v === 'string' ? v.trim().slice(0, MAX_CAPTION) : '');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 10 * 1024 * 1024, files: 2 }, // the photo, plus an optional "before" photo
   fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp)$/.test(file.mimetype)),
 });
 
@@ -172,6 +176,7 @@ const publicSettings = (doc) => {
   const out = { theme: doc?.theme || 'ice' };
   if (doc?.phones?.length) out.phones = doc.phones.map((p) => ({ number: p.number, type: p.type }));
   if (doc?.hours && (doc.hours.th || doc.hours.en)) out.hours = { th: doc.hours.th || '', en: doc.hours.en || '' };
+  if (doc?.heroUrl) out.heroPhoto = { id: doc.heroPhotoId, url: doc.heroUrl };
   if (doc?.announcement) {
     const a = doc.announcement;
     out.announcement = { enabled: !!a.enabled, th: a.th || '', en: a.en || '', until: a.until || '' };
@@ -219,6 +224,14 @@ router.put('/settings', requireAdmin, async (req, res) => {
     const th = field(a.th, 200), en = field(a.en, 200);
     if (a.enabled && !th) return res.status(400).json({ error: 'กรุณาใส่ข้อความประกาศภาษาไทย' });
     update.announcement = { enabled: !!a.enabled, th, en, until };
+  }
+  if ('heroPhotoId' in body) {
+    if (!body.heroPhotoId) { update.heroPhotoId = ''; update.heroUrl = ''; }
+    else {
+      const photo = await DirekairPhoto.findById(String(body.heroPhotoId)).lean().catch(() => null);
+      if (!photo) return res.status(400).json({ error: 'ไม่พบรูปนี้' });
+      update.heroPhotoId = String(photo._id); update.heroUrl = photo.url;
+    }
   }
   if (!Object.keys(update).length) return res.status(400).json({ error: 'ไม่มีข้อมูลที่จะบันทึก' });
   try {
@@ -303,36 +316,49 @@ router.get('/gallery', async (_req, res) => {
   }
 });
 
+// Resize, convert to WebP, and drop EXIF (customer photos can carry GPS of their home).
+const toWebp = (buf) => sharp(buf)
+  .rotate()
+  .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+  .webp({ quality: 82 })
+  .toBuffer();
+
 router.post('/gallery', requireAdmin, (req, res) => {
-  upload.single('photo')(req, res, async (err) => {
+  upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'before', maxCount: 1 }])(req, res, async (err) => {
     if (err) {
       return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 10MB' : 'อัปโหลดไม่สำเร็จ' });
     }
-    if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกรูป JPG, PNG หรือ WebP' });
+    const main = req.files?.photo?.[0];
+    const before = req.files?.before?.[0];
+    if (!main) return res.status(400).json({ error: 'กรุณาเลือกรูป JPG, PNG หรือ WebP' });
     if (!b2Enabled()) return res.status(503).json({ error: 'ยังไม่ได้ตั้งค่าที่เก็บรูป (B2)' });
+    const category = PHOTO_CATEGORIES.includes(req.body.category) ? req.body.category : 'other';
 
     try {
       if (await DirekairPhoto.countDocuments() >= MAX_PHOTOS) {
         return res.status(400).json({ error: `มีรูปครบ ${MAX_PHOTOS} รูปแล้ว กรุณาลบรูปเก่าก่อน` });
       }
 
-      // Resize, convert to WebP, and drop EXIF (customer photos can carry GPS of their home).
-      let image;
+      let image, beforeImage;
       try {
-        image = await sharp(req.file.buffer)
-          .rotate()
-          .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
-          .webp({ quality: 82 })
-          .toBuffer();
+        image = await toWebp(main.buffer);
+        if (before) beforeImage = await toWebp(before.buffer);
       } catch {
         return res.status(400).json({ error: 'ไฟล์นี้ไม่ใช่รูปภาพที่รองรับ' });
       }
 
-      const fileKey = `${B2_PREFIX}${Date.now()}-${crypto.randomUUID()}.webp`;
+      const stamp = `${Date.now()}-${crypto.randomUUID()}`;
+      const fileKey = `${B2_PREFIX}${stamp}.webp`;
       const url = await uploadToB2(image, fileKey, 'image/webp');
+      let beforeKey = '', beforeUrl = '';
+      if (beforeImage) {
+        beforeKey = `${B2_PREFIX}${stamp}-before.webp`;
+        beforeUrl = await uploadToB2(beforeImage, beforeKey, 'image/webp');
+      }
       const first = await DirekairPhoto.findOne().sort({ order: 1 }).lean();
       const photo = await DirekairPhoto.create({
-        url, fileKey, caption: cleanCaption(req.body.caption), order: first ? first.order - 1 : 0,
+        url, fileKey, beforeUrl, beforeKey, category,
+        caption: cleanCaption(req.body.caption), order: first ? first.order - 1 : 0,
       });
       res.status(201).json(toPublic(photo));
     } catch (e) {
@@ -360,7 +386,14 @@ router.put('/gallery/order', requireAdmin, async (req, res) => {
 
 router.patch('/gallery/:id', requireAdmin, async (req, res) => {
   try {
-    const photo = await DirekairPhoto.findByIdAndUpdate(req.params.id, { caption: cleanCaption(req.body?.caption) }, { new: true });
+    const update = {};
+    if (typeof req.body?.caption === 'string') update.caption = cleanCaption(req.body.caption);
+    if ('category' in (req.body || {})) {
+      if (!PHOTO_CATEGORIES.includes(req.body.category)) return res.status(400).json({ error: 'ประเภทไม่ถูกต้อง' });
+      update.category = req.body.category;
+    }
+    if (!Object.keys(update).length) return res.status(400).json({ error: 'ไม่มีข้อมูลที่จะบันทึก' });
+    const photo = await DirekairPhoto.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!photo) return res.status(404).json({ error: 'ไม่พบรูปนี้' });
     res.json(toPublic(photo));
   } catch (err) {
@@ -374,6 +407,9 @@ router.delete('/gallery/:id', requireAdmin, async (req, res) => {
     const photo = await DirekairPhoto.findByIdAndDelete(req.params.id);
     if (!photo) return res.status(404).json({ error: 'ไม่พบรูปนี้' });
     await deleteB2File(photo.fileKey);
+    if (photo.beforeKey) await deleteB2File(photo.beforeKey);
+    // stop using it as the home page picture
+    await DirekairSetting.updateOne({ key: 'site', heroPhotoId: String(photo._id) }, { $set: { heroPhotoId: '', heroUrl: '' } });
     res.json({ ok: true });
   } catch (err) {
     if (err.name === 'CastError') return res.status(404).json({ error: 'ไม่พบรูปนี้' });
