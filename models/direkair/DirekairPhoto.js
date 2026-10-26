@@ -7,6 +7,11 @@ const DirekairPhotoSchema = new mongoose.Schema({
   fileKey: { type: String, required: true },
   caption: { type: String, default: '' },
   order:   { type: Number, default: 0 }, // lower shows first
+  // which service the job was: lets the site filter the gallery
+  category: { type: String, enum: ['aircon', 'carryboy', 'tint', 'audio', 'other'], default: 'other' },
+  // optional "before" photo for a before/after pair
+  beforeUrl: { type: String, default: '' },
+  beforeKey: { type: String, default: '' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('DirekairPhoto', DirekairPhotoSchema);
