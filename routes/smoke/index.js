@@ -6,13 +6,14 @@ const SmokeDsa = require("../../models/smoke/SmokeDsa");
 
 // The engine is the smoke-finder package (ESM, installed from GitHub), so it's
 // loaded with a dynamic import. It only ever sees the zones near one point.
+// nearby.js loads separately so a problem with it can't take down /check.
 let enginePromise;
 const loadEngine = () =>
-  (enginePromise ??= Promise.all([
-    import("smoke-finder/src/engine.js"),
-    import("smoke-finder/src/geo.js"),
-    import("smoke-finder/src/nearby.js"),
-  ]).then((modules) => Object.assign({}, ...modules)));
+  (enginePromise ??= Promise.all([import("smoke-finder/src/engine.js"), import("smoke-finder/src/geo.js")]).then(
+    (modules) => Object.assign({}, ...modules)
+  ));
+let nearbyPromise;
+const loadNearby = () => (nearbyPromise ??= import("smoke-finder/src/nearby.js"));
 
 const SG_BOUNDS = { s: 1.15, w: 103.59, n: 1.48, e: 104.1 };
 // Widest reach of any rule (Orchard NSZ amber band is 150 m) plus a margin.
@@ -104,10 +105,11 @@ router.get("/nearby", async (req, res) => {
     if (!point) return;
     const { lat, lng, meta, engine } = point;
 
-    const [zones, nearDsas, dsas] = await Promise.all([
+    const [zones, nearDsas, dsas, { findLegalSpots, walkMinutes }] = await Promise.all([
       zonesNear(lat, lng, NEARBY_SEARCH_M + QUERY_RADIUS_M),
       dsasNear(lat, lng, NEARBY_SEARCH_M + QUERY_RADIUS_M),
       dsasNear(lat, lng, NEARBY_DSA_M, NEARBY_DSA_LIMIT),
+      loadNearby(),
     ]);
     const check = engine.createChecker({ zones, dsas: nearDsas, builtAt: meta.builtAt });
     const [ox, oy] = engine.project(lat, lng);
@@ -115,9 +117,9 @@ router.get("/nearby", async (req, res) => {
     res.json({
       dsas: dsas.map(({ x, y, ...d }) => {
         const distanceM = Math.round(Math.hypot(x - ox, y - oy));
-        return { ...d, distanceM, walkMin: engine.walkMinutes(distanceM) };
+        return { ...d, distanceM, walkMin: walkMinutes(distanceM) };
       }),
-      open: engine.findLegalSpots(check, { lat, lng }, { radiusM: NEARBY_SEARCH_M }),
+      open: findLegalSpots(check, { lat, lng }, { radiusM: NEARBY_SEARCH_M }),
       searchRadiusM: NEARBY_SEARCH_M,
       dataBuiltAt: meta.builtAt,
     });
