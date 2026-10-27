@@ -29,6 +29,7 @@ app.set('trust proxy', 2);
 // Rate limiters
 const addProductLimiter = rateLimit({ windowMs: 60_000, max: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many add requests — slow down' } });
 const checkLimiter      = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many check requests — slow down' } });
+const smokeLimiter      = rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests — slow down' } });
 
 /* =====================
    MIDDLEWARE
@@ -163,6 +164,10 @@ app.use('/api/market/listings', require('./routes/market/listings'));
 app.use('/api/market/conversations', require('./routes/market/conversations'));
 app.use('/api/market/uploads', require('./routes/market/uploads'));
 require('./routes/market/chatSocket').attachMarketChat(io);
+
+// --- Smoke Finder (Singapore "can I smoke here?" check) ---
+// Public, read-only and credential-free, so any origin may call it (web test page, mobile app).
+app.use('/api/smoke', cors({ origin: '*' }), smokeLimiter, require('./routes/smoke'));
 
 /* =====================
    DATABASE
