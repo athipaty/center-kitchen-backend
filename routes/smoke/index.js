@@ -3,6 +3,7 @@ const router = express.Router();
 const SmokeDsa = require("../../models/smoke/SmokeDsa");
 const spots = require("./spots");
 const stats = require("./stats");
+const onemap = require("./onemap");
 const {
   loadNearby,
   loadMeta,
@@ -70,6 +71,29 @@ router.get("/nearby", async (req, res) => {
     stats.count("nearby");
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Walking route between two points in Singapore (OneMap).
+// GET /api/smoke/route?from=1.3039,103.8318&to=1.3040,103.8350
+const MAX_ROUTE_M = 5000;
+const parsePoint = (s) => {
+  const [lat, lng] = String(s ?? "").split(",").map(Number);
+  return Number.isFinite(lat) && Number.isFinite(lng) && lat > 1.15 && lat < 1.48 && lng > 103.59 && lng < 104.1 ? { lat, lng } : null;
+};
+router.get("/route", async (req, res) => {
+  try {
+    if (!onemap.configured()) return res.status(503).json({ error: "Walking routes are not set up yet" });
+    const from = parsePoint(req.query.from);
+    const to = parsePoint(req.query.to);
+    if (!from || !to) return res.status(400).json({ error: "from and to must be lat,lng points in Singapore" });
+    const straight = Math.hypot((to.lng - from.lng) * 111320 * Math.cos((from.lat * Math.PI) / 180), (to.lat - from.lat) * 110574);
+    if (straight > MAX_ROUTE_M) return res.status(400).json({ error: "Points are too far apart for a walking route" });
+    const route = await onemap.walkRoute(from, to);
+    res.json({ minutes: Math.max(1, Math.round(route.seconds / 60)), metres: Math.round(route.metres), path: route.path });
+  } catch (err) {
+    console.error("smoke: route failed:", err.message);
+    res.status(502).json({ error: "Couldn't get a walking route right now" });
   }
 });
 
