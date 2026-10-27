@@ -158,6 +158,7 @@ router.get("/metrics", requireAdmin, async (_req, res) => {
         nearby: d.nearby ?? 0,
         spotViews: d.spotViews ?? 0,
         adds: d.adds ?? 0,
+        checkins: d.checkins ?? 0,
         reports: (v.gone ?? 0) + (v.not_allowed ?? 0),
         confirms: v.here ?? 0,
       };

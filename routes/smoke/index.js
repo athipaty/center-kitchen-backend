@@ -4,6 +4,7 @@ const SmokeDsa = require("../../models/smoke/SmokeDsa");
 const spots = require("./spots");
 const stats = require("./stats");
 const onemap = require("./onemap");
+const checkins = require("./checkins");
 const {
   loadNearby,
   loadMeta,
@@ -66,9 +67,12 @@ getOrPost("/nearby", async (req, res) => {
       return { distanceM, walkMin: walkMinutes(distanceM) };
     };
 
+    // How many people checked in at each spot in the last hour ("busy now").
+    const busy = await checkins.busyFor([...dsas.map((d) => checkins.dsaKey(d.neaId)), ...community.map((s) => checkins.communityKey(s.id))]);
+
     res.json({
-      dsas: dsas.map(({ x, y, ...d }) => ({ ...d, ...withDistance(x, y) })),
-      community: community.map((s) => ({ ...s, ...withDistance(...engine.project(s.lat, s.lng)) })),
+      dsas: dsas.map(({ x, y, ...d }) => ({ ...d, ...withDistance(x, y), busyNow: busy[checkins.dsaKey(d.neaId)] ?? 0 })),
+      community: community.map((s) => ({ ...s, ...withDistance(...engine.project(s.lat, s.lng)), busyNow: busy[checkins.communityKey(s.id)] ?? 0 })),
       open: findLegalSpots(check, { lat, lng }, { radiusM: NEARBY_SEARCH_M }),
       weather,
       searchRadiusM: NEARBY_SEARCH_M,
@@ -117,6 +121,9 @@ router.post("/ping", async (req, res) => {
 
 // F5 / F6: community spots
 router.use("/spots", spots);
+
+// "I'm here now" check-ins for the busy-now level
+router.use("/checkins", checkins);
 
 // Moderation (password-protected)
 router.use("/admin", require("./admin"));
