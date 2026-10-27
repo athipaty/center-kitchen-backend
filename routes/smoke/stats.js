@@ -25,7 +25,7 @@ async function ping(device) {
     { _id: device },
     {
       $setOnInsert: { first: today },
-      $set: { last: today },
+      $set: { last: today, lastAt: new Date() }, // lastAt drives the 12-month auto-delete
       $addToSet: { days: today },
     },
     { upsert: true, new: false }

@@ -9,6 +9,8 @@ const smokeDeviceSchema = new mongoose.Schema(
     first: { type: String, required: true }, // YYYY-MM-DD, Singapore time
     last: { type: String, required: true },
     days: { type: [String], default: [] }, // most recent 60 active days
+    // Deleted automatically 12 months after the device last opened the app.
+    lastAt: { type: Date, default: () => new Date(), expires: 365 * 86_400 },
   },
   { versionKey: false, collection: "smokedevices" }
 );
