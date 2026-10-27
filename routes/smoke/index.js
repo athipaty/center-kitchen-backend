@@ -118,6 +118,9 @@ router.use("/admin", require("./admin"));
 // Opt-in push alerts for saved spots
 router.use("/alerts", require("./alerts"));
 
+// "Report a problem" from the app
+router.use("/reports", require("./reports"));
+
 // All NEA designated smoking areas, for the map.
 router.get("/dsas", async (req, res) => {
   try {

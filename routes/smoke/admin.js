@@ -13,6 +13,7 @@ const SmokeSpot = require("../../models/smoke/SmokeSpot");
 const SmokeStat = require("../../models/smoke/SmokeStat");
 const SmokeDevice = require("../../models/smoke/SmokeDevice");
 const SmokeAlert = require("../../models/smoke/SmokeAlert");
+const SmokeReport = require("../../models/smoke/SmokeReport");
 const { sgDay, addDays } = require("./stats");
 const { deleteB2File } = require("../../utils/b2Utils");
 const { tally } = require("./spots");
@@ -91,6 +92,34 @@ router.post("/login", loginLimiter, (req, res) => {
 });
 
 router.get("/me", requireAdmin, (_req, res) => res.json({ admin: true }));
+
+// User problem reports. ?status=open (default) | done | all
+router.get("/reports", requireAdmin, async (req, res) => {
+  try {
+    const status = ["open", "done"].includes(req.query.status) ? { status: req.query.status } : req.query.status === "all" ? {} : { status: "open" };
+    const [reports, open] = await Promise.all([
+      SmokeReport.find(status).sort({ createdAt: -1 }).limit(REVIEW_LIMIT).select("-device").lean(),
+      SmokeReport.countDocuments({ status: "open" }),
+    ]);
+    res.json({ open, reports: reports.map(({ _id, ...r }) => ({ id: String(_id), ...r })) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// { status: "open" | "done" }
+router.post("/reports/:id", requireAdmin, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: "Report not found" });
+    if (!["open", "done"].includes(req.body?.status)) return res.status(400).json({ error: "status must be open or done" });
+    const report = await SmokeReport.findByIdAndUpdate(req.params.id, { status: req.body.status }, { new: true }).select("-device").lean();
+    if (!report) return res.status(404).json({ error: "Report not found" });
+    const { _id, ...rest } = report;
+    res.json({ id: String(_id), ...rest });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // The spec's success metrics (targets for 3 months after launch).
 const ORCHARD = { lat: 1.3035, lng: 103.8335 }; // centre of the Orchard Road NSZ
