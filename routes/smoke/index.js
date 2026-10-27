@@ -76,6 +76,9 @@ router.use("/spots", spots);
 // Moderation (password-protected)
 router.use("/admin", require("./admin"));
 
+// Opt-in push alerts for saved spots
+router.use("/alerts", require("./alerts"));
+
 // All NEA designated smoking areas, for the map.
 router.get("/dsas", async (req, res) => {
   try {
