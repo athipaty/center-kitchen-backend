@@ -69,6 +69,10 @@ if (process.env.MARKET_FRONTEND_URL) allowedOrigins.push(process.env.MARKET_FRON
 // Same for the Direk Air shop site until it's live on direkair.com.
 if (process.env.DIREKAIR_FRONTEND_URL) allowedOrigins.push(process.env.DIREKAIR_FRONTEND_URL);
 
+// Smoke Finder's API is public, read-mostly and credential-free, so any origin may call it
+// (web app, future mobile app). It must come before the global cors below: that one ends
+// preflight (OPTIONS) requests itself, without allow headers for origins not on the list.
+app.use('/api/smoke', cors({ origin: '*', maxAge: 86400 }));
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 // Default limit is 100kb; ABT page saves send every block at once, and a full-page HTML block
 // (Thai text, ~3 bytes/char) alone can approach that, so saves would fail with 413.
@@ -165,9 +169,8 @@ app.use('/api/market/conversations', require('./routes/market/conversations'));
 app.use('/api/market/uploads', require('./routes/market/uploads'));
 require('./routes/market/chatSocket').attachMarketChat(io);
 
-// --- Smoke Finder (Singapore "can I smoke here?" check) ---
-// Public, read-only and credential-free, so any origin may call it (web test page, mobile app).
-app.use('/api/smoke', cors({ origin: '*' }), smokeLimiter, require('./routes/smoke'));
+// --- Smoke Finder (Singapore "can I smoke here?" check; CORS is set up above) ---
+app.use('/api/smoke', smokeLimiter, require('./routes/smoke'));
 
 /* =====================
    DATABASE
