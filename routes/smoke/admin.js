@@ -10,6 +10,10 @@ const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const rateLimit = require("express-rate-limit");
 const SmokeSpot = require("../../models/smoke/SmokeSpot");
+const SmokeStat = require("../../models/smoke/SmokeStat");
+const SmokeDevice = require("../../models/smoke/SmokeDevice");
+const SmokeAlert = require("../../models/smoke/SmokeAlert");
+const { sgDay, addDays } = require("./stats");
 const { deleteB2File } = require("../../utils/b2Utils");
 const { tally } = require("./spots");
 
@@ -87,6 +91,86 @@ router.post("/login", loginLimiter, (req, res) => {
 });
 
 router.get("/me", requireAdmin, (_req, res) => res.json({ admin: true }));
+
+// The spec's success metrics (targets for 3 months after launch).
+const ORCHARD = { lat: 1.3035, lng: 103.8335 }; // centre of the Orchard Road NSZ
+const ORCHARD_RADIUS_M = 1500;
+const metresFrom = (a, b) =>
+  Math.hypot((a.lng - b.lng) * 111320 * Math.cos((a.lat * Math.PI) / 180), (a.lat - b.lat) * 110574);
+
+router.get("/metrics", requireAdmin, async (_req, res) => {
+  try {
+    const today = sgDay();
+    const from14 = sgDay(-13);
+    const from7 = sgDay(-6);
+    const db = SmokeStat.db;
+
+    const [daily, weeklyActives, cohort, spots, meta, alertsRun, alertDevices] = await Promise.all([
+      SmokeStat.find({ _id: { $gte: from14 } }).sort({ _id: 1 }).lean(),
+      SmokeDevice.countDocuments({ last: { $gte: from7 } }),
+      // D7 retention cohort: first seen 7 to 13 days ago, so day 7 has happened
+      SmokeDevice.find({ first: { $gte: sgDay(-13), $lte: sgDay(-7) } }).select("first days").lean(),
+      SmokeSpot.find().select("lat lng status lastConfirmedAt").lean(),
+      db.collection("smokemeta").findOne({ _id: "current" }, { projection: { boundary: 0 } }),
+      db.collection("smokemeta").findOne({ _id: "alertsRun" }),
+      SmokeAlert.countDocuments(),
+    ]);
+
+    // One row per day for the last 14 days, zeros where nothing happened.
+    const byDay = Object.fromEntries(daily.map((d) => [d._id, d]));
+    const days = Array.from({ length: 14 }, (_, i) => addDays(from14, i)).map((day) => {
+      const d = byDay[day] ?? {};
+      const v = d.votes ?? {};
+      return {
+        day,
+        actives: d.actives ?? 0,
+        newDevices: d.newDevices ?? 0,
+        checks: d.checks ?? 0,
+        nearby: d.nearby ?? 0,
+        spotViews: d.spotViews ?? 0,
+        adds: d.adds ?? 0,
+        reports: (v.gone ?? 0) + (v.not_allowed ?? 0),
+        confirms: v.here ?? 0,
+      };
+    });
+    const last7 = days.filter((d) => d.day >= from7);
+    const sum = (rows, key) => rows.reduce((n, r) => n + r[key], 0);
+
+    const retained = cohort.filter((c) => c.days.some((d) => d >= addDays(c.first, 7))).length;
+    const visible = spots.filter((s) => s.status !== "hidden");
+    const recent = Date.now() - 90 * 86_400_000;
+    const views7 = sum(last7, "spotViews");
+    const pct = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : null);
+
+    res.json({
+      today,
+      targets: {
+        spots: { value: visible.length, target: 1000 },
+        spotsOutsideOrchardPct: { value: pct(visible.filter((s) => metresFrom(s, ORCHARD) > ORCHARD_RADIUS_M).length, visible.length), target: 30 },
+        weeklyActives: { value: weeklyActives, target: 2000 },
+        day7RetentionPct: { value: pct(retained, cohort.length), target: 25, cohort: cohort.length },
+        confirmedLast90DaysPct: { value: pct(visible.filter((s) => new Date(s.lastConfirmedAt).getTime() >= recent).length, visible.length), target: 70 },
+        reportsPer100Views: { value: views7 ? Math.round((sum(last7, "reports") / views7) * 1000) / 10 : null, target: 3, lowerIsBetter: true },
+        checksPerActivePerWeek: { value: weeklyActives ? Math.round((sum(last7, "checks") / weeklyActives) * 10) / 10 : null, target: 5 },
+      },
+      days,
+      spots: {
+        visible: visible.length,
+        verified: spots.filter((s) => s.status === "verified").length,
+        hidden: spots.length - visible.length,
+      },
+      data: {
+        builtAt: meta?.builtAt ?? null,
+        importedAt: meta?.importedAt ?? null,
+        zones: meta ? Object.values(meta.counts ?? {}).reduce((a, b) => a + b, 0) : 0,
+        alertsLastRun: alertsRun ? { ranAt: alertsRun.ranAt, summary: alertsRun.summary } : null,
+        alertDevices,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ?filter=review (default: hidden, or any reports) | hidden | photos | all
 router.get("/spots", requireAdmin, async (req, res) => {

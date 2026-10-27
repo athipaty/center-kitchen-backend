@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const SmokeSpot = require("../../models/smoke/SmokeSpot");
 const { uploadToB2, b2Enabled } = require("../../utils/b2Utils");
 const { readPoint, checkPoint, deviceHash } = require("./lib");
+const stats = require("./stats");
 
 const router = express.Router();
 
@@ -91,6 +92,7 @@ router.get("/:id", async (req, res) => {
     const spot = await SmokeSpot.findById(req.params.id).lean();
     if (!spot || spot.status === "hidden") return res.status(404).json({ error: "Spot not found" });
     res.json(toPublic(spot, deviceHash(req)));
+    stats.count("spotViews");
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -163,6 +165,7 @@ router.post("/", addLimiter, (req, res) => {
       tally(spot);
       await spot.save();
       res.status(201).json(toPublic(spot.toObject(), device));
+      stats.count("adds");
     } catch (err) {
       console.error("smoke: add spot failed:", err.message);
       res.status(500).json({ error: "Couldn't save the spot. Please try again." });
@@ -192,6 +195,7 @@ router.post("/:id/vote", voteLimiter, async (req, res) => {
     tally(spot);
     await spot.save();
     res.json(toPublic(spot.toObject(), device));
+    stats.count(`votes.${type}`);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

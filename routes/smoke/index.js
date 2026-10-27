@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const SmokeDsa = require("../../models/smoke/SmokeDsa");
 const spots = require("./spots");
+const stats = require("./stats");
 const {
   loadNearby,
   loadMeta,
@@ -26,6 +27,7 @@ router.get("/check", async (req, res) => {
     const point = await readPoint(req.query, res);
     if (!point) return;
     res.json(await checkPoint(point));
+    stats.count("checks");
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -65,6 +67,19 @@ router.get("/nearby", async (req, res) => {
       searchRadiusM: NEARBY_SEARCH_M,
       dataBuiltAt: meta.builtAt,
     });
+    stats.count("nearby");
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// App opened today (once a day per device): for weekly actives and retention.
+router.post("/ping", async (req, res) => {
+  try {
+    const device = deviceHash(req);
+    if (!device) return res.status(400).json({ error: "Missing device id" });
+    await stats.ping(device);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
