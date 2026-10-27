@@ -46,7 +46,7 @@ function tally(spot) {
   spot.goneCount = count("gone");
   spot.notAllowedCount = count("not_allowed");
   spot.badPhotoCount = count("bad_photo");
-  spot.photoHidden = spot.badPhotoCount >= PHOTO_HIDE_AT;
+  spot.photoHidden = spot.photoAdminHidden || spot.badPhotoCount >= PHOTO_HIDE_AT;
   if (spot.goneCount >= HIDE_AT || spot.notAllowedCount >= HIDE_AT) spot.status = "hidden";
   else spot.status = spot.hereCount >= VERIFY_AT ? "verified" : "unverified";
 }
@@ -199,3 +199,4 @@ router.post("/:id/vote", voteLimiter, async (req, res) => {
 
 module.exports = router;
 module.exports.communityNear = communityNear;
+module.exports.tally = tally;

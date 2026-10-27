@@ -73,6 +73,9 @@ router.get("/nearby", async (req, res) => {
 // F5 / F6: community spots
 router.use("/spots", spots);
 
+// Moderation (password-protected)
+router.use("/admin", require("./admin"));
+
 // All NEA designated smoking areas, for the map.
 router.get("/dsas", async (req, res) => {
   try {

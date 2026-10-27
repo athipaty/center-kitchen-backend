@@ -26,6 +26,7 @@ const smokeSpotSchema = new mongoose.Schema(
     photoUrl: { type: String, default: null },
     photoKey: { type: String, default: null },
     photoHidden: { type: Boolean, default: false },
+    photoAdminHidden: { type: Boolean, default: false }, // a moderator's call; votes can't undo it
     verdictAtAdd: { type: String, enum: ["green", "amber"], required: true },
     createdBy: { type: String, required: true },
     // One vote per device; a new vote from the same device replaces the old one.
