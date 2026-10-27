@@ -2,19 +2,22 @@ const express = require('express');
 const mongoose = require('mongoose');
 const router = express.Router();
 const { getBucketUsage, b2Enabled } = require('../../utils/b2Utils');
+const { passwordMatches, passwordLimiter } = require('../../utils/passwordGate');
 
 // Reuses the same lightweight shared-password gate as routes/shared/auth.js —
 // this is diagnostic info (aggregate bytes used), not a secret, but it's
 // still not meant to be public.
+const adminLimiter = passwordLimiter();
+
 function requireAdmin(req, res, next) {
   const password = req.query.password || req.headers['x-admin-password'];
-  if (password !== (process.env.ADMIN_PASSWORD || '555')) {
+  if (!passwordMatches(password, process.env.ADMIN_PASSWORD || '555')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
 }
 
-router.get('/b2-usage', requireAdmin, async (req, res) => {
+router.get('/b2-usage', adminLimiter, requireAdmin, async (req, res) => {
   if (!b2Enabled()) {
     return res.status(400).json({ error: 'B2 is not configured (B2_KEY_ID/B2_APP_KEY/B2_BUCKET/B2_IMAGES_ENABLED)' });
   }
@@ -36,7 +39,7 @@ router.get('/b2-usage', requireAdmin, async (req, res) => {
   }
 });
 
-router.get('/mongo-usage', requireAdmin, async (req, res) => {
+router.get('/mongo-usage', adminLimiter, requireAdmin, async (req, res) => {
   try {
     const db = mongoose.connection.db;
     const stats = await db.command({ dbStats: 1, scale: 1 });

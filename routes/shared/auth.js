@@ -3,6 +3,7 @@ const crypto    = require("crypto");
 const rateLimit = require("express-rate-limit");
 const router    = express.Router();
 const Token     = require("../../models/shared/Token");
+const { passwordMatches } = require("../../utils/passwordGate");
 
 const TOKEN_VALID_DAYS = 7;
 
@@ -34,7 +35,7 @@ router.post("/login", loginLimiter, async (req, res) => {
     const { password } = req.body;
     const ip = getClientIp(req);
 
-    if (password !== getTodayPassword()) {
+    if (!passwordMatches(password, getTodayPassword())) {
       return res.status(401).json({ message: "Incorrect password" });
     }
 

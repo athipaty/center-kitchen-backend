@@ -2,13 +2,14 @@ const express = require('express');
 const crypto  = require('crypto');
 const router  = express.Router();
 const Token   = require('../../models/shared/Token');
+const { passwordMatches, passwordLimiter } = require('../../utils/passwordGate');
 
 const TOKEN_DAYS = 30;
 
-router.post('/login', async (req, res) => {
+router.post('/login', passwordLimiter(), async (req, res) => {
   try {
     const { password } = req.body;
-    if (password !== (process.env.PU_PASSWORD || '050231')) {
+    if (!passwordMatches(password, process.env.PU_PASSWORD || '050231')) {
       return res.status(401).json({ message: 'Incorrect password' });
     }
     const token  = crypto.randomBytes(32).toString('hex');
