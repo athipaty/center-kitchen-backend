@@ -1,4 +1,5 @@
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const router = express.Router();
 const SmokeDsa = require("../../models/smoke/SmokeDsa");
 const spots = require("./spots");
@@ -104,6 +105,21 @@ getOrPost("/route", async (req, res) => {
   } catch (err) {
     console.error("smoke: route failed:", err.message);
     res.status(502).json({ error: "Couldn't get a walking route right now" });
+  }
+});
+
+// Places by name, address or postcode (OneMap), to see spots near somewhere
+// before going. POST /api/smoke/search {"q":"tampines hub"}; the words stay out of the URL.
+const searchLimiter = rateLimit({ windowMs: 60_000, max: 40, standardHeaders: true, legacyHeaders: false, message: { error: "Too many searches. Try again in a minute." } });
+router.post("/search", searchLimiter, async (req, res) => {
+  try {
+    const q = String(req.body?.q ?? "").replace(/\s+/g, " ").trim();
+    if (q.length < 2 || q.length > 80) return res.status(400).json({ error: "Type 2 to 80 characters" });
+    res.json({ results: await onemap.searchPlaces(q) });
+    stats.count("searches");
+  } catch (err) {
+    console.error("smoke: search failed:", err.message);
+    res.status(502).json({ error: "Couldn't search right now" });
   }
 });
 

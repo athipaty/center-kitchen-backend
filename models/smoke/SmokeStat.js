@@ -12,6 +12,7 @@ const smokeStatSchema = new mongoose.Schema(
     spotViews: { type: Number, default: 0 },
     adds: { type: Number, default: 0 },
     checkins: { type: Number, default: 0 }, // "I'm here now"
+    searches: { type: Number, default: 0 }, // place searches
     votes: {
       here: { type: Number, default: 0 },
       gone: { type: Number, default: 0 },
