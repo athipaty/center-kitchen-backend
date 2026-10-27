@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const SmokeSpot = require("../../models/smoke/SmokeSpot");
 const { uploadToB2, b2Enabled } = require("../../utils/b2Utils");
 const { readPoint, checkPoint, deviceHash } = require("./lib");
+const { notifyModerator } = require("./notify");
 const stats = require("./stats");
 
 const router = express.Router();
@@ -166,6 +167,7 @@ router.post("/", addLimiter, (req, res) => {
       await spot.save();
       res.status(201).json(toPublic(spot.toObject(), device));
       stats.count("adds");
+      notifyModerator("Smoke Finder: new spot added", `${spot.name ?? "Unnamed spot"}${photoUrl ? " (with photo)" : ""}. Check it in Moderation.`);
     } catch (err) {
       console.error("smoke: add spot failed:", err.message);
       res.status(500).json({ error: "Couldn't save the spot. Please try again." });

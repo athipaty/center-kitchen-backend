@@ -3,9 +3,11 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const SmokeReport = require("../../models/smoke/SmokeReport");
 const { deviceHash, loadMeta, loadEngine } = require("./lib");
+const { notifyModerator } = require("./notify");
 
 const router = express.Router();
 const KINDS = ["wrong_answer", "spot", "app", "other"];
+const KIND_LABELS = { wrong_answer: "Wrong answer", spot: "Problem with a spot", app: "Problem with the app", other: "Other" };
 const LANGS = ["en", "zh", "ms", "ta", "th"];
 const DAILY_PER_DEVICE = 10;
 
@@ -43,6 +45,9 @@ router.post("/", reportLimiter, async (req, res) => {
       device,
     });
     res.status(201).json({ ok: true });
+    const what = KIND_LABELS[kind];
+    const detail = kind === "wrong_answer" && verdict ? ` (app said ${verdict})` : "";
+    notifyModerator(`Smoke Finder report: ${what}${detail}`, text ? text.slice(0, 140) + (text.length > 140 ? "…" : "") : "No message");
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
