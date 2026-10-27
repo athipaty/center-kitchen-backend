@@ -190,6 +190,7 @@ mongoose
     // require("./jobs/groceryPriceCheck").start();
     require("./jobs/abtContactCleanup").start();
     require("./jobs/smokeAlerts").start();
+    require("./jobs/smokeDigest").start();
     // fbPostScraper's daily cron disabled — confirmed dead end: ScraperAPI itself refuses
     // facebook.com requests outright ("Scraping this url is not allowed", their own ToS,
     // not a technical block we can route around), so every scheduled run would just burn

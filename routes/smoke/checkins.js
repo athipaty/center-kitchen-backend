@@ -1,5 +1,7 @@
 // "Busy now": people say "I'm here now" at a spot; others see how many did in
 // the last hour. Only community spots and NEA areas can be checked in to.
+// At a community spot it also counts as that phone's "Still here" vote:
+// being there is the best proof the spot exists.
 const express = require("express");
 const mongoose = require("mongoose");
 const rateLimit = require("express-rate-limit");
@@ -7,6 +9,7 @@ const SmokeCheckin = require("../../models/smoke/SmokeCheckin");
 const SmokeSpot = require("../../models/smoke/SmokeSpot");
 const SmokeDsa = require("../../models/smoke/SmokeDsa");
 const { deviceHash } = require("./lib");
+const { tally } = require("./spots");
 const stats = require("./stats");
 
 const router = express.Router();
@@ -44,6 +47,17 @@ async function statusFor(key, device) {
   return { busyNow: busy[key] ?? 0, here: Boolean(mine) };
 }
 
+// Same as a "Still here" vote (see spots.js): replaces the phone's earlier vote.
+async function confirmSpot(id, device) {
+  const spot = await SmokeSpot.findById(id);
+  if (!spot) return;
+  spot.votes = spot.votes.filter((v) => !(v.device === device && v.type !== "bad_photo"));
+  spot.votes.push({ device, type: "here" });
+  spot.lastConfirmedAt = new Date();
+  tally(spot);
+  await spot.save();
+}
+
 // GET /api/smoke/checkins?spot=c:<id>  ->  { busyNow, here }
 router.get("/", async (req, res) => {
   try {
@@ -63,6 +77,7 @@ router.post("/", checkinLimiter, async (req, res) => {
     const key = String(req.body?.spot ?? "");
     if (!(await spotExists(key))) return res.status(404).json({ error: "Spot not found" });
     await SmokeCheckin.updateOne({ _id: device }, { $set: { spot: key, at: new Date() } }, { upsert: true });
+    if (key.startsWith("c:")) await confirmSpot(key.slice(2), device);
     res.json(await statusFor(key, device));
     stats.count("checkins");
   } catch (err) {
