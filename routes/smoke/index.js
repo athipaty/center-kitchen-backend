@@ -22,10 +22,16 @@ const NEARBY_DSA_LIMIT = 10;
 const NEARBY_COMMUNITY_M = 1000;
 const NEARBY_COMMUNITY_LIMIT = 15;
 
-// F1: "Can I smoke here?"  GET /api/smoke/check?lat=1.3039&lng=103.8318&acc=8
-router.get("/check", async (req, res) => {
+// Location endpoints take POST with a JSON body, so locations stay out of the
+// URL and therefore out of request logs. GET with query parameters still works
+// for app versions that are already open on people's phones.
+const params = (req) => (req.method === "POST" ? req.body ?? {} : req.query);
+const getOrPost = (path, handler) => router.route(path).get(handler).post(handler);
+
+// F1: "Can I smoke here?"  POST /api/smoke/check {"lat":1.3039,"lng":103.8318,"acc":8}
+getOrPost("/check", async (req, res) => {
   try {
-    const point = await readPoint(req.query, res);
+    const point = await readPoint(params(req), res);
     if (!point) return;
     res.json(await checkPoint(point));
     stats.count("checks");
@@ -34,14 +40,14 @@ router.get("/check", async (req, res) => {
   }
 });
 
-// F2: legal places near a point.  GET /api/smoke/nearby?lat=1.3039&lng=103.8318
+// F2: legal places near a point.  POST /api/smoke/nearby {"lat":1.3039,"lng":103.8318}
 // `dsas`: the 10 nearest NEA designated smoking areas within 1.5 km.
 // `community`: spots added by users within 1 km (not hidden by reports).
 // `open`: nearest open spots within 250 m where the rules allow smoking (computed, not visited).
 // `weather`: NEA 2-hour forecast for the nearest area (F4), or null.
-router.get("/nearby", async (req, res) => {
+getOrPost("/nearby", async (req, res) => {
   try {
-    const point = await readPoint(req.query, res);
+    const point = await readPoint(params(req), res);
     if (!point) return;
     const { lat, lng, meta, engine } = point;
 
@@ -75,17 +81,17 @@ router.get("/nearby", async (req, res) => {
 });
 
 // Walking route between two points in Singapore (OneMap).
-// GET /api/smoke/route?from=1.3039,103.8318&to=1.3040,103.8350
+// POST /api/smoke/route {"from":"1.3039,103.8318","to":"1.3040,103.8350"}
 const MAX_ROUTE_M = 5000;
 const parsePoint = (s) => {
   const [lat, lng] = String(s ?? "").split(",").map(Number);
   return Number.isFinite(lat) && Number.isFinite(lng) && lat > 1.15 && lat < 1.48 && lng > 103.59 && lng < 104.1 ? { lat, lng } : null;
 };
-router.get("/route", async (req, res) => {
+getOrPost("/route", async (req, res) => {
   try {
     if (!onemap.configured()) return res.status(503).json({ error: "Walking routes are not set up yet" });
-    const from = parsePoint(req.query.from);
-    const to = parsePoint(req.query.to);
+    const from = parsePoint(params(req).from);
+    const to = parsePoint(params(req).to);
     if (!from || !to) return res.status(400).json({ error: "from and to must be lat,lng points in Singapore" });
     const straight = Math.hypot((to.lng - from.lng) * 111320 * Math.cos((from.lat * Math.PI) / 180), (to.lat - from.lat) * 110574);
     if (straight > MAX_ROUTE_M) return res.status(400).json({ error: "Points are too far apart for a walking route" });
