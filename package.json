@@ -33,7 +33,7 @@
     "papaparse": "^5.5.3",
     "pdf-parse": "^2.4.5",
     "sharp": "^0.34.5",
-    "smoke-finder": "github:athipaty/smoke-finder#bc6922d14a8a8989f415731118583d16700f82b4",
+    "smoke-finder": "github:athipaty/smoke-finder#77d9540914c506f8460133d0d49630dec92b797e",
     "socket.io": "^4.8.3",
     "web-push": "^3.6.7",
     "xlsx": "^0.18.5"

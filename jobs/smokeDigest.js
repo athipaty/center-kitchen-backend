@@ -2,6 +2,9 @@
 // - every Monday 09:00 Singapore time: the last 7 days in numbers
 // - every day 09:00: a warning if the map data hasn't been refreshed for 9+ days
 //   (the weekly GitHub refresh failed), at most every 3 days
+// - every day 09:00: an alert when NEA's smoking-rules page shows a newer
+//   "Last updated" date than the one the app's rules were checked against
+//   (RULES_CHECKED in smoke-finder/src/rules.js), once per new date
 // Counts only: no locations, no device ids.
 const cron = require("node-cron");
 const mongoose = require("mongoose");
@@ -15,6 +18,10 @@ const { sgDay } = require("../routes/smoke/stats");
 const STALE_DAYS = 9;
 const STALE_REPEAT_DAYS = 3;
 const REFRESH_RUNS_URL = "https://github.com/athipaty/smoke-finder/actions/workflows/refresh-data.yml";
+
+const NEA_PAGE = "https://www.nea.gov.sg/our-services/smoking-prohibition/overview";
+let rulesPromise;
+const loadRules = () => (rulesPromise ??= import("smoke-finder/src/rules.js"));
 
 const metaCol = () => mongoose.connection.db.collection("smokemeta");
 
@@ -74,6 +81,27 @@ async function runStaleCheck() {
   );
 }
 
+// "Last updated 20 August 2026" on NEA's page -> "2026-08-20", or null.
+function neaUpdatedDate(html) {
+  const m = /Last updated\s+(\d{1,2} [A-Za-z]+ \d{4})/.exec(html);
+  const date = m && new Date(`${m[1]} 12:00 UTC`);
+  return date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+}
+
+async function runNeaWatch() {
+  const res = await fetch(NEA_PAGE, { headers: { "User-Agent": "Mozilla/5.0 (smoke-finder-sg rules watcher)" }, signal: AbortSignal.timeout(20_000) });
+  if (!res.ok) throw new Error(`NEA page ${res.status}`);
+  const updated = neaUpdatedDate(await res.text());
+  if (!updated) throw new Error("NEA page: no 'Last updated' date found");
+  const { RULES_CHECKED } = await loadRules();
+  if (updated <= RULES_CHECKED.neaPageUpdated) return;
+  if (!(await claim("digestNeaPage", updated))) return; // one alert per new NEA date
+  notifyModerator(
+    "Smoke Finder: NEA changed its smoking rules page",
+    `NEA's page now says "Last updated ${updated}" (the app's rules were checked against ${RULES_CHECKED.neaPageUpdated}). Compare the list with the app's rules: ${NEA_PAGE}`
+  );
+}
+
 function start() {
   if (!(process.env.SMOKE_NTFY_TOPIC || process.env.NTFY_TOPIC)) {
     console.log("smokeDigest: no ntfy topic, moderator summary disabled");
@@ -83,7 +111,8 @@ function start() {
   const log = (name) => (err) => console.error(`[smokeDigest] ${name} error:`, err.message);
   cron.schedule("0 9 * * 1", () => runWeekly().catch(log("weekly")), opts);
   cron.schedule("0 9 * * *", () => runStaleCheck().catch(log("stale")), opts);
-  console.log("✅ smokeDigest scheduled: Mondays 09:00 SGT, stale-data check daily 09:00");
+  cron.schedule("5 9 * * *", () => runNeaWatch().catch(log("NEA page")), opts);
+  console.log("✅ smokeDigest scheduled: Mondays 09:00 SGT; stale data and NEA rules page checked daily");
 }
 
-module.exports = { start, weeklySummary, runStaleCheck };
+module.exports = { start, weeklySummary, runStaleCheck, runNeaWatch, neaUpdatedDate };
