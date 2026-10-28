@@ -17,7 +17,7 @@ const SmokeReport = require("../../models/smoke/SmokeReport");
 const SmokeError = require("../../models/smoke/SmokeError");
 const { sgDay, addDays } = require("./stats");
 const { deleteB2File } = require("../../utils/b2Utils");
-const { tally, cleanName, cleanHours } = require("./spots");
+const { tally, cleanName, cleanHours, tallyFeatures } = require("./spots");
 const { TOKEN_AUDIENCE, configured, moderatorStatus } = require("./moderator");
 
 const router = express.Router();
@@ -252,9 +252,13 @@ router.patch("/spots/:id", requireAdmin, async (req, res) => {
     const body = req.body ?? {};
     if ("name" in body) spot.name = cleanName(body.name);
     if ("hours" in body) spot.hours = cleanHours(body.hours);
+    // A moderator's answer replaces the adder's, and earlier votes on it are dropped.
     for (const key of ["sheltered", "hasAshtray", "hasSeating"]) {
-      if (key in body) spot[key] = body[key] === true;
+      if (!(key in body)) continue;
+      spot.featuresAtAdd = { ...(spot.featuresAtAdd?.toObject?.() ?? spot.featuresAtAdd ?? {}), [key]: body[key] === true };
+      spot.featureVotes = spot.featureVotes.filter((v) => v.feature !== key);
     }
+    tallyFeatures(spot);
     if ("verified" in body) spot.addedByModerator = body.verified === true;
     tally(spot);
     await spot.save();

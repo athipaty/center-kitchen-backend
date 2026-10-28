@@ -50,6 +50,25 @@ function cleanHours(raw) {
   return /^(24h|24 ?hours?|24\/7)$/i.test(hours) ? "24h" : hours;
 }
 
+const FEATURES = ["sheltered", "hasAshtray", "hasSeating"];
+
+// Each feature follows the majority: the adder's answer counts as one vote
+// (unless the adder voted again), plus one per device that voted. A tie keeps
+// the adder's answer. Spots added before votes existed get their current
+// values as the adder's answer.
+function tallyFeatures(spot) {
+  const base = {};
+  for (const f of FEATURES) base[f] = spot.featuresAtAdd?.[f] ?? spot[f];
+  spot.featuresAtAdd = base;
+  for (const f of FEATURES) {
+    const votes = spot.featureVotes.filter((v) => v.feature === f);
+    const adderVoted = votes.some((v) => v.device === spot.createdBy);
+    const yes = votes.filter((v) => v.value).length + (!adderVoted && base[f] ? 1 : 0);
+    const no = votes.filter((v) => !v.value).length + (!adderVoted && !base[f] ? 1 : 0);
+    spot[f] = yes === no ? base[f] : yes > no;
+  }
+}
+
 // Recomputes counts and status from the votes.
 function tally(spot) {
   const count = (type) => spot.votes.filter((v) => v.type === type).length;
@@ -75,6 +94,7 @@ function toPublic(spot, device) {
     hasSeating: spot.hasSeating,
     hours: spot.hours ?? null,
     photo: spot.photoHidden ? null : spot.photoUrl,
+    canAddPhoto: !spot.photoUrl, // false while a hidden photo is waiting for a moderator
     status: spot.status,
     byModerator: Boolean(spot.addedByModerator),
     stale: daysSince > STALE_DAYS,
@@ -83,6 +103,10 @@ function toPublic(spot, device) {
     goneCount: spot.goneCount,
     notAllowedCount: spot.notAllowedCount,
     myVote: device ? spot.votes.find((v) => v.device === device && v.type !== "bad_photo")?.type ?? null : null,
+    // This device's answers to "is it sheltered?" etc., e.g. { hasAshtray: false }
+    myFeatures: device
+      ? Object.fromEntries((spot.featureVotes ?? []).filter((v) => v.device === device).map((v) => [v.feature, v.value]))
+      : {},
     mine: device ? spot.createdBy === device : false,
   };
 }
@@ -109,6 +133,24 @@ router.get("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Resizes, strips EXIF and stores a photo; { photoUrl, photoKey }, or null after
+// sending an error response.
+async function storePhoto(file, res, noStorageMessage) {
+  if (!b2Enabled()) {
+    res.status(503).json({ error: noStorageMessage });
+    return null;
+  }
+  let image;
+  try {
+    image = await toWebp(file.buffer);
+  } catch {
+    res.status(400).json({ error: "That file isn't a supported image" });
+    return null;
+  }
+  const photoKey = `${B2_PREFIX}${Date.now()}-${crypto.randomUUID()}.webp`;
+  return { photoKey, photoUrl: await uploadToB2(image, photoKey, "image/webp") };
+}
 
 // F5: add a spot. multipart/form-data: lat, lng, name?, sheltered, hasAshtray, hasSeating, hours?, photo?
 router.post("/", addLimiter, (req, res) => {
@@ -147,19 +189,12 @@ router.post("/", addLimiter, (req, res) => {
         return res.status(409).json({ error: "There's already a spot here. You can confirm it instead.", spot: toPublic(existing, device) });
       }
 
-      let photoUrl = null;
-      let photoKey = null;
+      let photo = { photoUrl: null, photoKey: null };
       if (req.file) {
-        if (!b2Enabled()) return res.status(503).json({ error: "Photo storage isn't set up. Try again without a photo." });
-        let image;
-        try {
-          image = await toWebp(req.file.buffer);
-        } catch {
-          return res.status(400).json({ error: "That file isn't a supported image" });
-        }
-        photoKey = `${B2_PREFIX}${Date.now()}-${crypto.randomUUID()}.webp`;
-        photoUrl = await uploadToB2(image, photoKey, "image/webp");
+        photo = await storePhoto(req.file, res, "Photo storage isn't set up. Try again without a photo.");
+        if (!photo) return;
       }
+      const { photoUrl, photoKey } = photo;
 
       const spot = new SmokeSpot({
         name: cleanName(req.body.name),
@@ -217,8 +252,60 @@ router.post("/:id/vote", voteLimiter, async (req, res) => {
   }
 });
 
+// "Fix details": { feature: "sheltered" | "hasAshtray" | "hasSeating", value: true | false }.
+// Replaces this device's earlier answer for that feature.
+router.post("/:id/features", voteLimiter, async (req, res) => {
+  try {
+    const device = deviceHash(req);
+    if (!device) return res.status(400).json({ error: "Missing device id" });
+    const { feature, value } = req.body ?? {};
+    if (!FEATURES.includes(feature) || typeof value !== "boolean") {
+      return res.status(400).json({ error: "feature must be sheltered, hasAshtray or hasSeating, and value true or false" });
+    }
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: "Spot not found" });
+    const spot = await SmokeSpot.findById(req.params.id);
+    if (!spot || spot.status === "hidden") return res.status(404).json({ error: "Spot not found" });
+    spot.featureVotes = spot.featureVotes.filter((v) => !(v.device === device && v.feature === feature));
+    spot.featureVotes.push({ device, feature, value });
+    tallyFeatures(spot);
+    await spot.save();
+    res.json(toPublic(spot.toObject(), device));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// A photo for a spot that has none (multipart/form-data: photo).
+const photoLimiter = rateLimit({ windowMs: 60 * 60_000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many photos. Try again later." } });
+router.post("/:id/photo", photoLimiter, (req, res) => {
+  upload.single("photo")(req, res, async (uploadErr) => {
+    try {
+      if (uploadErr) return res.status(400).json({ error: uploadErr.code === "LIMIT_FILE_SIZE" ? "Photo is larger than 8 MB" : "Photo upload failed" });
+      const device = deviceHash(req);
+      if (!device) return res.status(400).json({ error: "Missing device id" });
+      if (!req.file) return res.status(400).json({ error: "No photo" });
+      if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: "Spot not found" });
+      const spot = await SmokeSpot.findById(req.params.id);
+      if (!spot || spot.status === "hidden") return res.status(404).json({ error: "Spot not found" });
+      if (spot.photoUrl) return res.status(409).json({ error: "This spot already has a photo." });
+      const photo = await storePhoto(req.file, res, "Photo storage isn't set up.");
+      if (!photo) return;
+      Object.assign(spot, photo, { photoAdminHidden: false });
+      spot.votes = spot.votes.filter((v) => v.type !== "bad_photo"); // reports were about an old photo
+      tally(spot);
+      await spot.save();
+      res.json(toPublic(spot.toObject(), device));
+      notifyModerator("Smoke Finder: photo added", `${spot.name ?? "Unnamed spot"} has a new photo. Check it in Moderation.`);
+    } catch (err) {
+      console.error("smoke: add photo failed:", err.message);
+      res.status(500).json({ error: "Couldn't save the photo. Please try again." });
+    }
+  });
+});
+
 module.exports = router;
 module.exports.communityNear = communityNear;
 module.exports.tally = tally;
 module.exports.cleanName = cleanName;
 module.exports.cleanHours = cleanHours;
+module.exports.tallyFeatures = tallyFeatures;

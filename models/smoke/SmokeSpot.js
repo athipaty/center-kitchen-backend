@@ -11,6 +11,18 @@ const voteSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// "Is it sheltered / is there an ashtray / seats?" from people other than the
+// adder. One per device and feature; see tallyFeatures in routes/smoke/spots.js.
+const featureVoteSchema = new mongoose.Schema(
+  {
+    device: { type: String, required: true },
+    feature: { type: String, required: true, enum: ["sheltered", "hasAshtray", "hasSeating"] },
+    value: { type: Boolean, required: true },
+    at: { type: Date, default: () => new Date() },
+  },
+  { _id: false }
+);
+
 const smokeSpotSchema = new mongoose.Schema(
   {
     name: { type: String, default: null, maxlength: 60 },
@@ -23,6 +35,13 @@ const smokeSpotSchema = new mongoose.Schema(
     sheltered: { type: Boolean, default: false },
     hasAshtray: { type: Boolean, default: false },
     hasSeating: { type: Boolean, default: false },
+    // What the adder (or a moderator's edit) said; counts as one vote in tallyFeatures.
+    featuresAtAdd: {
+      sheltered: { type: Boolean },
+      hasAshtray: { type: Boolean },
+      hasSeating: { type: Boolean },
+    },
+    featureVotes: [featureVoteSchema],
     // Opening hours as the adder typed them ("7am-11pm"), "24h", or null (unknown).
     hours: { type: String, default: null, maxlength: 40 },
     photoUrl: { type: String, default: null },
