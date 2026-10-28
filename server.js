@@ -116,7 +116,6 @@ app.use('/api/inventory-filter',require('./routes/inventory/filter'));
 // --- Recipe ---
 app.use('/api/recipes',     require('./routes/recipe/recipes'));
 app.use('/api/ingredients', require('./routes/recipe/ingredients'));
-app.use('/api/stock-count', require('./routes/recipe/stockCount'));
 app.use('/api/monthly-stock', require('./routes/recipe/monthlyStock'));
 app.use('/api/location-stock', require('./routes/recipe/locationStock'));
 app.use('/api/visits', require('./routes/recipe/visits'));
