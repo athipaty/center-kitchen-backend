@@ -12,12 +12,13 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST upsert by name (create or update)
+// POST upsert by name (create or update) — partial payloads only touch the
+// fields they send, so e.g. saving just an image never wipes a saved price.
 router.post("/", async (req, res) => {
   try {
     const ingredient = await Ingredient.findOneAndUpdate(
       { name: req.body.name },
-      req.body,
+      { $set: req.body },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
     res.json(ingredient);
