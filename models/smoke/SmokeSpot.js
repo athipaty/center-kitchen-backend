@@ -29,6 +29,8 @@ const smokeSpotSchema = new mongoose.Schema(
     photoAdminHidden: { type: Boolean, default: false }, // a moderator's call; votes can't undo it
     verdictAtAdd: { type: String, enum: ["green", "amber"], required: true },
     createdBy: { type: String, required: true },
+    // Added by a moderator (seeding spots they know): counts as verified.
+    addedByModerator: { type: Boolean, default: false },
     // One vote per device; a new vote from the same device replaces the old one.
     // Counts and status are derived from votes in routes/smoke/spots.js.
     votes: [voteSchema],

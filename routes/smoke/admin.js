@@ -17,9 +17,9 @@ const SmokeReport = require("../../models/smoke/SmokeReport");
 const { sgDay, addDays } = require("./stats");
 const { deleteB2File } = require("../../utils/b2Utils");
 const { tally } = require("./spots");
+const { TOKEN_AUDIENCE, configured, moderatorStatus } = require("./moderator");
 
 const router = express.Router();
-const TOKEN_AUDIENCE = "smoke-finder";
 const REVIEW_LIMIT = 100;
 
 const loginLimiter = rateLimit({
@@ -30,8 +30,6 @@ const loginLimiter = rateLimit({
   message: { error: "Too many wrong passwords. Wait 15 minutes." },
 });
 
-const configured = () => !!(process.env.SMOKE_ADMIN_PASSWORD && process.env.SMOKE_JWT_SECRET);
-
 function safeEqual(a, b) {
   const ha = crypto.createHash("sha256").update(String(a)).digest();
   const hb = crypto.createHash("sha256").update(String(b)).digest();
@@ -39,15 +37,11 @@ function safeEqual(a, b) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!configured()) return res.status(503).json({ error: "Moderation is not set up yet" });
-  const header = req.headers.authorization || "";
-  if (!header.startsWith("Bearer ")) return res.status(401).json({ error: "Please log in" });
-  try {
-    jwt.verify(header.slice(7), process.env.SMOKE_JWT_SECRET, { audience: TOKEN_AUDIENCE });
-    next();
-  } catch {
-    res.status(401).json({ error: "Please log in again" });
-  }
+  const status = moderatorStatus(req);
+  if (status === "unconfigured") return res.status(503).json({ error: "Moderation is not set up yet" });
+  if (status === "missing") return res.status(401).json({ error: "Please log in" });
+  if (status === "invalid") return res.status(401).json({ error: "Please log in again" });
+  next();
 }
 
 // Everything a moderator needs, still without device hashes.

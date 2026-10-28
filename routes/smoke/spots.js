@@ -9,6 +9,7 @@ const SmokeSpot = require("../../models/smoke/SmokeSpot");
 const { uploadToB2, b2Enabled } = require("../../utils/b2Utils");
 const { readPoint, checkPoint, deviceHash } = require("./lib");
 const { notifyModerator } = require("./notify");
+const { isModerator } = require("./moderator");
 const stats = require("./stats");
 
 const router = express.Router();
@@ -21,7 +22,8 @@ const DUPLICATE_M = 15;
 const DAILY_ADDS_PER_DEVICE = 5;
 const B2_PREFIX = "smoke-spots/";
 
-const addLimiter = rateLimit({ windowMs: 60 * 60_000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many new spots from this network. Try again later." } });
+// Moderators seeding spots skip the limits for new spots.
+const addLimiter = rateLimit({ windowMs: 60 * 60_000, max: 10, skip: isModerator, standardHeaders: true, legacyHeaders: false, message: { error: "Too many new spots from this network. Try again later." } });
 const voteLimiter = rateLimit({ windowMs: 60 * 60_000, max: 60, standardHeaders: true, legacyHeaders: false, message: { error: "Too many votes. Try again later." } });
 
 const upload = multer({
@@ -50,7 +52,7 @@ function tally(spot) {
   spot.badPhotoCount = count("bad_photo");
   spot.photoHidden = spot.photoAdminHidden || spot.badPhotoCount >= PHOTO_HIDE_AT;
   if (spot.goneCount >= HIDE_AT || spot.notAllowedCount >= HIDE_AT) spot.status = "hidden";
-  else spot.status = spot.hereCount >= VERIFY_AT ? "verified" : "unverified";
+  else spot.status = spot.hereCount >= VERIFY_AT || spot.addedByModerator ? "verified" : "unverified";
 }
 
 // What the app sees: no device hashes, only the caller's own vote.
@@ -66,6 +68,7 @@ function toPublic(spot, device) {
     hasSeating: spot.hasSeating,
     photo: spot.photoHidden ? null : spot.photoUrl,
     status: spot.status,
+    byModerator: Boolean(spot.addedByModerator),
     stale: daysSince > STALE_DAYS,
     lastConfirmedAt: spot.lastConfirmedAt,
     hereCount: spot.hereCount,
@@ -113,7 +116,8 @@ router.post("/", addLimiter, (req, res) => {
       if (!point) return;
       const { lat, lng } = point;
 
-      const today = await SmokeSpot.countDocuments({ createdBy: device, createdAt: { $gte: new Date(Date.now() - 86_400_000) } });
+      const moderator = isModerator(req);
+      const today = moderator ? 0 : await SmokeSpot.countDocuments({ createdBy: device, createdAt: { $gte: new Date(Date.now() - 86_400_000) } });
       if (today >= DAILY_ADDS_PER_DEVICE) {
         return res.status(429).json({ error: `You can add up to ${DAILY_ADDS_PER_DEVICE} spots a day.` });
       }
@@ -161,13 +165,14 @@ router.post("/", addLimiter, (req, res) => {
         photoKey,
         verdictAtAdd: result.verdict,
         createdBy: device,
+        addedByModerator: moderator,
         votes: [{ device, type: "here" }],
       });
       tally(spot);
       await spot.save();
       res.status(201).json(toPublic(spot.toObject(), device));
       stats.count("adds");
-      notifyModerator("Smoke Finder: new spot added", `${spot.name ?? "Unnamed spot"}${photoUrl ? " (with photo)" : ""}. Check it in Moderation.`);
+      if (!moderator) notifyModerator("Smoke Finder: new spot added", `${spot.name ?? "Unnamed spot"}${photoUrl ? " (with photo)" : ""}. Check it in Moderation.`);
     } catch (err) {
       console.error("smoke: add spot failed:", err.message);
       res.status(500).json({ error: "Couldn't save the spot. Please try again." });
