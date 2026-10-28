@@ -138,6 +138,9 @@ router.post("/ping", async (req, res) => {
 // F5 / F6: community spots
 router.use("/spots", spots);
 
+// App error reports (shown in Moderation)
+router.use("/errors", require("./errors"));
+
 // "I'm here now" check-ins for the busy-now level
 router.use("/checkins", checkins);
 

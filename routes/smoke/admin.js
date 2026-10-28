@@ -14,6 +14,7 @@ const SmokeStat = require("../../models/smoke/SmokeStat");
 const SmokeDevice = require("../../models/smoke/SmokeDevice");
 const SmokeAlert = require("../../models/smoke/SmokeAlert");
 const SmokeReport = require("../../models/smoke/SmokeReport");
+const SmokeError = require("../../models/smoke/SmokeError");
 const { sgDay, addDays } = require("./stats");
 const { deleteB2File } = require("../../utils/b2Utils");
 const { tally, cleanName } = require("./spots");
@@ -215,6 +216,26 @@ router.get("/spots", requireAdmin, async (req, res) => {
       SmokeSpot.aggregate([{ $group: { _id: "$status", n: { $sum: 1 } } }]),
     ]);
     res.json({ spots: spots.map(toReview), counts: Object.fromEntries(counts.map((c) => [c._id, c.n])) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// App errors, most recent first. Deleting one means "fixed"; if it happens
+// again it comes back with a fresh count.
+router.get("/errors", requireAdmin, async (_req, res) => {
+  try {
+    const errors = await SmokeError.find().sort({ lastAt: -1 }).limit(REVIEW_LIMIT).lean();
+    res.json({ errors: errors.map(({ _id, ...e }) => ({ id: _id, ...e })) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete("/errors/:id", requireAdmin, async (req, res) => {
+  try {
+    await SmokeError.deleteOne({ _id: String(req.params.id) });
+    res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

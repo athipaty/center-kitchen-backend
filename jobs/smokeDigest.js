@@ -12,6 +12,7 @@ const SmokeStat = require("../models/smoke/SmokeStat");
 const SmokeDevice = require("../models/smoke/SmokeDevice");
 const SmokeSpot = require("../models/smoke/SmokeSpot");
 const SmokeReport = require("../models/smoke/SmokeReport");
+const SmokeError = require("../models/smoke/SmokeError");
 const { notifyModerator } = require("../routes/smoke/notify");
 const { sgDay } = require("../routes/smoke/stats");
 
@@ -41,7 +42,7 @@ async function weeklySummary() {
   const from7 = sgDay(-7);
   const to = sgDay(-1); // the 7 full days before today
   const weekAgo = new Date(Date.now() - 7 * 86_400_000);
-  const [days, actives, newDevices, visible, verified, hiddenThisWeek, openReports, meta] = await Promise.all([
+  const [days, actives, newDevices, visible, verified, hiddenThisWeek, openReports, meta, errorKinds] = await Promise.all([
     SmokeStat.find({ _id: { $gte: from7, $lte: to } }).lean(),
     SmokeDevice.countDocuments({ days: { $elemMatch: { $gte: from7, $lte: to } } }),
     SmokeDevice.countDocuments({ first: { $gte: from7, $lte: to } }),
@@ -50,6 +51,7 @@ async function weeklySummary() {
     SmokeSpot.countDocuments({ status: "hidden", updatedAt: { $gte: weekAgo } }),
     SmokeReport.countDocuments({ status: "open" }),
     metaCol().findOne({ _id: "current" }, { projection: { importedAt: 1 } }),
+    SmokeError.countDocuments({ lastAt: { $gte: weekAgo } }),
   ]);
   const sum = (key) => days.reduce((n, d) => n + (key.split(".").reduce((o, k) => o?.[k], d) ?? 0), 0);
   const reports = sum("votes.gone") + sum("votes.not_allowed");
@@ -59,6 +61,7 @@ async function weeklySummary() {
     `Use: ${plural(sum("checks"), "check")}, ${sum("nearby")} Nearby, ${plural(sum("searches"), "search", "searches")}, ${plural(sum("checkins"), "check-in")}.`,
     `Spots: ${sum("adds")} added, ${plural(reports, "Gone/Not allowed vote")}, ${hiddenThisWeek} hidden. Now ${visible} visible (${verified} verified).`,
     `Problem reports waiting: ${openReports}.`,
+    `App errors: ${errorKinds ? `${plural(errorKinds, "kind")} seen this week (Moderation > Errors).` : "none this week."}`,
     meta?.importedAt ? `Map data: imported ${daysSince(meta.importedAt)} days ago.` : "Map data: not imported yet.",
   ].join("\n");
 }
