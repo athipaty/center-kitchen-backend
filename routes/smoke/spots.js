@@ -3,7 +3,6 @@ const crypto = require("crypto");
 const express = require("express");
 const mongoose = require("mongoose");
 const multer = require("multer");
-const sharp = require("sharp");
 const rateLimit = require("express-rate-limit");
 const SmokeSpot = require("../../models/smoke/SmokeSpot");
 const { uploadToB2, b2Enabled } = require("../../utils/b2Utils");
@@ -32,9 +31,9 @@ const upload = multer({
   fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp|heic|heif)$/.test(file.mimetype)),
 });
 
-// Resize, convert to WebP, and drop EXIF (phone photos carry the GPS of where they were taken).
-const toWebp = (buf) =>
-  sharp(buf).rotate().resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true }).webp({ quality: 80 }).toBuffer();
+// Photos are resized, converted to WebP without EXIF (phone photos carry the GPS
+// of where they were taken), and faces in them are blurred: utils/faceBlur.
+const { toSafeWebp } = require("../../utils/faceBlur");
 
 const asBool = (v) => v === true || v === "true" || v === "1" || v === "on";
 
@@ -136,22 +135,22 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// Resizes, strips EXIF and stores a photo; { photoUrl, photoKey }, or null after
-// sending an error response.
+// Resizes, strips EXIF, blurs faces and stores a photo; { photoUrl, photoKey,
+// faces }, or null after sending an error response.
 async function storePhoto(file, res, noStorageMessage) {
   if (!b2Enabled()) {
     res.status(503).json({ error: noStorageMessage });
     return null;
   }
-  let image;
+  let safe;
   try {
-    image = await toWebp(file.buffer);
+    safe = await toSafeWebp(file.buffer);
   } catch {
     res.status(400).json({ error: "That file isn't a supported image" });
     return null;
   }
   const photoKey = `${B2_PREFIX}${Date.now()}-${crypto.randomUUID()}.webp`;
-  return { photoKey, photoUrl: await uploadToB2(image, photoKey, "image/webp") };
+  return { photoKey, photoUrl: await uploadToB2(safe.image, photoKey, "image/webp"), faces: safe.faces };
 }
 
 // F5: add a spot. multipart/form-data: lat, lng, name?, sheltered, hasAshtray, hasSeating, hours?, photo?
@@ -193,12 +192,12 @@ router.post("/", addLimiter, (req, res) => {
         return res.status(409).json({ error: "There's already a spot here. You can confirm it instead.", spot: toPublic(existing, device) });
       }
 
-      let photo = { photoUrl: null, photoKey: null };
+      let photo = { photoUrl: null, photoKey: null, faces: 0 };
       if (req.file) {
         photo = await storePhoto(req.file, res, "Photo storage isn't set up. Try again without a photo.");
         if (!photo) return;
       }
-      const { photoUrl, photoKey } = photo;
+      const { photoUrl, photoKey, faces } = photo;
 
       const spot = new SmokeSpot({
         name: cleanName(req.body.name),
@@ -220,7 +219,8 @@ router.post("/", addLimiter, (req, res) => {
       await spot.save();
       res.status(201).json(toPublic(spot.toObject(), device));
       stats.count("adds");
-      if (!moderator) notifyModerator("Smoke Finder: new spot added", `${spot.name ?? "Unnamed spot"}${photoUrl ? " (with photo)" : ""}. Check it in Moderation.`);
+      const photoNote = photoUrl ? ` (with photo${faces ? `, ${faces} face${faces === 1 ? "" : "s"} blurred` : ""})` : "";
+      if (!moderator) notifyModerator("Smoke Finder: new spot added", `${spot.name ?? "Unnamed spot"}${photoNote}. Check it in Moderation.`);
     } catch (err) {
       console.error("smoke: add spot failed:", err.message);
       res.status(500).json({ error: "Couldn't save the spot. Please try again." });
@@ -294,12 +294,14 @@ router.post("/:id/photo", photoLimiter, (req, res) => {
       if (spot.photoUrl) return res.status(409).json({ error: "This spot already has a photo." });
       const photo = await storePhoto(req.file, res, "Photo storage isn't set up.");
       if (!photo) return;
-      Object.assign(spot, photo, { photoAdminHidden: false });
+      const { faces, ...stored } = photo;
+      Object.assign(spot, stored, { photoAdminHidden: false });
       spot.votes = spot.votes.filter((v) => v.type !== "bad_photo"); // reports were about an old photo
       tally(spot);
       await spot.save();
       res.json(toPublic(spot.toObject(), device));
-      notifyModerator("Smoke Finder: photo added", `${spot.name ?? "Unnamed spot"} has a new photo. Check it in Moderation.`);
+      const blurred = faces ? ` (${faces} face${faces === 1 ? "" : "s"} blurred)` : "";
+      notifyModerator("Smoke Finder: photo added", `${spot.name ?? "Unnamed spot"} has a new photo${blurred}. Check it in Moderation.`);
     } catch (err) {
       console.error("smoke: add photo failed:", err.message);
       res.status(500).json({ error: "Couldn't save the photo. Please try again." });
