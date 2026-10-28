@@ -67,6 +67,8 @@ const toReview = (s) => ({
   lastConfirmedAt: s.lastConfirmedAt,
   createdAt: s.createdAt,
   addedByModerator: Boolean(s.addedByModerator),
+  source: s.source ?? "user",
+  approximate: Boolean(s.approximate),
 });
 
 async function findSpot(req, res) {

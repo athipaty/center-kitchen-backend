@@ -94,6 +94,8 @@ function toPublic(spot, device) {
     hasSeating: spot.hasSeating,
     hours: spot.hours ?? null,
     photo: spot.photoHidden ? null : spot.photoUrl,
+    source: spot.source ?? "user",
+    approximate: Boolean(spot.approximate),
     canAddPhoto: !spot.photoUrl, // false while a hidden photo is waiting for a moderator
     status: spot.status,
     byModerator: Boolean(spot.addedByModerator),
@@ -181,8 +183,10 @@ router.post("/", addLimiter, (req, res) => {
         return res.status(422).json({ error: `Smoking isn't allowed here: ${result.reasons[0]?.label ?? "no-smoking place"}.`, check: result });
       }
 
+      // Approximate pins don't count: an exact spot should be addable right next to one.
       const existing = await SmokeSpot.findOne({
         status: { $ne: "hidden" },
+        approximate: { $ne: true },
         location: { $nearSphere: { $geometry: { type: "Point", coordinates: [lng, lat] }, $maxDistance: DUPLICATE_M } },
       }).lean();
       if (existing) {

@@ -50,6 +50,11 @@ const smokeSpotSchema = new mongoose.Schema(
     photoAdminHidden: { type: Boolean, default: false }, // a moderator's call; votes can't undo it
     verdictAtAdd: { type: String, enum: ["green", "amber"], required: true },
     createdBy: { type: String, required: true },
+    // "user": added in the app. "sdc": a designated smoking area listed by Sentosa
+    // Development Corporation (sentosa.com.sg), which gives descriptions, not positions.
+    source: { type: String, enum: ["user", "sdc"], default: "user" },
+    // Placed at the nearest landmark, not surveyed: the app says "look for the sign".
+    approximate: { type: Boolean, default: false },
     // Added by a moderator (seeding spots they know): counts as verified.
     addedByModerator: { type: Boolean, default: false },
     // One vote per device; a new vote from the same device replaces the old one.
