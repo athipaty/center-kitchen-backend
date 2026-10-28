@@ -183,6 +183,16 @@ router.post("/ping", async (req, res) => {
 // F5 / F6: community spots
 router.use("/spots", spots);
 
+// Is face blurring working on this server? Photos are refused without it.
+// GET /api/smoke/health/faces -> { ok, faces, ms } (a blank test image, no data stored)
+router.get("/health/faces", async (_req, res) => {
+  try {
+    res.json(await require("../../utils/faceBlur").selfTest());
+  } catch (err) {
+    res.status(503).json({ ok: false, error: err.message });
+  }
+});
+
 // App error reports (shown in Moderation)
 router.use("/errors", require("./errors"));
 

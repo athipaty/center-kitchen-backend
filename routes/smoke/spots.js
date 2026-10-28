@@ -145,8 +145,14 @@ async function storePhoto(file, res, noStorageMessage) {
   let safe;
   try {
     safe = await toSafeWebp(file.buffer);
-  } catch {
-    res.status(400).json({ error: "That file isn't a supported image" });
+  } catch (err) {
+    // Without face blurring, no photo is stored at all.
+    if (err.faceFinder) {
+      console.error("smoke: photo refused:", err.message);
+      res.status(503).json({ error: "Photos can't be added right now. Please try again later, or add the spot without a photo." });
+    } else {
+      res.status(400).json({ error: "That file isn't a supported image" });
+    }
     return null;
   }
   const photoKey = `${B2_PREFIX}${Date.now()}-${crypto.randomUUID()}.webp`;

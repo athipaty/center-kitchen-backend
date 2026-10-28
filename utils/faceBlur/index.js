@@ -44,7 +44,9 @@ function nonMaxSuppression(boxes) {
 
 // Faces in an RGB image as boxes { left, top, width, height } in pixels.
 async function findFaces(rgb, width, height) {
-  const { ort, s } = await session();
+  const { ort, s } = await session().catch((err) => {
+    throw Object.assign(new Error(`face finder unavailable: ${err.message}`), { faceFinder: true });
+  });
   const small = await sharp(rgb, { raw: { width, height, channels: 3 } }).resize(MODEL_W, MODEL_H, { fit: "fill" }).raw().toBuffer();
   const plane = MODEL_W * MODEL_H;
   const input = new Float32Array(3 * plane);
@@ -96,4 +98,12 @@ async function toSafeWebp(input) {
   return { image, faces: faces.length };
 }
 
-module.exports = { toSafeWebp, findFaces };
+// For a health check: loads the face finder and runs it on a blank image.
+async function selfTest() {
+  const started = Date.now();
+  const blank = Buffer.alloc(64 * 48 * 3, 128);
+  const faces = await findFaces(blank, 64, 48);
+  return { ok: true, faces: faces.length, ms: Date.now() - started };
+}
+
+module.exports = { toSafeWebp, findFaces, selfTest };
