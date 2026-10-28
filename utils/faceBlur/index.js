@@ -1,66 +1,69 @@
 // Blurs faces in spot photos before they're stored (Smoke Finder privacy rule:
-// no identifiable people). Uses the small pico face detector (pico.js, MIT), so
-// nothing heavy is installed. It finds faces looking roughly at the camera;
-// faces turned sideways or very small can be missed, which is why photo reports
-// and moderation stay in place.
-const fs = require("fs");
+// no identifiable people). Faces are found with UltraFace (version-RFB-640.onnx
+// from the ONNX model zoo; Ultra-Light-Fast-Generic-Face-Detector-1MB by Linzaer,
+// MIT license) run by onnxruntime-node. It also finds faces looking sideways
+// or tilted, which a lighter detector missed in a real upload.
 const path = require("path");
 const sharp = require("sharp");
-const pico = require("./pico");
 
 const MAX_SIDE = 1200; // stored photos are at most 1200 px
-const MIN_FACE_PX = 24; // smaller faces aren't recognisable at this size anyway
-const SCORE_MIN = 10; // real faces scored 22+ in testing, false matches (clothes, textures) 5-8
-const PADDING = 1.6; // blur a bit beyond the detected face: hair, ears, chin
-// The detector only finds upright faces, so it also looks at the photo turned
-// both ways: a tilted head in a casual photo is upright in one of them.
-const ANGLES = [0, -25, 25];
+const MODEL_W = 640;
+const MODEL_H = 480;
+const MIN_SCORE = 0.6; // real faces scored 1.00 in testing
+const NMS_IOU = 0.3;
+const PADDING = 1.25; // blur a bit beyond the detected face: hair, ears, chin
 
-let classifyRegion = null;
-function detector() {
-  if (!classifyRegion) {
-    const bytes = new Int8Array(fs.readFileSync(path.join(__dirname, "facefinder")));
-    classifyRegion = pico.unpack_cascade(bytes);
-  }
-  return classifyRegion;
+// Loaded on the first photo, so the backend doesn't hold it in memory otherwise.
+let sessionPromise = null;
+function session() {
+  sessionPromise ??= (async () => {
+    const ort = require("onnxruntime-node");
+    const s = await ort.InferenceSession.create(path.join(__dirname, "ultraface-RFB-640.onnx"), { logSeverityLevel: 3 });
+    return { ort, s };
+  })().catch((err) => {
+    sessionPromise = null; // try again on the next photo
+    throw err;
+  });
+  return sessionPromise;
 }
 
-// Face centres and sizes [row, col, size] in one grayscale image.
-function detect(gray, width, height) {
-  const dets = pico.run_cascade(
-    { pixels: gray, nrows: height, ncols: width, ldim: width },
-    detector(),
-    { shiftfactor: 0.1, minsize: MIN_FACE_PX, maxsize: Math.min(width, height), scalefactor: 1.1 }
-  );
-  return pico.cluster_detections(dets, 0.2).filter(([, , , q]) => q > SCORE_MIN);
+function nonMaxSuppression(boxes) {
+  boxes.sort((a, b) => b.score - a.score);
+  const area = (b) => (b.x2 - b.x1) * (b.y2 - b.y1);
+  const kept = [];
+  for (const b of boxes) {
+    const overlaps = kept.some((k) => {
+      const ix = Math.max(0, Math.min(b.x2, k.x2) - Math.max(b.x1, k.x1));
+      const iy = Math.max(0, Math.min(b.y2, k.y2) - Math.max(b.y1, k.y1));
+      return (ix * iy) / (area(b) + area(k) - ix * iy) >= NMS_IOU;
+    });
+    if (!overlaps) kept.push(b);
+  }
+  return kept;
 }
 
 // Faces in an RGB image as boxes { left, top, width, height } in pixels.
 async function findFaces(rgb, width, height) {
+  const { ort, s } = await session();
+  const small = await sharp(rgb, { raw: { width, height, channels: 3 } }).resize(MODEL_W, MODEL_H, { fit: "fill" }).raw().toBuffer();
+  const plane = MODEL_W * MODEL_H;
+  const input = new Float32Array(3 * plane);
+  for (let i = 0; i < plane; i++) for (let ch = 0; ch < 3; ch++) input[ch * plane + i] = (small[i * 3 + ch] - 127) / 128;
+  const out = await s.run({ [s.inputNames[0]]: new ort.Tensor("float32", input, [1, 3, MODEL_H, MODEL_W]) });
+  const scores = out.scores.data;
+  const boxes = out.boxes.data; // corners, 0-1 of the image
   const found = [];
-  for (const angle of ANGLES) {
-    const { data, info } = await sharp(rgb, { raw: { width, height, channels: 3 } })
-      .rotate(angle, { background: "#808080" })
-      .greyscale()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    // Map each centre back from the turned image: rotate by -angle around the centre.
-    const rad = (-angle * Math.PI) / 180;
-    const [cos, sin] = [Math.cos(rad), Math.sin(rad)];
-    for (const [r, c, s, q] of detect(data, info.width, info.height)) {
-      const dx = c - info.width / 2;
-      const dy = r - info.height / 2;
-      found.push([height / 2 + dx * sin + dy * cos, width / 2 + dx * cos - dy * sin, s, q]);
-    }
+  for (let i = 0; i < scores.length / 2; i++) {
+    const score = scores[i * 2 + 1];
+    if (score > MIN_SCORE) found.push({ score, x1: boxes[i * 4] * width, y1: boxes[i * 4 + 1] * height, x2: boxes[i * 4 + 2] * width, y2: boxes[i * 4 + 3] * height });
   }
-  // The same face found at two angles becomes one.
-  return pico
-    .cluster_detections(found, 0.3)
-    .map(([r, c, s]) => {
-      const size = Math.round(s * PADDING);
-      const left = Math.max(0, Math.round(c - size / 2));
-      const top = Math.max(0, Math.round(r - size / 2));
-      return { left, top, width: Math.min(size, width - left), height: Math.min(size, height - top) };
+  return nonMaxSuppression(found)
+    .map((f) => {
+      const w = (f.x2 - f.x1) * PADDING;
+      const h = (f.y2 - f.y1) * PADDING;
+      const left = Math.max(0, Math.round((f.x1 + f.x2) / 2 - w / 2));
+      const top = Math.max(0, Math.round((f.y1 + f.y2) / 2 - h / 2));
+      return { left, top, width: Math.min(Math.round(w), width - left), height: Math.min(Math.round(h), height - top) };
     })
     .filter((b) => b.width > 4 && b.height > 4);
 }
