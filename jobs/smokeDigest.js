@@ -5,6 +5,9 @@
 // - every day 09:00: an alert when NEA's smoking-rules page shows a newer
 //   "Last updated" date than the one the app's rules were checked against
 //   (RULES_CHECKED in smoke-finder/src/rules.js), once per new date
+// - every day 09:10: an alert when NTU's smoking policy shows a new "as of"
+//   date for its designated smoking areas (the app's copy is in smoke-finder
+//   data/operator-spots.json), once per new date
 // Counts only: no locations, no device ids.
 const cron = require("node-cron");
 const mongoose = require("mongoose");
@@ -105,6 +108,23 @@ async function runNeaWatch() {
   );
 }
 
+// NTU's list of designated smoking areas, as last copied into the app.
+const NTU_PAGE = "https://www.ntu.edu.sg/life-at-ntu/health-and-safety/policies/prohibition-of-smoking-on-ntu-campus-policy";
+const NTU_LIST_AS_OF = "15 October 2025";
+
+async function runNtuWatch() {
+  const res = await fetch(NTU_PAGE, { headers: { "User-Agent": "Mozilla/5.0 (smoke-finder-sg list watcher)" }, signal: AbortSignal.timeout(20_000) });
+  if (!res.ok) throw new Error(`NTU page ${res.status}`);
+  const asOf = /as of (\d{1,2} [A-Za-z]+ \d{4})/.exec(await res.text())?.[1];
+  if (!asOf) throw new Error("NTU page: no 'as of' date found");
+  if (asOf === NTU_LIST_AS_OF) return;
+  if (!(await claim("digestNtuList", asOf))) return; // one alert per new date
+  notifyModerator(
+    "Smoke Finder: NTU changed its smoking areas list",
+    `NTU's policy now lists designated smoking areas "as of ${asOf}" (the app has the list as of ${NTU_LIST_AS_OF}). Compare it with smoke-finder data/operator-spots.json: ${NTU_PAGE}`
+  );
+}
+
 function start() {
   if (!(process.env.SMOKE_NTFY_TOPIC || process.env.NTFY_TOPIC)) {
     console.log("smokeDigest: no ntfy topic, moderator summary disabled");
@@ -115,7 +135,8 @@ function start() {
   cron.schedule("0 9 * * 1", () => runWeekly().catch(log("weekly")), opts);
   cron.schedule("0 9 * * *", () => runStaleCheck().catch(log("stale")), opts);
   cron.schedule("5 9 * * *", () => runNeaWatch().catch(log("NEA page")), opts);
+  cron.schedule("10 9 * * *", () => runNtuWatch().catch(log("NTU page")), opts);
   console.log("✅ smokeDigest scheduled: Mondays 09:00 SGT; stale data and NEA rules page checked daily");
 }
 
-module.exports = { start, weeklySummary, runStaleCheck, runNeaWatch, neaUpdatedDate };
+module.exports = { start, weeklySummary, runStaleCheck, runNeaWatch, neaUpdatedDate, runNtuWatch };
