@@ -85,6 +85,23 @@ getOrPost("/nearby", async (req, res) => {
   }
 });
 
+// Map data around a point, so the app can answer "Can I smoke here?" without
+// signal (it runs the same engine on the phone). A check looks QUERY_RADIUS_M
+// around the point, so this area gives correct answers within
+// AREA_RADIUS_M - QUERY_RADIUS_M of the centre. POST /api/smoke/area {"lat":..,"lng":..}
+const AREA_RADIUS_M = 400;
+const areaLimiter = rateLimit({ windowMs: 60 * 60_000, max: 30, standardHeaders: true, legacyHeaders: false, message: { error: "Too many map downloads. Try again later." } });
+router.post("/area", areaLimiter, async (req, res) => {
+  try {
+    const point = await readPoint(params(req), res);
+    if (!point) return;
+    const [zones, dsas] = await Promise.all([zonesNear(point.lat, point.lng, AREA_RADIUS_M), dsasNear(point.lat, point.lng, AREA_RADIUS_M)]);
+    res.json({ lat: point.lat, lng: point.lng, radiusM: AREA_RADIUS_M, usableM: AREA_RADIUS_M - QUERY_RADIUS_M, builtAt: point.meta.builtAt, zones, dsas });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Walking route between two points in Singapore (OneMap).
 // POST /api/smoke/route {"from":"1.3039,103.8318","to":"1.3040,103.8350"}
 const MAX_ROUTE_M = 5000;
