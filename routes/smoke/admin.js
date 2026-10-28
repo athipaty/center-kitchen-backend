@@ -17,7 +17,7 @@ const SmokeReport = require("../../models/smoke/SmokeReport");
 const SmokeError = require("../../models/smoke/SmokeError");
 const { sgDay, addDays } = require("./stats");
 const { deleteB2File } = require("../../utils/b2Utils");
-const { tally, cleanName } = require("./spots");
+const { tally, cleanName, cleanHours } = require("./spots");
 const { TOKEN_AUDIENCE, configured, moderatorStatus } = require("./moderator");
 
 const router = express.Router();
@@ -54,6 +54,7 @@ const toReview = (s) => ({
   sheltered: s.sheltered,
   hasAshtray: s.hasAshtray,
   hasSeating: s.hasSeating,
+  hours: s.hours ?? null,
   photoUrl: s.photoUrl,
   photoHidden: s.photoHidden,
   photoAdminHidden: s.photoAdminHidden ?? false,
@@ -241,7 +242,7 @@ router.delete("/errors/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// Fix a spot: { name?, sheltered?, hasAshtray?, hasSeating?, verified? }.
+// Fix a spot: { name?, hours?, sheltered?, hasAshtray?, hasSeating?, verified? }.
 // verified: true vouches for it like a moderator-added spot; false takes that back
 // (it's verified again only with 3 "Still here" votes).
 router.patch("/spots/:id", requireAdmin, async (req, res) => {
@@ -250,6 +251,7 @@ router.patch("/spots/:id", requireAdmin, async (req, res) => {
     if (!spot) return;
     const body = req.body ?? {};
     if ("name" in body) spot.name = cleanName(body.name);
+    if ("hours" in body) spot.hours = cleanHours(body.hours);
     for (const key of ["sheltered", "hasAshtray", "hasSeating"]) {
       if (key in body) spot[key] = body[key] === true;
     }

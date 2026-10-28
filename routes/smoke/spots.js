@@ -43,6 +43,13 @@ function cleanName(raw) {
   return name || null;
 }
 
+// "24h" is stored as is (the app translates it); anything else as typed.
+function cleanHours(raw) {
+  const hours = String(raw ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
+  if (!hours) return null;
+  return /^(24h|24 ?hours?|24\/7)$/i.test(hours) ? "24h" : hours;
+}
+
 // Recomputes counts and status from the votes.
 function tally(spot) {
   const count = (type) => spot.votes.filter((v) => v.type === type).length;
@@ -66,6 +73,7 @@ function toPublic(spot, device) {
     sheltered: spot.sheltered,
     hasAshtray: spot.hasAshtray,
     hasSeating: spot.hasSeating,
+    hours: spot.hours ?? null,
     photo: spot.photoHidden ? null : spot.photoUrl,
     status: spot.status,
     byModerator: Boolean(spot.addedByModerator),
@@ -102,7 +110,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// F5: add a spot. multipart/form-data: lat, lng, name?, sheltered, hasAshtray, hasSeating, photo?
+// F5: add a spot. multipart/form-data: lat, lng, name?, sheltered, hasAshtray, hasSeating, hours?, photo?
 router.post("/", addLimiter, (req, res) => {
   upload.single("photo")(req, res, async (uploadErr) => {
     try {
@@ -161,6 +169,7 @@ router.post("/", addLimiter, (req, res) => {
         sheltered: asBool(req.body.sheltered),
         hasAshtray: asBool(req.body.hasAshtray),
         hasSeating: asBool(req.body.hasSeating),
+        hours: cleanHours(req.body.hours),
         photoUrl,
         photoKey,
         verdictAtAdd: result.verdict,
@@ -212,3 +221,4 @@ module.exports = router;
 module.exports.communityNear = communityNear;
 module.exports.tally = tally;
 module.exports.cleanName = cleanName;
+module.exports.cleanHours = cleanHours;

@@ -23,6 +23,8 @@ const smokeSpotSchema = new mongoose.Schema(
     sheltered: { type: Boolean, default: false },
     hasAshtray: { type: Boolean, default: false },
     hasSeating: { type: Boolean, default: false },
+    // Opening hours as the adder typed them ("7am-11pm"), "24h", or null (unknown).
+    hours: { type: String, default: null, maxlength: 40 },
     photoUrl: { type: String, default: null },
     photoKey: { type: String, default: null },
     photoHidden: { type: Boolean, default: false },
