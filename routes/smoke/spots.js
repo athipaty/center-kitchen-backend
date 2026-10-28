@@ -211,3 +211,4 @@ router.post("/:id/vote", voteLimiter, async (req, res) => {
 module.exports = router;
 module.exports.communityNear = communityNear;
 module.exports.tally = tally;
+module.exports.cleanName = cleanName;

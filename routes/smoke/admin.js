@@ -16,7 +16,7 @@ const SmokeAlert = require("../../models/smoke/SmokeAlert");
 const SmokeReport = require("../../models/smoke/SmokeReport");
 const { sgDay, addDays } = require("./stats");
 const { deleteB2File } = require("../../utils/b2Utils");
-const { tally } = require("./spots");
+const { tally, cleanName } = require("./spots");
 const { TOKEN_AUDIENCE, configured, moderatorStatus } = require("./moderator");
 
 const router = express.Router();
@@ -64,6 +64,7 @@ const toReview = (s) => ({
   badPhotoCount: s.badPhotoCount,
   lastConfirmedAt: s.lastConfirmedAt,
   createdAt: s.createdAt,
+  addedByModerator: Boolean(s.addedByModerator),
 });
 
 async function findSpot(req, res) {
@@ -205,12 +206,36 @@ router.get("/spots", requireAdmin, async (req, res) => {
       photos: { badPhotoCount: { $gt: 0 } },
       all: {},
     };
-    const filter = filters[req.query.filter] ?? filters.review;
+    let filter = filters[req.query.filter] ?? filters.review;
+    // ?q= narrows by name (case-insensitive, plain text)
+    const q = String(req.query.q ?? "").trim().slice(0, 60);
+    if (q) filter = { ...filter, name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } };
     const [spots, counts] = await Promise.all([
       SmokeSpot.find(filter).sort({ updatedAt: -1 }).limit(REVIEW_LIMIT).lean(),
       SmokeSpot.aggregate([{ $group: { _id: "$status", n: { $sum: 1 } } }]),
     ]);
     res.json({ spots: spots.map(toReview), counts: Object.fromEntries(counts.map((c) => [c._id, c.n])) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fix a spot: { name?, sheltered?, hasAshtray?, hasSeating?, verified? }.
+// verified: true vouches for it like a moderator-added spot; false takes that back
+// (it's verified again only with 3 "Still here" votes).
+router.patch("/spots/:id", requireAdmin, async (req, res) => {
+  try {
+    const spot = await findSpot(req, res);
+    if (!spot) return;
+    const body = req.body ?? {};
+    if ("name" in body) spot.name = cleanName(body.name);
+    for (const key of ["sheltered", "hasAshtray", "hasSeating"]) {
+      if (key in body) spot[key] = body[key] === true;
+    }
+    if ("verified" in body) spot.addedByModerator = body.verified === true;
+    tally(spot);
+    await spot.save();
+    res.json(toReview(spot.toObject()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
