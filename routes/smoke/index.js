@@ -125,6 +125,34 @@ getOrPost("/route", async (req, res) => {
   }
 });
 
+// Walking times from one point to up to 5 spots, for the Nearby list (F2: sorted
+// by real walking time). No paths, to keep it small. A route that fails comes
+// back as null; the app keeps its estimate for that spot.
+// POST /api/smoke/routes {"from":"1.3039,103.8318","to":["1.3040,103.8350", ...]}
+const MAX_ROUTES = 5;
+router.post("/routes", async (req, res) => {
+  try {
+    if (!onemap.configured()) return res.status(503).json({ error: "Walking routes are not set up yet" });
+    const from = parsePoint(req.body?.from);
+    const to = Array.isArray(req.body?.to) ? req.body.to.slice(0, MAX_ROUTES).map(parsePoint) : [];
+    if (!from || !to.length || to.some((p) => !p)) return res.status(400).json({ error: "from and to must be lat,lng points in Singapore" });
+    const routes = await Promise.all(
+      to.map((p) => {
+        const straight = Math.hypot((p.lng - from.lng) * 111320 * Math.cos((from.lat * Math.PI) / 180), (p.lat - from.lat) * 110574);
+        if (straight > MAX_ROUTE_M) return null;
+        return onemap
+          .walkRoute(from, p)
+          .then((r) => ({ minutes: Math.max(1, Math.round(r.seconds / 60)), metres: Math.round(r.metres) }))
+          .catch(() => null);
+      })
+    );
+    res.json({ routes });
+  } catch (err) {
+    console.error("smoke: routes failed:", err.message);
+    res.status(502).json({ error: "Couldn't get walking routes right now" });
+  }
+});
+
 // Places by name, address or postcode (OneMap), to see spots near somewhere
 // before going. POST /api/smoke/search {"q":"tampines hub"}; the words stay out of the URL.
 const searchLimiter = rateLimit({ windowMs: 60_000, max: 40, standardHeaders: true, legacyHeaders: false, message: { error: "Too many searches. Try again in a minute." } });
