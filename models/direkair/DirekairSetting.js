@@ -6,6 +6,8 @@ const mongoose = require('mongoose');
 // hours: opening hours text per language
 // announcement: optional bar at the top of the site, hidden after `until` (YYYY-MM-DD, Thai time)
 // heroPhotoId / heroUrl: optional gallery photo used as the home page's main picture
+// texts: the admin's own wording for text on the home page, { th: { key: text }, en: { ... } };
+//        keys are the page's data-edit attributes, text may hold <b>, <strong>, <em>, <i>, <br> only
 // Fields left unset fall back to the text already in the site's HTML.
 const DirekairSettingSchema = new mongoose.Schema({
   key:   { type: String, required: true, unique: true },
@@ -19,6 +21,7 @@ const DirekairSettingSchema = new mongoose.Schema({
   // gallery photo shown as the big picture at the top of the home page (url copied for a cheap GET)
   heroPhotoId: { type: String, default: '' },
   heroUrl: { type: String, default: '' },
+  texts: { type: mongoose.Schema.Types.Mixed, default: undefined },
 }, { timestamps: true });
 
 module.exports = mongoose.model('DirekairSetting', DirekairSettingSchema);
