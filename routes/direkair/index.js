@@ -94,6 +94,9 @@ const publicSettings = (doc) => {
     const a = doc.announcement;
     out.announcement = { enabled: !!a.enabled, th: a.th || '', en: a.en || '', until: a.until || '' };
   }
+  if (doc?.texts && (Object.keys(doc.texts.th || {}).length || Object.keys(doc.texts.en || {}).length)) {
+    out.texts = { th: doc.texts.th || {}, en: doc.texts.en || {} };
+  }
   return out;
 };
 
@@ -152,6 +155,53 @@ router.put('/settings', requireAdmin, async (req, res) => {
       { key: 'site' }, { $set: update }, { upsert: true, new: true, setDefaultsOnInsert: true },
     ).lean();
     res.json(publicSettings(doc));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- page text ---------- */
+
+// The admin edits text right on the home page; each editable element has a data-edit key.
+// Text is stored as a small HTML fragment: only <b>, <strong>, <em>, <i> and <br> are kept,
+// any other tag (and stray < or >) is removed, so saved text can't add links or scripts.
+const TEXT_KEY = /^[a-z0-9-]{1,40}$/;
+const MAX_TEXT = 2000;
+const MAX_TEXT_KEYS = 300;
+const SAFE_TAG = /<\/?(?:b|strong|em|i|br)\s*\/?>/gi;
+function cleanText(v) {
+  if (typeof v !== 'string') return '';
+  const s = v.slice(0, MAX_TEXT);
+  const strip = (t) => t.replace(/<[^<>]*>/g, '').replace(/[<>]/g, '');
+  let out = '', last = 0;
+  for (const m of s.matchAll(SAFE_TAG)) {
+    out += strip(s.slice(last, m.index)) + m[0].toLowerCase().replace(/\s+/g, '');
+    last = m.index + m[0].length;
+  }
+  return (out + strip(s.slice(last))).trim();
+}
+
+// Body: { lang: 'th' | 'en', texts: { key: text, otherKey: null } }; null (or empty) puts back the original text.
+router.put('/texts', requireAdmin, async (req, res) => {
+  const { lang, texts } = req.body || {};
+  if (lang !== 'th' && lang !== 'en') return res.status(400).json({ error: 'ภาษาไม่ถูกต้อง' });
+  if (!texts || typeof texts !== 'object' || Array.isArray(texts) || !Object.keys(texts).length) {
+    return res.status(400).json({ error: 'ไม่มีข้อความที่จะบันทึก' });
+  }
+  try {
+    const doc = await DirekairSetting.findOne({ key: 'site' }).lean();
+    const current = { ...(doc?.texts?.[lang] || {}) };
+    for (const [key, value] of Object.entries(texts)) {
+      if (!TEXT_KEY.test(key)) return res.status(400).json({ error: 'รหัสข้อความไม่ถูกต้อง' });
+      const text = value == null ? '' : cleanText(value);
+      if (text && text.replace(/<[^>]*>/g, '').trim()) current[key] = text;
+      else delete current[key];
+    }
+    if (Object.keys(current).length > MAX_TEXT_KEYS) return res.status(400).json({ error: 'แก้ข้อความได้ไม่เกิน ' + MAX_TEXT_KEYS + ' จุดต่อภาษา' });
+    const saved = await DirekairSetting.findOneAndUpdate(
+      { key: 'site' }, { $set: { ['texts.' + lang]: current } }, { upsert: true, new: true, setDefaultsOnInsert: true },
+    ).lean();
+    res.json(publicSettings(saved));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
