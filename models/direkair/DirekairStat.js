@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
-// Daily counters for the Direk Air shop site: page visits and taps on call / LINE / map, plus bookings.
+// Daily counters for the Direk Air shop site: page visits and taps on call / LINE / map.
+// ('booking' rows are old counts from the booking form, which was removed.)
 // Counts only: no IP addresses, user agents or anything that identifies a visitor is stored.
 // day is the date in Thai time (YYYY-MM-DD).
 const DirekairStatSchema = new mongoose.Schema({
