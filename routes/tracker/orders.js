@@ -10,6 +10,14 @@ const { getAccessToken, bestVariantMatch } = require("../../jobs/ebayPriceSync")
 // past this, the order counts as a late shipment against seller performance metrics.
 const SHIP_DEADLINE_HOURS = 48;
 
+// Same cost-plus constants used by ebayPriceSync.js's calcEbayPrice/trueCost — duplicated
+// here (matching that file's existing pattern) rather than importing, since these only
+// feed an estimate, not an actual eBay-facing price calculation.
+const EBAY_FEE_RATE  = 0.1325;
+const EBAY_FEE_FIXED = 0.30;
+const PROMO_RATE     = 0.05;
+const AMAZON_TAX     = 0.085;
+
 // Delivered/notified orders drop off the page this long after delivery — the DB record
 // stays (Remove is still manual/explicit), this just keeps the list from filling up with
 // fully-handled orders. Falls back to updatedAt for orders delivered before deliveredAt existed.
@@ -43,7 +51,7 @@ async function getOrdersList() {
   for (const p of products) (productsByListing[p.ebayListingId] ||= []).push(p);
 
   const now = Date.now();
-  const results = orders.map(o => {
+  const resolved = orders.map(o => {
     let amazonUrl = o.amazonUrl || null;
     let productImage = o.productImage || null;
     if (!amazonUrl && !productImage) {
@@ -54,12 +62,36 @@ async function getOrdersList() {
       amazonUrl = match?.url || null;
       productImage = match?.image || null;
     }
+    return { order: o, amazonUrl, productImage };
+  });
 
+  // Today's Amazon price per item, for the "estimated cost/profit" fields below — the actual
+  // price paid at purchase time was never captured (Mark Purchased only records an Amazon
+  // order ID, not a cost), so this is the closest honest estimate: current tracked price,
+  // not history. Only meaningful for orders whose product is still tracked — amazonUrl is
+  // null (and the two fields below stay null) once that product has been deleted.
+  const amazonUrls = [...new Set(resolved.map(r => r.amazonUrl).filter(Boolean))];
+  const priceByUrl = {};
+  if (amazonUrls.length) {
+    const priced = await Product.find({ url: { $in: amazonUrls } }, { url: 1, current: 1 }).lean();
+    for (const p of priced) priceByUrl[p.url] = p.current;
+  }
+
+  const results = resolved.map(({ order: o, amazonUrl, productImage }) => {
     const shipDeadline = o.createTimeEbay
       ? new Date(o.createTimeEbay.getTime() + SHIP_DEADLINE_HOURS * 3600 * 1000)
       : null;
     const hasTracking = Boolean(o.trackingNumber);
     const hoursLeft = shipDeadline && !hasTracking ? (shipDeadline.getTime() - now) / 3600000 : null;
+
+    const amazonPrice = amazonUrl ? priceByUrl[amazonUrl] : null;
+    const qty = o.quantity || 1;
+    let estAmazonCost = null, estProfit = null;
+    if (amazonPrice != null && o.price != null) {
+      estAmazonCost = +(amazonPrice * (1 + AMAZON_TAX) * qty).toFixed(2);
+      const ebayFee = (o.price * (EBAY_FEE_RATE + PROMO_RATE) + EBAY_FEE_FIXED) * qty;
+      estProfit = +(o.price * qty - estAmazonCost - ebayFee).toFixed(2);
+    }
 
     return {
       ...o.toObject(),
@@ -68,6 +100,8 @@ async function getOrdersList() {
       shipDeadline,
       hoursLeft,
       isOverdue: hoursLeft != null && hoursLeft <= 0,
+      estAmazonCost,
+      estProfit,
     };
   });
 
