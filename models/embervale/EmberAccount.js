@@ -1,0 +1,17 @@
+const mongoose = require("mongoose");
+
+// One Embervale player account and its saved character.
+// Stored in its own "ember_accounts" collection so it never mixes with other projects' data.
+const emberAccountSchema = new mongoose.Schema(
+  {
+    username: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    passwordHash: { type: String, required: true },
+    // The game's own save format ({ v: 1, p: {...} }), written by the client.
+    // Validated for shape and size in routes/embervale/index.js.
+    character: { type: mongoose.Schema.Types.Mixed, default: null },
+    characterSavedAt: { type: Date, default: null },
+  },
+  { timestamps: true, minimize: false }
+);
+
+module.exports = mongoose.model("EmberAccount", emberAccountSchema, "ember_accounts");
