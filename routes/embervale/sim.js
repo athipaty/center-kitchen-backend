@@ -46,7 +46,7 @@ class ZoneSim {
     const x = (i % Z.w + 0.5) * TILE, y = (((i / Z.w) | 0) + 0.5) * TILE;
     m = m || { type };
     Object.assign(m, { d, x, y, sx: x, sy: y, hp: d.hp, state: "idle", atkT: 0, wT: rnd(0, 3), tx: null, ty: null, face: 1,
-      dead: false, slowUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, stunUntil: 0, dmg: new Map(), respawnAt: 0 });
+      dead: false, slowUntil: 0, ail: null, ailUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, stunUntil: 0, dmg: new Map(), respawnAt: 0 });
     return m;
   }
 
@@ -62,6 +62,8 @@ class ZoneSim {
     if (dist(player, m) > 450) return; // too far away to have hit it
     m.state = "chase";
     if (h.sl) m.slowUntil = this.now + clamp(Number(h.sl) || 0, 0, 6);
+    // frozen or stunned by a skill: it cannot move or attack for a few seconds
+    if (h.sk === "freeze" || h.sk === "stun") { m.ail = h.sk; m.ailUntil = this.now + clamp(Number(h.st) || 0, 0, 5); }
     const cap = 400 + clamp(Math.floor(Number(player.lv) || 1), 1, 99) * 150;
     const dmg = clamp(Math.round(Number(h.d) || 0), 0, cap);
     if (dmg <= 0) return;
@@ -93,6 +95,7 @@ class ZoneSim {
   updateMob(m, dt, T) {
     const d = m.d;
     if (m.dead) { if (this.now >= m.respawnAt) this.spawn(m.type, m); return; }
+    if (m.ailUntil > this.now) { m.moving = false; return; }
     let tg = null, dp = 1e9;
     for (const t of T) { const q = dist(m, t); if (q < dp) { dp = q; tg = t; } }
     const slow = m.slowUntil > this.now ? 0.4 : 1;
@@ -145,7 +148,8 @@ class ZoneSim {
   // Same compact format the game already uses between players: [x, y, hp per mille, flags].
   snapshot() {
     return this.mobs.map((m) => [Math.round(m.x), Math.round(m.y), m.dead ? 0 : Math.round(clamp(m.hp / m.d.hp, 0, 1) * 1000),
-      (m.dead ? 1 : 0) | (m.moving ? 2 : 0) | (m.face < 0 ? 4 : 0) | (m.state === "chase" ? 8 : 0) | (m.slowUntil > this.now ? 16 : 0)]);
+      (m.dead ? 1 : 0) | (m.moving ? 2 : 0) | (m.face < 0 ? 4 : 0) | (m.state === "chase" ? 8 : 0) | (m.slowUntil > this.now ? 16 : 0) |
+      (m.ailUntil > this.now ? (m.ail === "freeze" ? 32 : 64) : 0)]);
   }
 }
 
