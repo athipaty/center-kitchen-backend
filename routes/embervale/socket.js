@@ -7,6 +7,7 @@
 // Like routes/market/chatSocket.js, every handler is wrapped so a bad message can
 // only fail that socket, never crash this shared backend.
 const { verifyEmbervaleToken } = require("../../utils/embervaleAuth");
+const { ZoneSim, hasSim } = require("./sim");
 
 const CHANNEL_CAP = 40;
 const MAX_PRESENCE_BYTES = 12_000;
@@ -15,6 +16,15 @@ const MAX_MSGS_PER_SEC = 20;
 // "room:channel" -> Set of socket ids
 const channels = new Map();
 let nsRef = null;
+// "room:channel|region" -> { sim, idle } : server-run monsters, one per region that has players
+const sims = new Map();
+const TICK_MS = 100;
+
+function ensureSim(key, zone) {
+  let s = sims.get(key);
+  if (!s && hasSim(zone)) { s = { sim: new ZoneSim(zone), zone, idle: 0 }; sims.set(key, s); }
+  return s;
+}
 
 const cleanRoom = (r) => String(r ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 24) || "world";
 
@@ -36,6 +46,26 @@ function onlineCount() {
 function attachEmbervale(io) {
   const ns = io.of("/embervale");
   nsRef = ns;
+
+  // Run every active region's monsters and send each region its state ~10 times a second.
+  setInterval(() => {
+    for (const [key, s] of sims) {
+      try {
+        const ids = ns.adapter.rooms.get(key);
+        const players = [];
+        if (ids) for (const sid of ids) {
+          const p = ns.sockets.get(sid)?.data.presence;
+          if (p) players.push({ id: String(p.id || sid).slice(0, 16), x: Number(p.x) || 0, y: Number(p.y) || 0, dead: !!p.d });
+        }
+        if (!players.length) { s.idle += TICK_MS; if (s.idle > 60_000) sims.delete(key); continue; }
+        s.idle = 0;
+        s.sim.tick(TICK_MS / 1000, players);
+        ns.to(key).emit("mobs", { z: s.zone, mb: s.sim.snapshot(), ev: s.sim.evs });
+      } catch (err) {
+        sims.delete(key); // a broken region restarts fresh next time someone is there
+      }
+    }
+  }, TICK_MS).unref();
 
   // Logging in is optional: guests can play too (their progress stays on their device).
   ns.use((socket, next) => {
@@ -59,6 +89,8 @@ function attachEmbervale(io) {
       socket.leave(key);
       socket.to(key).emit("left", { peer: socket.id });
       socket.data.channel = null;
+      if (socket.data.zoneRoom) socket.leave(socket.data.zoneRoom);
+      socket.data.zone = socket.data.zoneRoom = null;
     };
 
     socket.on("join", (msg) => {
@@ -75,7 +107,7 @@ function attachEmbervale(io) {
           const s = ns.sockets.get(id);
           if (s && s.data.presence) peers.push({ peer: id, presence: s.data.presence, guest: !s.data.username });
         }
-        socket.emit("joined", { channel: n, peers, account: socket.data.username });
+        socket.emit("joined", { channel: n, peers, account: socket.data.username, sim: true });
       } catch (err) {
         socket.emit("error", { error: "Could not join" });
       }
@@ -92,6 +124,28 @@ function attachEmbervale(io) {
         if (JSON.stringify(presence).length > MAX_PRESENCE_BYTES) return;
         socket.data.presence = presence;
         socket.to(socket.data.channel).emit("peer", peerInfo());
+
+        // keep the socket in a per-region room so it gets that region's monster updates
+        const zone = typeof presence.z === "string" ? presence.z.slice(0, 16) : null;
+        if (zone !== socket.data.zone) {
+          if (socket.data.zoneRoom) socket.leave(socket.data.zoneRoom);
+          socket.data.zone = zone;
+          socket.data.zoneRoom = zone && hasSim(zone) ? `${socket.data.channel}|${zone}` : null;
+          socket.data.hxSeen = 0;
+          if (socket.data.zoneRoom) { socket.join(socket.data.zoneRoom); ensureSim(socket.data.zoneRoom, zone); }
+        }
+        // hits this player reports on the server's monsters
+        const s = socket.data.zoneRoom && sims.get(socket.data.zoneRoom);
+        if (s && Array.isArray(presence.hx)) {
+          const who = { id: String(presence.id || socket.id).slice(0, 16), x: Number(presence.x) || 0, y: Number(presence.y) || 0, lv: presence.lv };
+          for (const h of presence.hx.slice(-24)) {
+            if (!h || typeof h !== "object") continue;
+            const i = Number(h.i);
+            if (!(i > (socket.data.hxSeen || 0))) continue;
+            socket.data.hxSeen = i;
+            s.sim.hit(who, h);
+          }
+        }
       } catch {
         /* ignore bad presence */
       }
