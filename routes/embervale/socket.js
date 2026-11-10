@@ -7,7 +7,7 @@
 // Like routes/market/chatSocket.js, every handler is wrapped so a bad message can
 // only fail that socket, never crash this shared backend.
 const { verifyEmbervaleToken } = require("../../utils/embervaleAuth");
-const { ZoneSim, hasSim } = require("./sim");
+const { ZoneSim, hasSim, WORLD_BOSSES, MOBS } = require("./sim");
 const { attachSocial } = require("./social");
 const { attachTrade } = require("./trade");
 
@@ -21,6 +21,14 @@ let nsRef = null;
 // "room:channel|region" -> { sim, idle } : server-run monsters, one per region that has players
 const sims = new Map();
 const TICK_MS = 100;
+
+// #40 world bosses: each channel gets one boss at a time, in that boss's region.
+// The times can be shortened with env vars (handy for tests); the defaults suit real play.
+const num = (v, d) => (Number(v) > 0 ? Number(v) : d);
+const WB_FIRST = num(process.env.EMBER_WB_FIRST_MS, 5 * 60_000);  // after a channel opens
+const WB_EVERY = num(process.env.EMBER_WB_EVERY_MS, 30 * 60_000); // after a boss falls or leaves
+const WB_LIFE = num(process.env.EMBER_WB_LIFE_MS, 20 * 60_000);   // how long one stays before it leaves
+const bosses = new Map(); // channel key -> { next, active: { b, z, until, key } | null, last }
 
 function ensureSim(key, zone) {
   let s = sims.get(key);
@@ -45,6 +53,49 @@ function onlineCount() {
   return n;
 }
 
+function playerName(ns, channel, id) {
+  const ids = ns.adapter.rooms.get(channel);
+  if (ids) for (const sid of ids) {
+    const p = ns.sockets.get(sid)?.data.presence;
+    if (p && String(p.id || sid).slice(0, 16) === id) return String(p.n || "Someone").slice(0, 16);
+  }
+  return "Someone";
+}
+
+function bossTick(ns, nowMs) {
+  for (const ch of channels.keys()) if (!bosses.has(ch)) bosses.set(ch, { next: nowMs + WB_FIRST, active: null, last: null });
+  for (const [ch, st] of bosses) {
+    if (!channels.has(ch)) { // channel emptied: drop its boss
+      if (st.active) sims.get(st.active.key)?.sim.removeBoss();
+      bosses.delete(ch); continue;
+    }
+    const a = st.active;
+    if (a) {
+      const s = sims.get(a.key);
+      if (!s || !s.sim.wb || s.sim.wb.dead) { st.active = null; st.next = nowMs + WB_EVERY; continue; }
+      if (nowMs >= a.until) {
+        s.sim.removeBoss(); st.active = null; st.next = nowMs + WB_EVERY;
+        ns.to(ch).emit("wboss", { k: "gone", b: a.b, z: a.z });
+      }
+      continue;
+    }
+    if (nowMs < st.next || !WORLD_BOSSES.length) continue;
+    // pick a boss, avoiding the last one when there is a choice
+    const pool = WORLD_BOSSES.length > 1 ? WORLD_BOSSES.filter((b) => b !== st.last) : WORLD_BOSSES;
+    const b = pool[Math.floor(Math.random() * pool.length)], z = MOBS[b].world, key = `${ch}|${z}`;
+    const s = ensureSim(key, z);
+    if (!s) { st.next = nowMs + WB_EVERY; continue; }
+    s.sim.addBoss(b);
+    st.active = { b, z, until: nowMs + WB_LIFE, key }; st.last = b;
+    s.sim.onBossDown = (m, mvpId) => {
+      const mvp = mvpId ? playerName(ns, ch, mvpId) : null;
+      st.active = null; st.next = Date.now() + WB_EVERY;
+      ns.to(ch).emit("wboss", { k: "down", b, z, mvp });
+    };
+    ns.to(ch).emit("wboss", { k: "up", b, z, left: Math.round(WB_LIFE / 1000) });
+  }
+}
+
 function attachEmbervale(io) {
   const ns = io.of("/embervale");
   nsRef = ns;
@@ -59,15 +110,20 @@ function attachEmbervale(io) {
           const p = ns.sockets.get(sid)?.data.presence;
           if (p) players.push({ id: String(p.id || sid).slice(0, 16), x: Number(p.x) || 0, y: Number(p.y) || 0, dead: !!p.d });
         }
-        if (!players.length) { s.idle += TICK_MS; if (s.idle > 60_000) sims.delete(key); continue; }
+        if (!players.length) {
+          if (s.sim.wb && !s.sim.wb.dead) { s.idle = 0; continue; } // keep a region with a waiting world boss alive
+          s.idle += TICK_MS; if (s.idle > 60_000) sims.delete(key); continue;
+        }
         s.idle = 0;
         s.sim.tick(TICK_MS / 1000, players);
-        ns.to(key).emit("mobs", { z: s.zone, mb: s.sim.snapshot(), ev: s.sim.evs });
+        const wb = s.sim.bossState();
+        ns.to(key).emit("mobs", { z: s.zone, mb: s.sim.snapshot(), ev: s.sim.evs, ...(wb ? { wb } : {}) });
       } catch (err) {
         sims.delete(key); // a broken region restarts fresh next time someone is there
       }
     }
   }, TICK_MS).unref();
+  setInterval(() => { try { bossTick(ns, Date.now()); } catch { /* never let the boss timer break the game */ } }, 1000).unref();
 
   // Logging in is optional: guests can play too (their progress stays on their device).
   ns.use((socket, next) => {
@@ -112,6 +168,8 @@ function attachEmbervale(io) {
           if (s && s.data.presence) peers.push({ peer: id, presence: s.data.presence, guest: !s.data.username });
         }
         socket.emit("joined", { channel: n, peers, account: socket.data.username, sim: true });
+        const wb = bosses.get(key)?.active; // tell a newcomer about a boss that is already out
+        if (wb) socket.emit("wboss", { k: "up", b: wb.b, z: wb.z, left: Math.max(0, Math.round((wb.until - Date.now()) / 1000)), late: 1 });
       } catch (err) {
         socket.emit("error", { error: "Could not join" });
       }
@@ -161,4 +219,4 @@ function attachEmbervale(io) {
   });
 }
 
-module.exports = { attachEmbervale, onlineCount };
+module.exports = { attachEmbervale, onlineCount, _bosses: bosses, _sims: sims };
