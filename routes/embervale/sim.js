@@ -26,6 +26,24 @@ class ZoneSim {
     this.mobs = [];
     for (const [type, n] of this.Z.mobs) for (let k = 0; k < n; k++) this.mobs.push(this.spawn(type));
     this.mobs.forEach((m, i) => (m.idx = i));
+    this.base = this.mobs.length; // the world boss, when there is one, sits in the slot after the regular monsters
+    this.wb = null;
+    this.onBossDown = null;
+  }
+
+  // #40 world bosses: one extra monster, sent separately so older game versions still sync the rest
+  addBoss(type) {
+    if (!MOBS[type]) return null;
+    const m = this.spawn(type);
+    m.world = true; m.idx = this.base; m.state = "idle";
+    this.mobs[this.base] = m; this.wb = m;
+    return m;
+  }
+  removeBoss() { if (this.wb) { this.wb.dead = true; this.wb.gone = true; this.wb = null; } this.mobs.length = this.base; }
+  bossState() {
+    const m = this.wb;
+    if (!m) return null;
+    return { t: m.type, i: m.idx, s: this.mobState(m) };
   }
 
   blocked(x, y) { const Z = this.Z; return x < 0 || y < 0 || x >= Z.w || y >= Z.h || BLOCK[Z.t[y * Z.w + x]]; }
@@ -76,25 +94,33 @@ class ZoneSim {
   kill(m) {
     m.dead = true; m.hp = 0; m.slamAt = 0;
     m.respawnAt = this.now + (m.d.respawn || rnd(9, 15));
+    // world boss: whoever dealt the most damage is the MVP and gets an extra prize
+    let mvp = null, best = 0;
+    if (m.world) for (const [id, d] of m.dmg) if (d > best) { best = d; mvp = id; }
     // everyone who damaged it gets their own drops, rolled here so nobody can fake them
     for (const id of m.dmg.keys()) {
       const l = [];
       for (const [item, ch] of m.d.drops) if (Math.random() < ch) l.push(item);
       if (Math.random() < m.d.sigChance) l.push(m.type + "_sig");
-      this.event("d", m, { t: id, l, g: Math.round(m.d.lv * rnd(1.5, 3)) });
+      const extra = {};
+      if (m.world && id === mvp) { for (const [item, ch] of m.d.mvp || []) if (Math.random() < ch) l.push(item); extra.mvp = 1; }
+      this.event("d", m, { t: id, l, g: Math.round(m.d.lv * rnd(1.5, 3) * (m.world ? 20 : 1)), ...extra });
     }
+    const dealt = m.dmg;
     m.dmg = new Map();
+    if (m.world) { this.wbClearAt = this.now + 8; if (this.onBossDown) this.onBossDown(m, mvp, dealt); }
   }
 
   tick(dt, players) {
     this.now += dt;
+    if (this.wb && this.wb.dead && this.now >= this.wbClearAt) this.removeBoss(); // a fallen boss stays a moment so everyone sees it fall
     const targets = players.filter((p) => !p.dead);
     for (const m of this.mobs) this.updateMob(m, dt, targets);
   }
 
   updateMob(m, dt, T) {
     const d = m.d;
-    if (m.dead) { if (this.now >= m.respawnAt) this.spawn(m.type, m); return; }
+    if (m.dead) { if (!m.world && this.now >= m.respawnAt) this.spawn(m.type, m); return; }
     if (m.ailUntil > this.now) { m.moving = false; return; }
     let tg = null, dp = 1e9;
     for (const t of T) { const q = dist(m, t); if (q < dp) { dp = q; tg = t; } }
@@ -103,7 +129,7 @@ class ZoneSim {
     if (!tg) { if (m.state === "chase") m.state = "idle"; }
     else if (m.state !== "chase" && d.aggro && dp < 170) m.state = "chase";
     if (m.state === "chase" && tg) {
-      if (Math.hypot(m.x - m.sx, m.y - m.sy) > 520 || dp > 600) m.state = "return";
+      if (Math.hypot(m.x - m.sx, m.y - m.sy) > (m.world ? 900 : 520) || dp > (m.world ? 900 : 600)) m.state = "return";
       else {
         if (d.boss && this.now > m.slamT && dp < 160) { m.slamAt = this.now + 1.1; this.event("w", m); return; }
         const reach = d.range + d.size + PR + 4;
@@ -146,13 +172,16 @@ class ZoneSim {
   }
 
   // Same compact format the game already uses between players: [x, y, hp per mille, flags].
-  snapshot() {
-    return this.mobs.map((m) => [Math.round(m.x), Math.round(m.y), m.dead ? 0 : Math.round(clamp(m.hp / m.d.hp, 0, 1) * 1000),
+  snapshot() { return this.mobs.slice(0, this.base).map((m) => this.mobState(m)); }
+  mobState(m) {
+    return [Math.round(m.x), Math.round(m.y), m.dead ? 0 : Math.round(clamp(m.hp / m.d.hp, 0, 1) * 1000),
       (m.dead ? 1 : 0) | (m.moving ? 2 : 0) | (m.face < 0 ? 4 : 0) | (m.state === "chase" ? 8 : 0) | (m.slowUntil > this.now ? 16 : 0) |
-      (m.ailUntil > this.now ? (m.ail === "freeze" ? 32 : 64) : 0)]);
+      (m.ailUntil > this.now ? (m.ail === "freeze" ? 32 : 64) : 0)];
   }
 }
 
 const hasSim = (zoneId) => !!ZONES[zoneId] && !ZONES[zoneId].safe;
 
-module.exports = { ZoneSim, hasSim, WORLD_VERSION: WORLD.version };
+const WORLD_BOSSES = Object.keys(MOBS).filter((id) => MOBS[id].world && ZONES[MOBS[id].world]);
+
+module.exports = { ZoneSim, hasSim, WORLD_VERSION: WORLD.version, WORLD_BOSSES, MOBS };
