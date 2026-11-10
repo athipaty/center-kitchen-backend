@@ -8,6 +8,7 @@
 // only fail that socket, never crash this shared backend.
 const { verifyEmbervaleToken } = require("../../utils/embervaleAuth");
 const { ZoneSim, hasSim } = require("./sim");
+const { attachSocial } = require("./social");
 
 const CHANNEL_CAP = 40;
 const MAX_PRESENCE_BYTES = 12_000;
@@ -78,6 +79,7 @@ function attachEmbervale(io) {
   });
 
   ns.on("connection", (socket) => {
+    attachSocial(socket, ns); // whispers, parties, friends
     const peerInfo = () => ({ peer: socket.id, presence: socket.data.presence || null, guest: !socket.data.username });
     let tokens = MAX_MSGS_PER_SEC, last = Date.now();
 
