@@ -18,6 +18,12 @@ const EBAY_FEE_FIXED = 0.30;
 const PROMO_RATE     = 0.05;
 const AMAZON_TAX     = 0.085;
 
+// eBay payouts land in USD and get converted to THB on withdrawal (Payoneer) — the midpoint
+// of the seller's own observed real-world gap vs. mid-market rate (quoted as "3-4%"), applied
+// to USD revenue before costs so estProfit reflects what actually lands in THB, not the raw
+// USD sale price. Adjust here if the real conversion loss turns out to run higher or lower.
+const FX_LOSS_RATE   = 0.035;
+
 // Delivered/notified orders drop off the page this long after delivery — the DB record
 // stays (Remove is still manual/explicit), this just keeps the list from filling up with
 // fully-handled orders. Falls back to updatedAt for orders delivered before deliveredAt existed.
@@ -90,7 +96,8 @@ async function getOrdersList() {
     if (amazonPrice != null && o.price != null) {
       estAmazonCost = +(amazonPrice * (1 + AMAZON_TAX) * qty).toFixed(2);
       const ebayFee = (o.price * (EBAY_FEE_RATE + PROMO_RATE) + EBAY_FEE_FIXED) * qty;
-      estProfit = +(o.price * qty - estAmazonCost - ebayFee).toFixed(2);
+      const fxLoss = o.price * qty * FX_LOSS_RATE;
+      estProfit = +(o.price * qty - estAmazonCost - ebayFee - fxLoss).toFixed(2);
     }
 
     return {
