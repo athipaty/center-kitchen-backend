@@ -73,6 +73,11 @@ if (process.env.DIREKAIR_FRONTEND_URL) allowedOrigins.push(process.env.DIREKAIR_
 // (web app, future mobile app). It must come before the global cors below: that one ends
 // preflight (OPTIONS) requests itself, without allow headers for origins not on the list.
 app.use('/api/smoke', cors({ origin: '*', maxAge: 86400 }));
+// Embervale (browser MMO) uses bearer tokens, no cookies, so it gets its own origin list
+// here, ahead of the global cors below for the same preflight reason as Smoke Finder.
+const embervaleOrigins = ["https://ro-six-bay.vercel.app", "http://localhost:8080"];
+if (process.env.EMBERVALE_FRONTEND_URL) embervaleOrigins.push(process.env.EMBERVALE_FRONTEND_URL);
+app.use('/api/embervale', cors({ origin: embervaleOrigins, maxAge: 86400 }));
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 // Default limit is 100kb; ABT page saves send every block at once, and a full-page HTML block
 // (Thai text, ~3 bytes/char) alone can approach that, so saves would fail with 413.
@@ -168,6 +173,10 @@ app.use('/api/market/listings', require('./routes/market/listings'));
 app.use('/api/market/conversations', require('./routes/market/conversations'));
 app.use('/api/market/uploads', require('./routes/market/uploads'));
 require('./routes/market/chatSocket').attachMarketChat(io);
+
+// --- Embervale (browser MMO: player accounts, cloud saves, live play on the /embervale socket namespace) ---
+app.use('/api/embervale', require('./routes/embervale'));
+require('./routes/embervale/socket').attachEmbervale(io);
 
 // --- Smoke Finder (Singapore "can I smoke here?" check; CORS is set up above) ---
 app.use('/api/smoke', smokeLimiter, require('./routes/smoke'));
