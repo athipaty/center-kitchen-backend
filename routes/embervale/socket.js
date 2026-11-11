@@ -13,6 +13,7 @@ const { attachTrade } = require("./trade");
 const { attachGuild } = require("./guild");
 const { attachMod, loadModeration, filterPresenceChat } = require("./mod");
 const { attachArena } = require("./arena");
+const { startGuildWar, attachGuildWar, attachGuildWarAdmin } = require("./guildwar");
 
 const CHANNEL_CAP = 40;
 const MAX_PRESENCE_BYTES = 12_000;
@@ -134,6 +135,7 @@ function attachEmbervale(io) {
     }
   }, TICK_MS).unref();
   setInterval(() => { try { bossTick(ns, Date.now()); } catch { /* never let the boss timer break the game */ } }, 1000).unref();
+  startGuildWar(ns); // the evening guild war over Emberkeep
 
   // Logging in is optional: guests can play too (their progress stays on their device).
   // A banned account is turned away (the message starts with "banned:" so the game shows it and does not fall back).
@@ -156,6 +158,8 @@ function attachEmbervale(io) {
     attachGuild(socket, ns);  // guilds (accounts only)
     attachMod(socket, ns);    // reports, and admin mute / kick / ban
     attachArena(socket, ns);  // ranked arena matches
+    attachGuildWar(socket, ns); // Emberkeep guild war: owner, schedule
+    attachGuildWarAdmin(socket, ns);
     const peerInfo = (pres) => ({ peer: socket.id, presence: pres === undefined ? socket.data.presence || null : pres, guest: !socket.data.username, guild: socket.data.guild ? { n: socket.data.guild.name, e: socket.data.guild.emblem } : null });
     // slim copies for the rest of the channel: at once when what they show changes, else at most once a second
     let farAt = 0, farTimer = null, farLast = "";
