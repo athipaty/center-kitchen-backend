@@ -30,6 +30,7 @@ class ZoneSim {
     this.base = this.mobs.length; // the world boss, when there is one, sits in the slot after the regular monsters
     this.wb = null;
     this.onBossDown = null;
+    this.partyOf = null; // (partyId) -> party, set by the socket layer (for the party loot rule)
   }
 
   // #40 world bosses: one extra monster, sent separately so older game versions still sync the rest
@@ -75,7 +76,7 @@ class ZoneSim {
     }
     const x = (i % Z.w + 0.5) * TILE, y = (((i / Z.w) | 0) + 0.5) * TILE;
     Object.assign(m, { d, x, y, calls: 0, sx: x, sy: y, hp: d.hp, state: "idle", atkT: 0, wT: rnd(0, 3), tx: null, ty: null, face: 1,
-      dead: false, slowUntil: 0, ail: null, ailUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, stunUntil: 0, dmg: new Map(), respawnAt: 0 });
+      dead: false, slowUntil: 0, ail: null, ailUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, stunUntil: 0, dmg: new Map(), pty: new Map(), respawnAt: 0 });
     return m;
   }
 
@@ -99,6 +100,8 @@ class ZoneSim {
     m.hp -= dmg;
     m.stunUntil = this.now + 0.22;
     m.dmg.set(player.id, (m.dmg.get(player.id) || 0) + dmg);
+    if (!m.pty) m.pty = new Map();
+    m.pty.set(player.id, player.party || null);
     if (m.hp <= 0) this.kill(m);
   }
 
@@ -108,17 +111,29 @@ class ZoneSim {
     // world boss: whoever dealt the most damage is the MVP and gets an extra prize
     let mvp = null, best = 0;
     if (m.world) for (const [id, d] of m.dmg) if (d > best) { best = d; mvp = id; }
-    // everyone who damaged it gets their own drops, rolled here so nobody can fake them
+    // everyone who damaged it gets their own drops, rolled here so nobody can fake them.
+    // A party set to "take turns" rolls once for all its members who hit it, and that roll goes to the next in line.
+    const roll = () => { const l = []; for (const [item, ch] of m.d.drops) if (Math.random() < ch) l.push(item); if (Math.random() < m.d.sigChance) l.push(m.type + "_sig"); return l; };
+    const turns = new Map(); // partyId -> [player ids]
     for (const id of m.dmg.keys()) {
-      const l = [];
-      for (const [item, ch] of m.d.drops) if (Math.random() < ch) l.push(item);
-      if (Math.random() < m.d.sigChance) l.push(m.type + "_sig");
-      const extra = {};
+      const pid = m.pty && m.pty.get(id), p = pid && this.partyOf ? this.partyOf(pid) : null;
+      if (p && p.loot === "turns") { if (!turns.has(pid)) turns.set(pid, []); turns.get(pid).push(id); }
+    }
+    const winner = new Map(); // player id -> the shared roll, for whoever's turn it is
+    for (const [pid, ids] of turns) {
+      const p = this.partyOf(pid); ids.sort();
+      const w = ids[(p.turn || 0) % ids.length]; p.turn = (p.turn || 0) + 1;
+      const l = roll();
+      for (const id of ids) winner.set(id, { w, l: id === w ? l : [], n: l.length });
+    }
+    for (const id of m.dmg.keys()) {
+      const sh = winner.get(id), l = sh ? sh.l : roll();
+      const extra = sh ? { w: sh.w, n: sh.n } : {};
       if (m.world && id === mvp) { for (const [item, ch] of m.d.mvp || []) if (Math.random() < ch) l.push(item); extra.mvp = 1; }
       this.event("d", m, { t: id, l, g: Math.round(m.d.lv * rnd(1.5, 3) * (m.world ? 20 : 1)), ...extra });
     }
     const dealt = m.dmg;
-    m.dmg = new Map();
+    m.dmg = new Map(); m.pty = new Map();
     if (m.world) { this.wbClearAt = this.now + 8; if (this.onBossDown) this.onBossDown(m, mvp, dealt); }
   }
 
@@ -162,7 +177,7 @@ class ZoneSim {
     }
     if (m.state === "return") {
       const dx = m.sx - m.x, dy = m.sy - m.y, n = Math.hypot(dx, dy);
-      if (n < 8) { m.state = "idle"; m.hp = d.hp; m.dmg = new Map(); }
+      if (n < 8) { m.state = "idle"; m.hp = d.hp; m.dmg = new Map(); m.pty = new Map(); }
       else {
         const s = d.spd * 1.6 * dt;
         if (!this.moveEnt(m, (dx / n) * s, (dy / n) * s, Math.min(d.size * 0.6, 11))) { m.x = m.sx; m.y = m.sy; }
