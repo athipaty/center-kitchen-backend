@@ -1,6 +1,7 @@
 // Embervale social: whispers, parties (with shared EXP) and friends' online status.
 // Parties live only in memory: they last while their members are connected.
 // Every handler is wrapped so a bad message only fails that socket.
+const { chatAllowed } = require("./mod");
 const MAX_PARTY = 12;
 const MSGS_PER_SEC = 5;
 const parties = new Map(); // id -> { id, leader: socketId, mode: "share" | "each", loot: "each" | "turns", turn, members: Set<socketId> }
@@ -51,7 +52,7 @@ function attachSocial(socket, ns) {
   // ---- whispers: by character name, to anyone online in any room or channel
   on("whisper", (msg) => {
     const to = clean(msg.to, 16), text = clean(msg.text, 120);
-    if (!to || !text) return;
+    if (!to || !text || !chatAllowed(socket, "whisper", text, to)) return;
     const targets = [...ns.sockets.values()].filter((s) => s !== socket && s.data.presence && nameOf(s).toLowerCase() === to.toLowerCase());
     for (const s of targets) s.emit("whisper", { from: nameOf(socket), text });
     socket.emit("whisperSent", { to, text, ok: targets.length > 0 });
@@ -114,7 +115,7 @@ function attachSocial(socket, ns) {
   });
   on("partyChat", (msg) => {
     const p = myParty(), text = clean(msg.text, 120);
-    if (!p || !text) return;
+    if (!p || !text || !chatAllowed(socket, "party", text)) return;
     for (const id of p.members) ns.sockets.get(id)?.emit("partyChat", { from: nameOf(socket), text });
   });
   // shared EXP: the player who made the kill passes each member in the same region their share

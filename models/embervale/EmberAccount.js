@@ -10,6 +10,10 @@ const emberAccountSchema = new mongoose.Schema(
     // Validated for shape and size in routes/embervale/index.js.
     character: { type: mongoose.Schema.Types.Mixed, default: null },
     characterSavedAt: { type: Date, default: null },
+    // moderation (routes/embervale/mod.js): no chat until mutedUntil, no live play until bannedUntil
+    mutedUntil: { type: Date, default: null },
+    bannedUntil: { type: Date, default: null },
+    banReason: { type: String, default: "" },
   },
   { timestamps: true, minimize: false }
 );
