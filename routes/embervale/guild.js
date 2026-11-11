@@ -3,6 +3,7 @@
 // and belong to accounts, so guests cannot join. Every handler is wrapped so a bad message
 // only fails that socket.
 const EmberGuild = require("../../models/embervale/EmberGuild");
+const { chatAllowed } = require("./mod");
 
 const MAX_MEMBERS = 30;
 const MSGS_PER_SEC = 4;
@@ -194,7 +195,7 @@ function attachGuild(socket, ns) {
 
   on("guildChat", (msg) => {
     const text = clean(msg.text, 120);
-    if (!socket.data.guild || !text) return;
+    if (!socket.data.guild || !text || !chatAllowed(socket, "guild", text)) return;
     for (const s of onlineOf(ns, socket.data.guild.id)) s.emit("guildChat", { from: nameOf(socket), text });
   });
 

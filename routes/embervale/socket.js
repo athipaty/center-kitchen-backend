@@ -11,6 +11,7 @@ const { ZoneSim, hasSim, WORLD_BOSSES, MOBS } = require("./sim");
 const { attachSocial, getParty } = require("./social");
 const { attachTrade } = require("./trade");
 const { attachGuild } = require("./guild");
+const { attachMod, loadModeration, filterPresenceChat } = require("./mod");
 
 const CHANNEL_CAP = 40;
 const MAX_PRESENCE_BYTES = 12_000;
@@ -134,12 +135,17 @@ function attachEmbervale(io) {
   setInterval(() => { try { bossTick(ns, Date.now()); } catch { /* never let the boss timer break the game */ } }, 1000).unref();
 
   // Logging in is optional: guests can play too (their progress stays on their device).
-  ns.use((socket, next) => {
+  // A banned account is turned away (the message starts with "banned:" so the game shows it and does not fall back).
+  ns.use(async (socket, next) => {
     const token = socket.handshake.auth?.token;
     socket.data.username = null;
     if (token) {
       try { socket.data.username = verifyEmbervaleToken(token).username; } catch { /* expired token: play as guest */ }
     }
+    try {
+      const banned = await loadModeration(socket);
+      if (banned) return next(new Error(banned));
+    } catch { /* database hiccup: let them in */ }
     next();
   });
 
@@ -147,6 +153,7 @@ function attachEmbervale(io) {
     attachSocial(socket, ns); // whispers, parties, friends
     attachTrade(socket, ns);  // trading and player shops
     attachGuild(socket, ns);  // guilds (accounts only)
+    attachMod(socket, ns);    // reports, and admin mute / kick / ban
     const peerInfo = (pres) => ({ peer: socket.id, presence: pres === undefined ? socket.data.presence || null : pres, guest: !socket.data.username, guild: socket.data.guild ? { n: socket.data.guild.name, e: socket.data.guild.emblem } : null });
     // slim copies for the rest of the channel: at once when what they show changes, else at most once a second
     let farAt = 0, farTimer = null, farLast = "";
@@ -212,6 +219,7 @@ function attachEmbervale(io) {
         tokens -= 1;
         if (!socket.data.channel || !presence || typeof presence !== "object" || Array.isArray(presence)) return;
         if (JSON.stringify(presence).length > MAX_PRESENCE_BYTES) return;
+        filterPresenceChat(socket, presence); // a muted player's chat is dropped; the rest is kept as report evidence
         socket.data.presence = presence;
 
         // keep the socket in a per-region room so it gets that region's monster updates
