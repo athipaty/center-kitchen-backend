@@ -22,6 +22,13 @@ let nsRef = null;
 // "room:channel|region" -> { sim, idle } : server-run monsters, one per region that has players
 const sims = new Map();
 const TICK_MS = 100;
+// Presence relay: players in the same region get every update; the rest of the channel gets a slim copy
+// (no hits, monsters or ground loot) at most once a second, or at once when something they show changes.
+const FAR_EVERY_MS = 1000;
+const FAR_DROP = ["hx", "hv", "gl", "mb", "ev", "sp", "em", "wb"];
+const slimPresence = (p) => { const o = {}; for (const k in p) if (!FAR_DROP.includes(k)) o[k] = p[k]; return o; };
+const chatMark = (p) => { const ch = Array.isArray(p.ch) ? p.ch : []; const m = ch[ch.length - 1]; return m && typeof m === "object" ? String(m.i) : ""; };
+const farKey = (p) => [p.z, p.n, p.lv, p.c, p.d ? 1 : 0, p.lk, p.vd, chatMark(p)].join("|");
 
 // #40 world bosses: each channel gets one boss at a time, in that boss's region.
 // The times can be shortened with env vars (handy for tests); the defaults suit real play.
@@ -140,7 +147,24 @@ function attachEmbervale(io) {
     attachSocial(socket, ns); // whispers, parties, friends
     attachTrade(socket, ns);  // trading and player shops
     attachGuild(socket, ns);  // guilds (accounts only)
-    const peerInfo = () => ({ peer: socket.id, presence: socket.data.presence || null, guest: !socket.data.username, guild: socket.data.guild ? { n: socket.data.guild.name, e: socket.data.guild.emblem } : null });
+    const peerInfo = (pres) => ({ peer: socket.id, presence: pres === undefined ? socket.data.presence || null : pres, guest: !socket.data.username, guild: socket.data.guild ? { n: socket.data.guild.name, e: socket.data.guild.emblem } : null });
+    // slim copies for the rest of the channel: at once when what they show changes, else at most once a second
+    let farAt = 0, farTimer = null, farLast = "";
+    const sendFar = () => {
+      farTimer = null; farAt = Date.now();
+      const p = socket.data.presence, key = socket.data.channel;
+      if (!p || !key) return;
+      farLast = farKey(p);
+      const near = socket.data.presRoom;
+      (near ? socket.to(key).except(near) : socket.to(key)).emit("peer", peerInfo(slimPresence(p)));
+    };
+    const relay = (zoneChanged) => {
+      const p = socket.data.presence, near = socket.data.presRoom;
+      if (near) socket.to(near).emit("peer", peerInfo());
+      const urgent = zoneChanged || farKey(p) !== farLast;
+      if (urgent || Date.now() - farAt >= FAR_EVERY_MS) { if (farTimer) { clearTimeout(farTimer); farTimer = null; } sendFar(); }
+      else if (!farTimer) farTimer = setTimeout(() => { try { sendFar(); } catch { /* ignore */ } }, FAR_EVERY_MS - (Date.now() - farAt));
+    };
     let tokens = MAX_MSGS_PER_SEC, last = Date.now();
 
     const leave = () => {
@@ -152,7 +176,9 @@ function attachEmbervale(io) {
       socket.to(key).emit("left", { peer: socket.id });
       socket.data.channel = null;
       if (socket.data.zoneRoom) socket.leave(socket.data.zoneRoom);
-      socket.data.zone = socket.data.zoneRoom = null;
+      if (socket.data.presRoom) socket.leave(socket.data.presRoom);
+      if (farTimer) { clearTimeout(farTimer); farTimer = null; }
+      socket.data.zone = socket.data.zoneRoom = socket.data.presRoom = null;
     };
 
     socket.on("join", (msg) => {
@@ -187,11 +213,26 @@ function attachEmbervale(io) {
         if (!socket.data.channel || !presence || typeof presence !== "object" || Array.isArray(presence)) return;
         if (JSON.stringify(presence).length > MAX_PRESENCE_BYTES) return;
         socket.data.presence = presence;
-        socket.to(socket.data.channel).emit("peer", peerInfo());
 
         // keep the socket in a per-region room so it gets that region's monster updates
         const zone = typeof presence.z === "string" ? presence.z.slice(0, 16) : null;
-        if (zone !== socket.data.zone) {
+        const moved = zone !== socket.data.zone;
+        if (moved) {
+          // the region's presence room: full updates flow between everyone in it
+          if (socket.data.presRoom) socket.leave(socket.data.presRoom);
+          socket.data.presRoom = zone ? `${socket.data.channel}@${zone}` : null;
+          if (socket.data.presRoom) {
+            socket.join(socket.data.presRoom);
+            // catch up on everyone already here (they may be standing still and sending nothing)
+            for (const id of ns.adapter.rooms.get(socket.data.presRoom) || []) {
+              if (id === socket.id) continue;
+              const s = ns.sockets.get(id);
+              if (s && s.data.presence) socket.emit("peer", { peer: id, presence: s.data.presence, guest: !s.data.username, guild: s.data.guild ? { n: s.data.guild.name, e: s.data.guild.emblem } : null });
+            }
+          }
+        }
+        relay(moved);
+        if (moved) {
           if (socket.data.zoneRoom) socket.leave(socket.data.zoneRoom);
           socket.data.zone = zone;
           socket.data.zoneRoom = zone && hasSim(zone) ? `${socket.data.channel}|${zone}` : null;
