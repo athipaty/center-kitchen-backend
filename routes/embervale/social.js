@@ -3,7 +3,7 @@
 // Every handler is wrapped so a bad message only fails that socket.
 const MAX_PARTY = 12;
 const MSGS_PER_SEC = 5;
-const parties = new Map(); // id -> { id, leader: socketId, mode: "share" | "each", members: Set<socketId> }
+const parties = new Map(); // id -> { id, leader: socketId, mode: "share" | "each", loot: "each" | "turns", turn, members: Set<socketId> }
 let partySeq = 0;
 
 const clean = (t, n) => String(t ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim().slice(0, n);
@@ -11,7 +11,7 @@ const nameOf = (s) => clean(s?.data?.presence?.n, 16) || "Traveller";
 const int = (v, max) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
 
 function partyState(p, ns) {
-  return { id: p.id, leader: p.leader, mode: p.mode, members: [...p.members].map((id) => ({ peer: id, name: nameOf(ns.sockets.get(id)) })) };
+  return { id: p.id, leader: p.leader, mode: p.mode, loot: p.loot || "each", members: [...p.members].map((id) => ({ peer: id, name: nameOf(ns.sockets.get(id)) })) };
 }
 function sendParty(p, ns) {
   const st = partyState(p, ns);
@@ -77,7 +77,7 @@ function attachSocial(socket, ns) {
     if (socket.data.partyId) leaveParty(socket, ns);
     let p = parties.get(from.data.partyId);
     if (!p) {
-      p = { id: "p" + ++partySeq, leader: from.id, mode: "share", members: new Set([from.id]) };
+      p = { id: "p" + ++partySeq, leader: from.id, mode: "share", loot: "each", turn: 0, members: new Set([from.id]) };
       parties.set(p.id, p);
       from.data.partyId = p.id;
     }
@@ -103,6 +103,13 @@ function attachSocial(socket, ns) {
     const p = myParty();
     if (!p || p.leader !== socket.id) return;
     p.mode = msg.mode === "each" ? "each" : "share";
+    sendParty(p, ns);
+  });
+  // loot rule: everyone rolls their own drops, or the party takes turns (one roll per kill, rotating)
+  on("partyLoot", (msg) => {
+    const p = myParty();
+    if (!p || p.leader !== socket.id) return;
+    p.loot = msg.loot === "turns" ? "turns" : "each";
     sendParty(p, ns);
   });
   on("partyChat", (msg) => {
@@ -133,4 +140,5 @@ function attachSocial(socket, ns) {
   socket.on("disconnect", () => { try { leaveParty(socket, ns); } catch { /* ignore */ } });
 }
 
-module.exports = { attachSocial, leaveParty };
+const getParty = (id) => (id && parties.get(id)) || null;
+module.exports = { attachSocial, leaveParty, getParty };

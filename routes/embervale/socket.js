@@ -8,7 +8,7 @@
 // only fail that socket, never crash this shared backend.
 const { verifyEmbervaleToken } = require("../../utils/embervaleAuth");
 const { ZoneSim, hasSim, WORLD_BOSSES, MOBS } = require("./sim");
-const { attachSocial } = require("./social");
+const { attachSocial, getParty } = require("./social");
 const { attachTrade } = require("./trade");
 const { attachGuild } = require("./guild");
 
@@ -33,7 +33,7 @@ const bosses = new Map(); // channel key -> { next, active: { b, z, until, key }
 
 function ensureSim(key, zone) {
   let s = sims.get(key);
-  if (!s && hasSim(zone)) { s = { sim: new ZoneSim(zone), zone, idle: 0 }; sims.set(key, s); }
+  if (!s && hasSim(zone)) { s = { sim: new ZoneSim(zone), zone, idle: 0 }; s.sim.partyOf = getParty; sims.set(key, s); }
   return s;
 }
 
@@ -201,7 +201,7 @@ function attachEmbervale(io) {
         // hits this player reports on the server's monsters
         const s = socket.data.zoneRoom && sims.get(socket.data.zoneRoom);
         if (s && Array.isArray(presence.hx)) {
-          const who = { id: String(presence.id || socket.id).slice(0, 16), x: Number(presence.x) || 0, y: Number(presence.y) || 0, lv: presence.lv };
+          const who = { id: String(presence.id || socket.id).slice(0, 16), x: Number(presence.x) || 0, y: Number(presence.y) || 0, lv: presence.lv, party: socket.data.partyId || null };
           for (const h of presence.hx.slice(-24)) {
             if (!h || typeof h !== "object") continue;
             const i = Number(h.i);
