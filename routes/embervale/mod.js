@@ -11,7 +11,8 @@ const SAID_KEEP = 12;
 const clean = (t, n) => String(t ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim().slice(0, n);
 const nameOf = (s) => clean(s?.data?.presence?.n, 16) || "Traveller";
 const admins = () => new Set(String(process.env.EMBERVALE_ADMINS || "").split(",").map((u) => u.trim().toLowerCase()).filter(Boolean));
-const isAdmin = (socket) => !!socket.data.username && admins().has(socket.data.username);
+const isAdminName = (u) => !!u && admins().has(String(u).toLowerCase());
+const isAdmin = (socket) => isAdminName(socket.data.username);
 const mutedFor = (socket) => Math.max(0, (socket.data.mutedUntil || 0) - Date.now());
 const minutes = (ms) => Math.max(1, Math.ceil(ms / 60000));
 const mutedText = (socket) => { const m = minutes(mutedFor(socket)); return `You are muted for ${m} more minute${m === 1 ? "" : "s"}.`; };
@@ -158,4 +159,4 @@ function attachMod(socket, ns) {
   }, true);
 }
 
-module.exports = { attachMod, loadModeration, filterPresenceChat, chatAllowed, isAdmin };
+module.exports = { attachMod, loadModeration, filterPresenceChat, chatAllowed, isAdmin, isAdminName };
