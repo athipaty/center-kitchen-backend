@@ -24,7 +24,8 @@ class ZoneSim {
     this.evs = [];
     this.evId = 0;
     this.mobs = [];
-    for (const [type, n] of this.Z.mobs) for (let k = 0; k < n; k++) this.mobs.push(this.spawn(type));
+    // [type, count, leader]: an escort pack follows its leader (a mini-boss)
+    for (const [type, n, lead] of this.Z.mobs) for (let k = 0; k < n; k++) this.mobs.push(this.spawn(type, lead ? { type, lead } : undefined));
     this.mobs.forEach((m, i) => (m.idx = i));
     this.base = this.mobs.length; // the world boss, when there is one, sits in the slot after the regular monsters
     this.wb = null;
@@ -60,10 +61,20 @@ class ZoneSim {
   }
 
   spawn(type, m) {
-    const Z = this.Z, i = Z.spawnTiles[Math.floor(Math.random() * Z.spawnTiles.length)], d = MOBS[type];
-    const x = (i % Z.w + 0.5) * TILE, y = (((i / Z.w) | 0) + 0.5) * TILE;
+    const Z = this.Z, d = MOBS[type];
+    let i = Z.spawnTiles[Math.floor(Math.random() * Z.spawnTiles.length)];
     m = m || { type };
-    Object.assign(m, { d, x, y, sx: x, sy: y, hp: d.hp, state: "idle", atkT: 0, wT: rnd(0, 3), tx: null, ty: null, face: 1,
+    // an escort appears beside its living leader
+    const L = m.lead && this.mobs.find((o) => o.type === m.lead && !o.dead);
+    if (L) {
+      const lx = Math.floor(L.x / TILE), ly = Math.floor(L.y / TILE);
+      for (let k = 0; k < 20; k++) {
+        const tx = lx + Math.round(rnd(-2.4, 2.4)), ty = ly + Math.round(rnd(-2.4, 2.4));
+        if (tx > 0 && ty > 0 && tx < Z.w - 1 && ty < Z.h - 1 && !this.blocked(tx, ty)) { i = ty * Z.w + tx; break; }
+      }
+    }
+    const x = (i % Z.w + 0.5) * TILE, y = (((i / Z.w) | 0) + 0.5) * TILE;
+    Object.assign(m, { d, x, y, calls: 0, sx: x, sy: y, hp: d.hp, state: "idle", atkT: 0, wT: rnd(0, 3), tx: null, ty: null, face: 1,
       dead: false, slowUntil: 0, ail: null, ailUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, stunUntil: 0, dmg: new Map(), respawnAt: 0 });
     return m;
   }
@@ -121,6 +132,12 @@ class ZoneSim {
   updateMob(m, dt, T) {
     const d = m.d;
     if (m.dead) { if (!m.world && this.now >= m.respawnAt) this.spawn(m.type, m); return; }
+    // a mini-boss calls its fallen escorts back below 60% and 30% HP
+    if (d.calls && m.calls < 2 && m.hp < d.hp * (m.calls ? 0.3 : 0.6)) {
+      m.calls++;
+      for (const o of this.mobs) if (o.lead === m.type && o.dead) { this.spawn(o.type, o); o.state = "chase"; }
+      this.event("c", m);
+    }
     if (m.ailUntil > this.now) { m.moving = false; return; }
     let tg = null, dp = 1e9;
     for (const t of T) { const q = dist(m, t); if (q < dp) { dp = q; tg = t; } }
