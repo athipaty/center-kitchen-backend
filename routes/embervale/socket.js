@@ -12,6 +12,7 @@ const { attachSocial, getParty } = require("./social");
 const { attachTrade } = require("./trade");
 const { attachGuild } = require("./guild");
 const { attachMod, loadModeration, filterPresenceChat } = require("./mod");
+const { attachArena } = require("./arena");
 
 const CHANNEL_CAP = 40;
 const MAX_PRESENCE_BYTES = 12_000;
@@ -154,6 +155,7 @@ function attachEmbervale(io) {
     attachTrade(socket, ns);  // trading and player shops
     attachGuild(socket, ns);  // guilds (accounts only)
     attachMod(socket, ns);    // reports, and admin mute / kick / ban
+    attachArena(socket, ns);  // ranked arena matches
     const peerInfo = (pres) => ({ peer: socket.id, presence: pres === undefined ? socket.data.presence || null : pres, guest: !socket.data.username, guild: socket.data.guild ? { n: socket.data.guild.name, e: socket.data.guild.emblem } : null });
     // slim copies for the rest of the channel: at once when what they show changes, else at most once a second
     let farAt = 0, farTimer = null, farLast = "";

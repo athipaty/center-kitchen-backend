@@ -14,6 +14,8 @@ const emberAccountSchema = new mongoose.Schema(
     mutedUntil: { type: Date, default: null },
     bannedUntil: { type: Date, default: null },
     banReason: { type: String, default: "" },
+    // ranked arena (routes/embervale/arena.js): { r: rating, w, l, d, name: last character name }
+    arena: { type: mongoose.Schema.Types.Mixed, default: undefined },
   },
   { timestamps: true, minimize: false }
 );
