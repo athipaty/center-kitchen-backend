@@ -10,6 +10,7 @@ const { verifyEmbervaleToken } = require("../../utils/embervaleAuth");
 const { ZoneSim, hasSim, WORLD_BOSSES, MOBS } = require("./sim");
 const { attachSocial } = require("./social");
 const { attachTrade } = require("./trade");
+const { attachGuild } = require("./guild");
 
 const CHANNEL_CAP = 40;
 const MAX_PRESENCE_BYTES = 12_000;
@@ -138,7 +139,8 @@ function attachEmbervale(io) {
   ns.on("connection", (socket) => {
     attachSocial(socket, ns); // whispers, parties, friends
     attachTrade(socket, ns);  // trading and player shops
-    const peerInfo = () => ({ peer: socket.id, presence: socket.data.presence || null, guest: !socket.data.username });
+    attachGuild(socket, ns);  // guilds (accounts only)
+    const peerInfo = () => ({ peer: socket.id, presence: socket.data.presence || null, guest: !socket.data.username, guild: socket.data.guild ? { n: socket.data.guild.name, e: socket.data.guild.emblem } : null });
     let tokens = MAX_MSGS_PER_SEC, last = Date.now();
 
     const leave = () => {
@@ -165,7 +167,7 @@ function attachEmbervale(io) {
         for (const id of channels.get(key)) {
           if (id === socket.id) continue;
           const s = ns.sockets.get(id);
-          if (s && s.data.presence) peers.push({ peer: id, presence: s.data.presence, guest: !s.data.username });
+          if (s && s.data.presence) peers.push({ peer: id, presence: s.data.presence, guest: !s.data.username, guild: s.data.guild ? { n: s.data.guild.name, e: s.data.guild.emblem } : null });
         }
         socket.emit("joined", { channel: n, peers, account: socket.data.username, sim: true });
         const wb = bosses.get(key)?.active; // tell a newcomer about a boss that is already out
