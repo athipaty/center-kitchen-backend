@@ -120,7 +120,7 @@ function attachEmbervale(io) {
         const players = [];
         if (ids) for (const sid of ids) {
           const p = ns.sockets.get(sid)?.data.presence;
-          if (p) players.push({ id: String(p.id || sid).slice(0, 16), x: Number(p.x) || 0, y: Number(p.y) || 0, dead: !!p.d });
+          if (p) players.push({ id: String(p.id || sid).slice(0, 16), x: Number(p.x) || 0, y: Number(p.y) || 0, dead: !!p.d, away: !!p.hd });
         }
         if (!players.length) {
           if (s.sim.wb && !s.sim.wb.dead) { s.idle = 0; continue; } // keep a region with a waiting world boss alive

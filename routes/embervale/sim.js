@@ -140,7 +140,8 @@ class ZoneSim {
   tick(dt, players) {
     this.now += dt;
     if (this.wb && this.wb.dead && this.now >= this.wbClearAt) this.removeBoss(); // a fallen boss stays a moment so everyone sees it fall
-    const targets = players.filter((p) => !p.dead);
+    // a player whose game is in the background (switched tab or app) cannot react, so monsters leave them alone
+    const targets = players.filter((p) => !p.dead && !p.away);
     for (const m of this.mobs) this.updateMob(m, dt, targets);
   }
 
