@@ -6,6 +6,22 @@ const MAX_PARTY = 12;
 const MSGS_PER_SEC = 5;
 const parties = new Map(); // id -> { id, leader: socketId, mode: "share" | "each", loot: "each" | "turns", turn, members: Set<socketId> }
 let partySeq = 0;
+// #48 chat rooms: named rooms anyone can join from any region or channel (one room per player at a time)
+const MAX_ROOM = 50, MAX_ROOMS = 200;
+const chatRooms = new Map(); // key (lower case) -> { name, members: Set<socketId> }
+const roomKey = (n) => n.toLowerCase();
+const cleanRoom = (t) => clean(t, 20).replace(/[^A-Za-z0-9 _-]/g, "").replace(/\s+/g, " ").trim();
+function roomState(r, ns) { return { name: r.name, members: [...r.members].map((id) => nameOf(ns.sockets.get(id))).slice(0, MAX_ROOM) }; }
+function sendRoom(r, ns, note) { const st = roomState(r, ns); if (note) st.note = note; for (const id of r.members) ns.sockets.get(id)?.emit("room", st); }
+function leaveRoom(socket, ns) {
+  const r = chatRooms.get(socket.data.chatRoom);
+  socket.data.chatRoom = null;
+  if (!r) return;
+  r.members.delete(socket.id);
+  socket.emit("room", null);
+  if (!r.members.size) chatRooms.delete(roomKey(r.name));
+  else sendRoom(r, ns, `${nameOf(socket)} left`);
+}
 
 const clean = (t, n) => String(t ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim().slice(0, n);
 const nameOf = (s) => clean(s?.data?.presence?.n, 16) || "Traveller";
@@ -56,6 +72,30 @@ function attachSocial(socket, ns) {
     const targets = [...ns.sockets.values()].filter((s) => s !== socket && s.data.presence && nameOf(s).toLowerCase() === to.toLowerCase());
     for (const s of targets) s.emit("whisper", { from: nameOf(socket), text });
     socket.emit("whisperSent", { to, text, ok: targets.length > 0 });
+  });
+
+  // ---- chat rooms
+  on("roomJoin", (msg) => {
+    const name = cleanRoom(msg.name);
+    if (name.length < 2) { error("Room names need 2-20 letters or numbers."); return; }
+    const key = roomKey(name);
+    if (socket.data.chatRoom === key) return;
+    let r = chatRooms.get(key);
+    if (!r) { if (chatRooms.size >= MAX_ROOMS) { error("Too many rooms are open right now. Try an existing one (/rooms)."); return; } r = { name, members: new Set() }; chatRooms.set(key, r); }
+    if (r.members.size >= MAX_ROOM) { error(`${r.name} is full.`); if (!r.members.size) chatRooms.delete(key); return; }
+    leaveRoom(socket, ns);
+    r.members.add(socket.id); socket.data.chatRoom = key;
+    sendRoom(r, ns, `${nameOf(socket)} joined`);
+  });
+  on("roomLeave", () => leaveRoom(socket, ns));
+  on("roomChat", (msg) => {
+    const r = chatRooms.get(socket.data.chatRoom), text = clean(msg.text, 120);
+    if (!r || !text || !chatAllowed(socket, "room", text, r.name)) return;
+    for (const id of r.members) ns.sockets.get(id)?.emit("roomChat", { room: r.name, from: nameOf(socket), text });
+  });
+  on("roomList", () => {
+    const list = [...chatRooms.values()].sort((a, b) => b.members.size - a.members.size).slice(0, 20).map((r) => ({ name: r.name, n: r.members.size }));
+    socket.emit("roomList", list);
   });
 
   // ---- parties: invite someone in your channel, they accept or decline
@@ -138,7 +178,7 @@ function attachSocial(socket, ns) {
     socket.emit("friends", { online: [...online] });
   });
 
-  socket.on("disconnect", () => { try { leaveParty(socket, ns); } catch { /* ignore */ } });
+  socket.on("disconnect", () => { try { leaveParty(socket, ns); } catch { /* ignore */ } try { leaveRoom(socket, ns); } catch { /* ignore */ } });
 }
 
 const getParty = (id) => (id && parties.get(id)) || null;
