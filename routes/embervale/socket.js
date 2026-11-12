@@ -258,7 +258,7 @@ function attachEmbervale(io) {
         // hits this player reports on the server's monsters
         const s = socket.data.zoneRoom && sims.get(socket.data.zoneRoom);
         if (s && Array.isArray(presence.hx)) {
-          const who = { id: String(presence.id || socket.id).slice(0, 16), x: Number(presence.x) || 0, y: Number(presence.y) || 0, lv: presence.lv, rb: presence.rb === 1, party: socket.data.partyId || null };
+          const who = { id: String(presence.id || socket.id).slice(0, 16), x: Number(presence.x) || 0, y: Number(presence.y) || 0, lv: presence.lv, rb: presence.rb === 1, j3: presence.j3 === 1, party: socket.data.partyId || null };
           for (const h of presence.hx.slice(-24)) {
             if (!h || typeof h !== "object") continue;
             const i = Number(h.i);
