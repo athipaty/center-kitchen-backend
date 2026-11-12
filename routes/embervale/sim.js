@@ -94,7 +94,8 @@ class ZoneSim {
     if (h.sl) m.slowUntil = this.now + clamp(Number(h.sl) || 0, 0, 6);
     // frozen or stunned by a skill: it cannot move or attack for a few seconds
     if (h.sk === "freeze" || h.sk === "stun") { m.ail = h.sk; m.ailUntil = this.now + clamp(Number(h.st) || 0, 0, 5); }
-    const cap = 400 + clamp(Math.floor(Number(player.lv) || 1), 1, 99) * 150;
+    // a reborn hero (game v0.66+) starts again at level 1 with their old gear and skills: judge them 70 levels higher
+    const cap = 400 + clamp(Math.floor(Number(player.lv) || 1) + (player.rb ? 70 : 0), 1, 99) * 150;
     const dmg = clamp(Math.round(Number(h.d) || 0), 0, cap);
     if (dmg <= 0) return;
     m.hp -= dmg;
