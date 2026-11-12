@@ -103,7 +103,13 @@ class ZoneSim {
     m.dmg.set(player.id, (m.dmg.get(player.id) || 0) + dmg);
     if (!m.pty) m.pty = new Map();
     m.pty.set(player.id, player.party || null);
-    if (m.hp <= 0) this.kill(m);
+    if (m.hp <= 0) { this.kill(m); return; }
+    // #16 pack monsters call others of their kind nearby into the fight
+    if (m.d.pack && this.now >= (m.packT || 0)) {
+      m.packT = this.now + 8; let n = 0;
+      for (const o of this.mobs) if (o !== m && !o.dead && o.type === m.type && o.state !== "chase" && dist(o, m) < 320) { o.state = "chase"; n++; }
+      if (n) this.event("y", m);
+    }
   }
 
   kill(m) {
@@ -166,6 +172,7 @@ class ZoneSim {
       if (Math.hypot(m.x - m.sx, m.y - m.sy) > (m.world ? 900 : 520) || dp > (m.world ? 900 : 600)) m.state = "return";
       else {
         if (d.boss && this.now > m.slamT && dp < 160) { m.slamAt = this.now + 1.1; this.event("w", m); return; }
+        if (d.skill && this.useSkill(m, tg, dp)) return;
         const reach = d.range + d.size + PR + 4;
         m.atkT -= dt;
         if (dp <= reach) {
@@ -203,6 +210,29 @@ class ZoneSim {
         else { m.tx = m.x + rnd(-80, 80); m.ty = m.y + rnd(-80, 80); }
       }
     }
+  }
+
+  // #15 monster skills: heal (self and kin below half HP), blink (next to a target that keeps its distance), bolt (ranged magic)
+  useSkill(m, tg, dp) {
+    const d = m.d;
+    if (!m.skT) m.skT = this.now + rnd(3, 6);
+    if (this.now < m.skT) return false;
+    if (d.skill === "heal" && m.hp < d.hp * 0.5) {
+      m.skT = this.now + 12; m.hp = Math.min(d.hp, m.hp + d.hp * 0.25);
+      for (const o of this.mobs) if (o !== m && !o.dead && o.type === m.type && dist(o, m) < 200) o.hp = Math.min(o.d.hp, o.hp + o.d.hp * 0.15);
+      this.event("h", m); return true;
+    }
+    const reach = d.range + d.size + PR + 4;
+    if (d.skill === "blink" && dp > reach + 40 && dp < 320) {
+      m.skT = this.now + 9;
+      for (let k = 0; k < 8; k++) {
+        const a = rnd(0, 6.28), x = tg.x + Math.cos(a) * (reach - 6), y = tg.y + Math.sin(a) * (reach - 6);
+        if (this.canStand(x, y, Math.min(d.size * 0.6, 11))) { const x0 = Math.round(m.x), y0 = Math.round(m.y); m.x = x; m.y = y; this.event("b", m, { x0, y0, x1: Math.round(x), y1: Math.round(y) }); return true; }
+      }
+      return false;
+    }
+    if (d.skill === "bolt" && dp > reach && dp < 240) { m.skT = this.now + 6; m.face = sface(tg.x - m.x, tg.y - m.y); this.event("p", m, { t: tg.id }); return true; }
+    return false;
   }
 
   // Same compact format the game already uses between players: [x, y, hp per mille, flags].
