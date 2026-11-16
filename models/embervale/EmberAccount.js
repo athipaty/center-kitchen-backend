@@ -10,11 +10,17 @@ const emberAccountSchema = new mongoose.Schema(
     // Validated for shape and size in routes/embervale/index.js.
     character: { type: mongoose.Schema.Types.Mixed, default: null },
     characterSavedAt: { type: Date, default: null },
-    // character slots 2 and 3 (?slot=1 / ?slot=2 in routes/embervale/index.js); slot 1 is "character" above
+    // character slots 2 to 6 (?slot=1 .. ?slot=5 in routes/embervale/index.js); slot 1 is "character" above
     character1: { type: mongoose.Schema.Types.Mixed, default: null },
     character1SavedAt: { type: Date, default: null },
     character2: { type: mongoose.Schema.Types.Mixed, default: null },
     character2SavedAt: { type: Date, default: null },
+    character3: { type: mongoose.Schema.Types.Mixed, default: null },
+    character3SavedAt: { type: Date, default: null },
+    character4: { type: mongoose.Schema.Types.Mixed, default: null },
+    character4SavedAt: { type: Date, default: null },
+    character5: { type: mongoose.Schema.Types.Mixed, default: null },
+    character5SavedAt: { type: Date, default: null },
     // storage shared by every character on the account (an array of item entries); null until first used.
     // storageRev goes up on every change so two devices cannot both take the same item.
     storage: { type: mongoose.Schema.Types.Mixed, default: null },
