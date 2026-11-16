@@ -60,9 +60,9 @@ router.post("/login", authLimiter, async (req, res) => {
   }
 });
 
-// ---- characters: every account has CHAR_SLOTS slots, chosen with ?slot=0..2 (default 0).
+// ---- characters: every account has CHAR_SLOTS slots, chosen with ?slot=0..5 (default 0).
 // Slot 0 is the original "character" field, so saves made before slots existed stay where they are.
-const CHAR_SLOTS = 3;
+const CHAR_SLOTS = 6; // was 3 until v1.8.2 of the game; GET /characters returns this many slots
 const STORAGE_MAX_ENTRIES = 400;
 function slotOf(req) {
   const n = req.query?.slot === undefined ? 0 : Number(req.query.slot);
