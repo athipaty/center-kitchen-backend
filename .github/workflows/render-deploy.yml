@@ -1,0 +1,33 @@
+# Deploy to Render on demand (Render's Auto-Deploy is off for this service).
+# Start it from the Actions tab ("Deploy to Render" -> Run workflow) or with:
+#   gh workflow run render-deploy.yml -R athipaty/center-kitchen-backend
+# It calls the service's Render Deploy Hook, kept in the repository secret RENDER_DEPLOY_HOOK.
+# Merging to main alone still does NOT deploy.
+name: Deploy to Render
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: What is being deployed (shown in the run name)
+        required: false
+        default: manual deploy
+run-name: "Deploy to Render: ${{ inputs.reason }}"
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::The RENDER_DEPLOY_HOOK secret is not set (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          code=$(curl -sS -o resp.json -w '%{http_code}' -X POST "$HOOK")
+          echo "Render answered HTTP $code"
+          # print the deploy id only, never the hook URL
+          grep -o '"id":"[^"]*"' resp.json || true
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then exit 1; fi
