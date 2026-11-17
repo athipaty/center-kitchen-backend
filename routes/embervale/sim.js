@@ -15,6 +15,9 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const sface = (dx, dy) => (dx - dy < 0 ? -1 : 1);
 const MAX_EVENTS = 32;
+// the game's clock (js/sky.js): one game day is 24 real minutes; night is game hour 20 to 5
+const DAY_MS = 24 * 60 * 1000;
+const isNight = (t) => { const h = ((t || Date.now()) % DAY_MS) / DAY_MS * 24; return h >= 20 || h < 5; };
 
 class ZoneSim {
   constructor(zoneId) {
@@ -155,7 +158,10 @@ class ZoneSim {
 
   updateMob(m, dt, T) {
     const d = m.d;
-    if (m.dead) { if (!m.world && this.now >= m.respawnAt) this.spawn(m.type, m); return; }
+    // a night monster (game v1.17.1+, e.g. the Grand Scarecrow) only rises after dark
+    if (m.dead) { if (!m.world && this.now >= m.respawnAt) { if (d.night && !isNight()) m.respawnAt = this.now + 20; else this.spawn(m.type, m); } return; }
+    // at dawn it sinks back into the ground, unless someone is fighting it (no drops: nobody beat it)
+    if (d.night && !isNight() && m.state !== "chase" && !m.dmg.size) { m.dead = true; m.hp = 0; m.slamAt = 0; m.respawnAt = this.now + 20; return; }
     // a mini-boss calls its fallen escorts back below 60% and 30% HP
     if (d.calls && m.calls < 2 && m.hp < d.hp * (m.calls ? 0.3 : 0.6)) {
       m.calls++;
@@ -249,4 +255,4 @@ const hasSim = (zoneId) => !!ZONES[zoneId] && !ZONES[zoneId].safe;
 
 const WORLD_BOSSES = Object.keys(MOBS).filter((id) => MOBS[id].world && ZONES[MOBS[id].world]);
 
-module.exports = { ZoneSim, hasSim, WORLD_VERSION: WORLD.version, WORLD_BOSSES, MOBS };
+module.exports = { ZoneSim, hasSim, WORLD_VERSION: WORLD.version, WORLD_BOSSES, MOBS, isNight };
