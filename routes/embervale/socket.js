@@ -10,6 +10,7 @@ const { verifyEmbervaleToken } = require("../../utils/embervaleAuth");
 const { ZoneSim, hasSim, WORLD_BOSSES, MOBS } = require("./sim");
 const { attachSocial, getParty } = require("./social");
 const { attachTrade } = require("./trade");
+const { attachMarket } = require("./market");
 const { attachGuild } = require("./guild");
 const { attachMod, loadModeration, filterPresenceChat } = require("./mod");
 const { attachArena } = require("./arena");
@@ -156,6 +157,7 @@ function attachEmbervale(io) {
   ns.on("connection", (socket) => {
     attachSocial(socket, ns); // whispers, parties, friends
     attachTrade(socket, ns);  // trading and player shops
+    attachMarket(socket, ns); // the market board (sell to players who are offline)
     attachGuild(socket, ns);  // guilds (accounts only)
     attachMod(socket, ns);    // reports, and admin mute / kick / ban
     attachArena(socket, ns);  // ranked arena matches
