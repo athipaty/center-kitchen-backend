@@ -218,6 +218,16 @@ function attachEmbervale(io) {
       }
     });
 
+    // ping: the game times this round trip to show each player's connection (answers at most a few times a second)
+    let pingLast = 0;
+    socket.on("pingc", (t, ack) => {
+      if (typeof ack !== "function") return;
+      const now = Date.now();
+      if (now - pingLast < 500) return;
+      pingLast = now;
+      ack(typeof t === "number" ? t : 0);
+    });
+
     socket.on("presence", (presence) => {
       try {
         const now = Date.now();
