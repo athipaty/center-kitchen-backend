@@ -9,6 +9,8 @@ const { uploadToB2, deleteB2File, b2Enabled } = require('../../utils/b2Utils');
 const DirekairPhoto = require('../../models/direkair/DirekairPhoto');
 const DirekairSetting = require('../../models/direkair/DirekairSetting');
 const DirekairStat = require('../../models/direkair/DirekairStat');
+const DirekairRequest = require('../../models/direkair/DirekairRequest');
+const { ntfyPush } = require('../../utils/ntfy');
 
 // Direk Air (ดิเรกแอร์) shop site: admin login + customer-work photo gallery.
 //
@@ -455,6 +457,152 @@ router.delete('/gallery/:id', requireAdmin, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     if (err.name === 'CastError') return res.status(404).json({ error: 'ไม่พบรูปนี้' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- requests to the developer ("แจ้งผู้พัฒนา") ---------- */
+
+const REQUEST_PREFIX = 'direkair-requests/';
+const REQUEST_STATUSES = ['new', 'read', 'done'];
+const REPLY_AUTHORS = ['ผู้พัฒนาเว็บ', 'ร้านดิเรกแอร์'];
+const MAX_REQUEST_IMAGES = 10;
+const requestImages = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: MAX_REQUEST_IMAGES },
+  fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp)$/.test(file.mimetype)),
+}).array('images', MAX_REQUEST_IMAGES);
+const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const toRequest = (r) => ({
+  id: String(r._id), title: r.title, message: r.message, pageUrl: r.pageUrl || '',
+  images: (r.images || []).map((i) => i.url), status: r.status, createdAt: r.createdAt, updatedAt: r.updatedAt,
+  replies: (r.replies || []).map((x) => ({ id: String(x._id), author: x.author, message: x.message, createdAt: x.createdAt, updatedAt: x.updatedAt })),
+});
+const notFound = (res) => res.status(404).json({ error: 'ไม่พบรายการนี้' });
+
+// Requests marked done are removed 14 days after their last update (photos too).
+async function cleanupDoneRequests() {
+  const cutoff = new Date(Date.now() - DirekairRequest.DONE_RETENTION_DAYS * 86400_000);
+  const old = await DirekairRequest.find({ status: 'done', updatedAt: { $lt: cutoff } }).lean();
+  for (const r of old) {
+    for (const i of r.images || []) await deleteB2File(i.key).catch(() => {});
+    await DirekairRequest.deleteOne({ _id: r._id });
+  }
+}
+
+router.get('/requests', requireAdmin, async (_req, res) => {
+  try {
+    await cleanupDoneRequests().catch((e) => console.error('direkair: request cleanup failed:', e.message));
+    const items = await DirekairRequest.find().sort({ createdAt: -1 }).limit(300).lean();
+    res.json({ requests: items.map(toRequest), doneRetentionDays: DirekairRequest.DONE_RETENTION_DAYS });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Multipart: title, message, pageUrl (optional), images (up to 10). Pushes an ntfy alert to the developer.
+router.post('/requests', requireAdmin, (req, res) => {
+  requestImages(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 10MB' : `แนบรูปได้ไม่เกิน ${MAX_REQUEST_IMAGES} รูป` });
+    const title = text(req.body.title, 200), message = text(req.body.message, 5000);
+    if (!title || !message) return res.status(400).json({ error: 'กรุณาใส่หัวข้อและรายละเอียด' });
+    const pageUrl = /^https?:\/\//i.test(text(req.body.pageUrl, 500)) ? text(req.body.pageUrl, 500) : '';
+    const files = req.files || [];
+    if (files.length && !b2Enabled()) return res.status(503).json({ error: 'ยังไม่ได้ตั้งค่าที่เก็บรูป (B2)' });
+    try {
+      const converted = [];
+      for (const f of files) {
+        try { converted.push(await toWebp(f.buffer)); }
+        catch { return res.status(400).json({ error: 'ไฟล์นี้ไม่ใช่รูปภาพที่รองรับ: ' + f.originalname }); }
+      }
+      const images = [];
+      for (const buf of converted) {
+        const key = `${REQUEST_PREFIX}${Date.now()}-${crypto.randomUUID()}.webp`;
+        images.push({ url: await uploadToB2(buf, key, 'image/webp'), key });
+      }
+      const item = await DirekairRequest.create({ title, message, pageUrl, images });
+      ntfyPush('📝 คำขอใหม่จากเว็บ ดิเรกแอร์', title + '\n' + message, {
+        priority: 'high', tags: ['memo'], attach: images[0]?.url || '',
+      }).catch(() => {});
+      res.status(201).json(toRequest(item));
+    } catch (e) {
+      console.error('direkair: request failed:', e.message);
+      res.status(500).json({ error: 'ส่งเรื่องไม่สำเร็จ' });
+    }
+  });
+});
+
+router.patch('/requests/:id', requireAdmin, async (req, res) => {
+  if (!REQUEST_STATUSES.includes(req.body?.status)) return res.status(400).json({ error: 'สถานะไม่ถูกต้อง' });
+  try {
+    const item = await DirekairRequest.findByIdAndUpdate(req.params.id, { status: req.body.status }, { new: true });
+    if (!item) return notFound(res);
+    res.json(toRequest(item));
+  } catch (err) {
+    if (err.name === 'CastError') return notFound(res);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/requests/:id/replies', requireAdmin, async (req, res) => {
+  const message = text(req.body?.message, 5000);
+  if (!message) return res.status(400).json({ error: 'กรุณาพิมพ์ข้อความ' });
+  const author = REPLY_AUTHORS.includes(req.body?.author) ? req.body.author : REPLY_AUTHORS[0];
+  try {
+    const item = await DirekairRequest.findById(req.params.id);
+    if (!item) return notFound(res);
+    item.replies.push({ author, message });
+    if (item.status === 'new') item.status = 'read';
+    await item.save();
+    // the shop answering the developer is worth a push too
+    if (author !== REPLY_AUTHORS[0]) {
+      ntfyPush('💬 ร้านดิเรกแอร์ตอบกลับ: ' + item.title, message, { tags: ['speech_balloon'] }).catch(() => {});
+    }
+    res.status(201).json(toRequest(item));
+  } catch (err) {
+    if (err.name === 'CastError') return notFound(res);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/requests/:id/replies/:replyId', requireAdmin, async (req, res) => {
+  const message = text(req.body?.message, 5000);
+  if (!message) return res.status(400).json({ error: 'กรุณาพิมพ์ข้อความ' });
+  try {
+    const item = await DirekairRequest.findById(req.params.id);
+    const reply = item?.replies.id(req.params.replyId);
+    if (!reply) return notFound(res);
+    reply.message = message;
+    await item.save();
+    res.json(toRequest(item));
+  } catch (err) {
+    if (err.name === 'CastError') return notFound(res);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/requests/:id/replies/:replyId', requireAdmin, async (req, res) => {
+  try {
+    const item = await DirekairRequest.findById(req.params.id);
+    const reply = item?.replies.id(req.params.replyId);
+    if (!reply) return notFound(res);
+    reply.deleteOne();
+    await item.save();
+    res.json(toRequest(item));
+  } catch (err) {
+    if (err.name === 'CastError') return notFound(res);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/requests/:id', requireAdmin, async (req, res) => {
+  try {
+    const item = await DirekairRequest.findByIdAndDelete(req.params.id);
+    if (!item) return notFound(res);
+    for (const i of item.images || []) await deleteB2File(i.key);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.name === 'CastError') return notFound(res);
     res.status(500).json({ error: err.message });
   }
 });
