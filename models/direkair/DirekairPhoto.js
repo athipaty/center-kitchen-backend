@@ -9,7 +9,13 @@ const DirekairPhotoSchema = new mongoose.Schema({
   order:   { type: Number, default: 0 }, // lower shows first
   // which service the job was: lets the site filter the gallery
   category: { type: String, enum: ['aircon', 'carryboy', 'tint', 'audio', 'other'], default: 'other' },
-  // optional "before" photo for a before/after pair
+  // all pictures of the job, in display order. url/fileKey above always mirror the first 'after'
+  // picture (the cover) and beforeUrl/beforeKey the first 'before' one, so older readers keep working.
+  // Jobs saved before this list existed have it empty; their pictures are url (+ beforeUrl).
+  images: {
+    type: [{ _id: false, url: String, key: String, kind: { type: String, enum: ['before', 'after'] } }],
+    default: undefined,
+  },
   beforeUrl: { type: String, default: '' },
   beforeKey: { type: String, default: '' },
 }, { timestamps: true });
