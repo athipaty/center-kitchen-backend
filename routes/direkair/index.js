@@ -20,7 +20,6 @@ const DirekairStat = require('../../models/direkair/DirekairStat');
 //   DIREKAIR_JWT_SECRET      signs admin tokens (long random string)
 
 const TOKEN_AUDIENCE = 'direkair';
-const MAX_PHOTOS     = 60;
 const MAX_CAPTION    = 120;
 const B2_PREFIX      = 'direkair-gallery/';
 const THEME_ID       = /^[a-z][a-z0-9-]{1,23}$/; // the site owns the theme list; this only rejects junk
@@ -54,15 +53,22 @@ function requireAdmin(req, res, next) {
 }
 
 const PHOTO_CATEGORIES = ['aircon', 'carryboy', 'tint', 'audio', 'other'];
+// A job's pictures in display order; older jobs only have url (+ beforeUrl).
+const imagesOf = (p) => (p.images?.length ? p.images : [
+  { url: p.url, key: p.fileKey, kind: 'after' },
+  ...(p.beforeUrl ? [{ url: p.beforeUrl, key: p.beforeKey, kind: 'before' }] : []),
+]);
 const toPublic = (p) => ({
   id: String(p._id), url: p.url, caption: p.caption, category: p.category || 'other',
   ...(p.beforeUrl ? { beforeUrl: p.beforeUrl } : {}),
+  images: imagesOf(p).map(({ url, kind }) => ({ url, kind })),
 });
 const cleanCaption = (v) => (typeof v === 'string' ? v.trim().slice(0, MAX_CAPTION) : '');
 
+const MAX_FILES_PER_UPLOAD = 10;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 2 }, // the photo, plus an optional "before" photo
+  limits: { fileSize: 10 * 1024 * 1024, files: MAX_FILES_PER_UPLOAD }, // the admin page sends big batches in parts
   fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp)$/.test(file.mimetype)),
 });
 
@@ -278,49 +284,131 @@ const toWebp = (buf) => sharp(buf)
   .webp({ quality: 82 })
   .toBuffer();
 
+const uploadErr = (err) => (err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 10MB'
+  : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE' ? `ส่งได้ครั้งละไม่เกิน ${MAX_FILES_PER_UPLOAD} รูป` : 'อัปโหลดไม่สำเร็จ');
+const pictureFields = upload.fields([{ name: 'photo', maxCount: MAX_FILES_PER_UPLOAD }, { name: 'before', maxCount: MAX_FILES_PER_UPLOAD }]);
+
+// Convert every uploaded file first (so a bad file stops the upload before anything is stored), then store them.
+async function storePictures(files) {
+  const list = [
+    ...(files?.before || []).map((f) => ({ f, kind: 'before' })),
+    ...(files?.photo || []).map((f) => ({ f, kind: 'after' })),
+  ];
+  const converted = [];
+  for (const { f, kind } of list) {
+    try { converted.push({ buf: await toWebp(f.buffer), kind }); }
+    catch { const e = new Error('ไฟล์นี้ไม่ใช่รูปภาพที่รองรับ: ' + f.originalname); e.status = 400; throw e; }
+  }
+  const out = [];
+  for (const { buf, kind } of converted) {
+    const key = `${B2_PREFIX}${Date.now()}-${crypto.randomUUID()}${kind === 'before' ? '-before' : ''}.webp`;
+    out.push({ url: await uploadToB2(buf, key, 'image/webp'), key, kind });
+  }
+  return out;
+}
+// Keep url/fileKey (cover = first 'after') and beforeUrl/beforeKey (first 'before') in step with images.
+function setImages(photo, images) {
+  const after = images.find((i) => i.kind === 'after');
+  const before = images.find((i) => i.kind === 'before');
+  photo.images = images;
+  photo.url = after.url; photo.fileKey = after.key;
+  photo.beforeUrl = before ? before.url : ''; photo.beforeKey = before ? before.key : '';
+}
+// The home page picture copies the cover's url, so follow a new cover.
+const followCover = (photo) => DirekairSetting.updateOne(
+  { key: 'site', heroPhotoId: String(photo._id) }, { $set: { heroUrl: photo.url } },
+);
+const plainImages = (p) => imagesOf(p).map(({ url, key, kind }) => ({ url, key, kind }));
+
+// New job: one or more 'photo' (after) pictures, plus any number of 'before' pictures.
 router.post('/gallery', requireAdmin, (req, res) => {
-  upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'before', maxCount: 1 }])(req, res, async (err) => {
-    if (err) {
-      return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 10MB' : 'อัปโหลดไม่สำเร็จ' });
-    }
-    const main = req.files?.photo?.[0];
-    const before = req.files?.before?.[0];
-    if (!main) return res.status(400).json({ error: 'กรุณาเลือกรูป JPG, PNG หรือ WebP' });
+  pictureFields(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: uploadErr(err) });
+    if (!req.files?.photo?.length) return res.status(400).json({ error: 'กรุณาเลือกรูปหลังทำอย่างน้อย 1 รูป (JPG, PNG หรือ WebP)' });
     if (!b2Enabled()) return res.status(503).json({ error: 'ยังไม่ได้ตั้งค่าที่เก็บรูป (B2)' });
     const category = PHOTO_CATEGORIES.includes(req.body.category) ? req.body.category : 'other';
-
     try {
-      if (await DirekairPhoto.countDocuments() >= MAX_PHOTOS) {
-        return res.status(400).json({ error: `มีรูปครบ ${MAX_PHOTOS} รูปแล้ว กรุณาลบรูปเก่าก่อน` });
-      }
-
-      let image, beforeImage;
-      try {
-        image = await toWebp(main.buffer);
-        if (before) beforeImage = await toWebp(before.buffer);
-      } catch {
-        return res.status(400).json({ error: 'ไฟล์นี้ไม่ใช่รูปภาพที่รองรับ' });
-      }
-
-      const stamp = `${Date.now()}-${crypto.randomUUID()}`;
-      const fileKey = `${B2_PREFIX}${stamp}.webp`;
-      const url = await uploadToB2(image, fileKey, 'image/webp');
-      let beforeKey = '', beforeUrl = '';
-      if (beforeImage) {
-        beforeKey = `${B2_PREFIX}${stamp}-before.webp`;
-        beforeUrl = await uploadToB2(beforeImage, beforeKey, 'image/webp');
-      }
+      const images = await storePictures(req.files);
       const first = await DirekairPhoto.findOne().sort({ order: 1 }).lean();
-      const photo = await DirekairPhoto.create({
-        url, fileKey, beforeUrl, beforeKey, category,
-        caption: cleanCaption(req.body.caption), order: first ? first.order - 1 : 0,
-      });
+      const photo = new DirekairPhoto({ category, caption: cleanCaption(req.body.caption), order: first ? first.order - 1 : 0 });
+      setImages(photo, images);
+      await photo.save();
       res.status(201).json(toPublic(photo));
     } catch (e) {
+      if (e.status === 400) return res.status(400).json({ error: e.message });
       console.error('direkair: upload failed:', e.message);
       res.status(500).json({ error: 'บันทึกรูปไม่สำเร็จ' });
     }
   });
+});
+
+// Add more pictures ('photo' = after, 'before') to a job; they go to the end of their kind.
+router.post('/gallery/:id/images', requireAdmin, (req, res) => {
+  pictureFields(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: uploadErr(err) });
+    if (!req.files?.photo?.length && !req.files?.before?.length) return res.status(400).json({ error: 'กรุณาเลือกรูป JPG, PNG หรือ WebP' });
+    if (!b2Enabled()) return res.status(503).json({ error: 'ยังไม่ได้ตั้งค่าที่เก็บรูป (B2)' });
+    try {
+      const photo = await DirekairPhoto.findById(req.params.id);
+      if (!photo) return res.status(404).json({ error: 'ไม่พบงานนี้' });
+      const added = await storePictures(req.files);
+      // fetch again: another batch may have been added while these were uploading
+      const fresh = await DirekairPhoto.findById(req.params.id);
+      if (!fresh) { for (const i of added) await deleteB2File(i.key); return res.status(404).json({ error: 'ไม่พบงานนี้' }); }
+      setImages(fresh, [...plainImages(fresh), ...added]);
+      await fresh.save();
+      res.json(toPublic(fresh));
+    } catch (e) {
+      if (e.name === 'CastError') return res.status(404).json({ error: 'ไม่พบงานนี้' });
+      if (e.status === 400) return res.status(400).json({ error: e.message });
+      console.error('direkair: add pictures failed:', e.message);
+      res.status(500).json({ error: 'บันทึกรูปไม่สำเร็จ' });
+    }
+  });
+});
+
+// Remove one picture (by url). A job keeps at least one 'after' picture; delete the job instead.
+router.delete('/gallery/:id/images', requireAdmin, async (req, res) => {
+  try {
+    const photo = await DirekairPhoto.findById(req.params.id);
+    if (!photo) return res.status(404).json({ error: 'ไม่พบงานนี้' });
+    const images = plainImages(photo);
+    const gone = images.find((i) => i.url === req.body?.url);
+    if (!gone) return res.status(404).json({ error: 'ไม่พบรูปนี้ กรุณารีเฟรชหน้า' });
+    const rest = images.filter((i) => i !== gone);
+    if (!rest.some((i) => i.kind === 'after')) {
+      return res.status(400).json({ error: 'งานต้องมีรูปหลังทำอย่างน้อย 1 รูป ถ้าจะลบทั้งงาน กด "ลบงาน"' });
+    }
+    setImages(photo, rest);
+    await photo.save();
+    await deleteB2File(gone.key);
+    await followCover(photo);
+    res.json(toPublic(photo));
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(404).json({ error: 'ไม่พบงานนี้' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// New picture order (all urls of the job). The first 'after' one becomes the cover.
+router.put('/gallery/:id/images/order', requireAdmin, async (req, res) => {
+  try {
+    const photo = await DirekairPhoto.findById(req.params.id);
+    if (!photo) return res.status(404).json({ error: 'ไม่พบงานนี้' });
+    const images = plainImages(photo);
+    const urls = req.body?.urls;
+    const byUrl = new Map(images.map((i) => [i.url, i]));
+    if (!Array.isArray(urls) || urls.length !== images.length || new Set(urls).size !== urls.length || !urls.every((u) => byUrl.has(u))) {
+      return res.status(400).json({ error: 'ลำดับรูปไม่ถูกต้อง กรุณารีเฟรชหน้า' });
+    }
+    setImages(photo, urls.map((u) => byUrl.get(u)));
+    await photo.save();
+    await followCover(photo);
+    res.json(toPublic(photo));
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(404).json({ error: 'ไม่พบงานนี้' });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Registered before '/gallery/:id' so 'order' isn't taken as an id.
@@ -357,61 +445,11 @@ router.patch('/gallery/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// Add or replace the "before" photo of an existing gallery photo.
-// Uses a new file name each time so browsers don't keep showing the old picture.
-router.put('/gallery/:id/before', requireAdmin, (req, res) => {
-  upload.single('before')(req, res, async (err) => {
-    if (err) {
-      return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 10MB' : 'อัปโหลดไม่สำเร็จ' });
-    }
-    if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกรูป JPG, PNG หรือ WebP' });
-    if (!b2Enabled()) return res.status(503).json({ error: 'ยังไม่ได้ตั้งค่าที่เก็บรูป (B2)' });
-    try {
-      const photo = await DirekairPhoto.findById(req.params.id);
-      if (!photo) return res.status(404).json({ error: 'ไม่พบรูปนี้' });
-      let image;
-      try {
-        image = await toWebp(req.file.buffer);
-      } catch {
-        return res.status(400).json({ error: 'ไฟล์นี้ไม่ใช่รูปภาพที่รองรับ' });
-      }
-      const oldKey = photo.beforeKey;
-      const beforeKey = `${B2_PREFIX}${Date.now()}-${crypto.randomUUID()}-before.webp`;
-      photo.beforeUrl = await uploadToB2(image, beforeKey, 'image/webp');
-      photo.beforeKey = beforeKey;
-      await photo.save();
-      if (oldKey) await deleteB2File(oldKey);
-      res.json(toPublic(photo));
-    } catch (e) {
-      if (e.name === 'CastError') return res.status(404).json({ error: 'ไม่พบรูปนี้' });
-      console.error('direkair: before upload failed:', e.message);
-      res.status(500).json({ error: 'บันทึกรูปไม่สำเร็จ' });
-    }
-  });
-});
-
-router.delete('/gallery/:id/before', requireAdmin, async (req, res) => {
-  try {
-    const photo = await DirekairPhoto.findById(req.params.id);
-    if (!photo) return res.status(404).json({ error: 'ไม่พบรูปนี้' });
-    const oldKey = photo.beforeKey;
-    photo.beforeUrl = '';
-    photo.beforeKey = '';
-    await photo.save();
-    if (oldKey) await deleteB2File(oldKey);
-    res.json(toPublic(photo));
-  } catch (err) {
-    if (err.name === 'CastError') return res.status(404).json({ error: 'ไม่พบรูปนี้' });
-    res.status(500).json({ error: err.message });
-  }
-});
-
 router.delete('/gallery/:id', requireAdmin, async (req, res) => {
   try {
     const photo = await DirekairPhoto.findByIdAndDelete(req.params.id);
     if (!photo) return res.status(404).json({ error: 'ไม่พบรูปนี้' });
-    await deleteB2File(photo.fileKey);
-    if (photo.beforeKey) await deleteB2File(photo.beforeKey);
+    for (const i of imagesOf(photo)) await deleteB2File(i.key);
     // stop using it as the home page picture
     await DirekairSetting.updateOne({ key: 'site', heroPhotoId: String(photo._id) }, { $set: { heroPhotoId: '', heroUrl: '' } });
     res.json({ ok: true });
