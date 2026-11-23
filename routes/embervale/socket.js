@@ -110,6 +110,24 @@ function bossTick(ns, nowMs) {
   }
 }
 
+// a region's monsters to everyone in it (every tick, and at once after hits land: see flushHits)
+function sendMobs(ns, key, s) {
+  s.sentAt = Date.now();
+  const wb = s.sim.bossState();
+  ns.to(key).emit("mobs", { z: s.zone, mb: s.sim.snapshot(), ev: s.sim.evs, ...(wb ? { wb } : {}) });
+}
+// Hits on the server's monsters show to everyone right away instead of at the next tick (up to 100 ms later): a kill,
+// its loot and the HP bar arrive about as soon as the hit does. At most one extra send per region every 40 ms.
+const FLUSH_GAP_MS = 40;
+function flushHits(ns, key, s) {
+  if (s.flushT) return;
+  const wait = FLUSH_GAP_MS - (Date.now() - (s.sentAt || 0));
+  if (wait <= 0) { sendMobs(ns, key, s); return; }
+  if (wait >= TICK_MS - 10) return; // the tick is about to send anyway
+  s.flushT = setTimeout(() => { s.flushT = null; try { if (sims.get(key) === s) sendMobs(ns, key, s); } catch { /* ignore */ } }, wait);
+  if (s.flushT.unref) s.flushT.unref();
+}
+
 function attachEmbervale(io) {
   const ns = io.of("/embervale");
   nsRef = ns;
@@ -130,8 +148,7 @@ function attachEmbervale(io) {
         }
         s.idle = 0;
         s.sim.tick(TICK_MS / 1000, players);
-        const wb = s.sim.bossState();
-        ns.to(key).emit("mobs", { z: s.zone, mb: s.sim.snapshot(), ev: s.sim.evs, ...(wb ? { wb } : {}) });
+        sendMobs(ns, key, s);
       } catch (err) {
         sims.delete(key); // a broken region restarts fresh next time someone is there
       }
@@ -273,13 +290,16 @@ function attachEmbervale(io) {
         const s = socket.data.zoneRoom && sims.get(socket.data.zoneRoom);
         if (s && Array.isArray(presence.hx)) {
           const who = { id: String(presence.id || socket.id).slice(0, 16), x: Number(presence.x) || 0, y: Number(presence.y) || 0, lv: presence.lv, rb: presence.rb === 1, j3: presence.j3 === 1, party: socket.data.partyId || null };
+          let hit = false;
           for (const h of presence.hx.slice(-24)) {
             if (!h || typeof h !== "object") continue;
             const i = Number(h.i);
             if (!(i > (socket.data.hxSeen || 0))) continue;
             socket.data.hxSeen = i;
             s.sim.hit(who, h);
+            hit = true;
           }
+          if (hit) flushHits(ns, socket.data.zoneRoom, s);
         }
       } catch {
         /* ignore bad presence */
