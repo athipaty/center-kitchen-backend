@@ -1,4 +1,4 @@
-// Embervale player fights (duels, the arena, guild war): the server decides which hits count.
+// Embervale player fights (duels, the ranked arena, the open arena (brawl.js), guild war): the server decides which hits count.
 // A game that knows this path sends each hit on another player here ("pvpHit") instead of straight to that
 // player. The server checks that the two really are fighting (a duel both agreed to, opposite teams in a started
 // arena match, rival guilds in Emberkeep during a war), that they stand in the same region within reach (from the
@@ -8,10 +8,11 @@
 // Every handler is wrapped so a bad message only fails that socket.
 const { matchOf } = require("./arena");
 const { _gw } = require("./guildwar");
+const { brawlIn } = require("./brawl");
 
 const REACH = 520;           // px: a little more than the games' own 450, as positions here are a moment old
 const HITS_PER_SEC = 14;     // multi-hit skills land several hits at once; nobody honest sends more than this
-const KINDS = { hit: "duel", ah: "arena", gh: "gw" };
+const KINDS = { hit: "duel", ah: "arena", gh: "gw", fa: "brawl" };
 const KEEP_ZONE = "keep";
 
 const fin = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -19,7 +20,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const roomOf = (s) => String(s.data.channel || "").split(":")[0];
 
 // are attacker a and target t allowed to hurt each other in this kind of fight?
-function fighting(kind, a, t, msg) {
+function fighting(kind, a, t, msg, ns) {
+  if (kind === "brawl") return !!ns && brawlIn(ns, a, t);
   if (kind === "duel") return a.data.duelWith === t.id && t.data.duelWith === a.id;
   if (kind === "arena") {
     const m = matchOf(a.id);
@@ -58,7 +60,7 @@ function attachPvp(socket, ns) {
     const pa = socket.data.presence, pt = t.data.presence;
     if (!pa || !pt || typeof pa.z !== "string" || pa.z !== pt.z) return refuse();
     if (Math.hypot(fin(pa.x) - fin(pt.x), fin(pa.y) - fin(pt.y)) > REACH) return refuse();
-    if (!fighting(kind, socket, t, msg)) return refuse();
+    if (!fighting(kind, socket, t, msg, ns)) return refuse();
     // the same cap the games use (400 + 150 a level), plus room for the target's DEF they take off themselves
     const cap = 400 + clamp(Math.round(fin(pa.lv)) || 1, 1, 99) * 150 + clamp(fin(pt.df), 0, 5000) * 0.6;
     const d = clamp(Math.round(fin(msg.d)), 0, Math.round(cap));
