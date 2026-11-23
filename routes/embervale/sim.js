@@ -79,7 +79,7 @@ class ZoneSim {
     }
     const x = (i % Z.w + 0.5) * TILE, y = (((i / Z.w) | 0) + 0.5) * TILE;
     Object.assign(m, { d, x, y, calls: 0, sx: x, sy: y, hp: d.hp, state: "idle", atkT: 0, wT: rnd(0, 3), tx: null, ty: null, face: 1,
-      dead: false, slowUntil: 0, ail: null, ailUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, zoneT: this.now + 4, stunUntil: 0, dmg: new Map(), pty: new Map(), respawnAt: 0 });
+      dead: false, slowUntil: 0, ail: null, ailUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, zoneT: this.now + 4, sigT: this.now + 6, stunUntil: 0, dmg: new Map(), pty: new Map(), respawnAt: 0 });
     return m;
   }
 
@@ -184,6 +184,12 @@ class ZoneSim {
         if (d.boss && this.now > (m.zoneT || 0) && dp < 420) {
           m.zoneT = this.now + rnd(7, 10);
           this.event("z", m, { x: Math.round(tg.x), y: Math.round(tg.y), r: m.world ? 110 : 85 });
+        }
+        // (game v1.51.3) the boss's own signature skill every 10-14 s within 450 px: the games play it out from the spot
+        // and the seed (the same circles for everyone) and each hurts only its own hero
+        if (d.boss && this.now > (m.sigT || 0) && dp < 450) {
+          m.sigT = this.now + rnd(10, 14);
+          this.event("q", m, { x: Math.round(tg.x), y: Math.round(tg.y), s: Math.floor(Math.random() * 1e9) });
         }
         if (d.skill && this.useSkill(m, tg, dp)) return;
         const reach = d.range + d.size + PR + 4;
