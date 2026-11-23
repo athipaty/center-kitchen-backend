@@ -16,6 +16,7 @@ const { attachMod, loadModeration, filterPresenceChat } = require("./mod");
 const { attachArena } = require("./arena");
 const { startGuildWar, attachGuildWar, attachGuildWarAdmin } = require("./guildwar");
 const { attachErrors } = require("./errors");
+const { attachPvp } = require("./pvp");
 
 const CHANNEL_CAP = 40;
 const MAX_PRESENCE_BYTES = 12_000;
@@ -163,6 +164,7 @@ function attachEmbervale(io) {
     attachArena(socket, ns);  // ranked arena matches
     attachGuildWar(socket, ns); // Emberkeep guild war: owner, schedule
     attachGuildWarAdmin(socket, ns);
+    attachPvp(socket, ns);    // player fights: the server checks every hit on another player
     attachErrors(socket);     // admin window: players' script errors
     const peerInfo = (pres) => ({ peer: socket.id, presence: pres === undefined ? socket.data.presence || null : pres, guest: !socket.data.username, guild: socket.data.guild ? { n: socket.data.guild.name, e: socket.data.guild.emblem } : null });
     // slim copies for the rest of the channel: at once when what they show changes, else at most once a second

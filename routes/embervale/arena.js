@@ -161,4 +161,4 @@ function attachArena(socket, ns) {
   });
 }
 
-module.exports = { attachArena, _arena: { queues, matches } };
+module.exports = { attachArena, matchOf, _arena: { queues, matches } };
