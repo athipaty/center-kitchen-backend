@@ -79,7 +79,7 @@ class ZoneSim {
     }
     const x = (i % Z.w + 0.5) * TILE, y = (((i / Z.w) | 0) + 0.5) * TILE;
     Object.assign(m, { d, x, y, calls: 0, sx: x, sy: y, hp: d.hp, state: "idle", atkT: 0, wT: rnd(0, 3), tx: null, ty: null, face: 1,
-      dead: false, slowUntil: 0, ail: null, ailUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, stunUntil: 0, dmg: new Map(), pty: new Map(), respawnAt: 0 });
+      dead: false, slowUntil: 0, ail: null, ailUntil: 0, moving: false, slamT: this.now + 6, slamAt: 0, zoneT: this.now + 4, stunUntil: 0, dmg: new Map(), pty: new Map(), respawnAt: 0 });
     return m;
   }
 
@@ -179,6 +179,12 @@ class ZoneSim {
       if (Math.hypot(m.x - m.sx, m.y - m.sy) > (m.world ? 900 : 520) || dp > (m.world ? 900 : 600)) m.state = "return";
       else {
         if (d.boss && this.now > m.slamT && dp < 160) { m.slamAt = this.now + 1.1; this.event("w", m); return; }
+        // (game v1.50.1) a boss marks the ground under a player within 420 px; 1.2 s later it erupts (each game hurts its own
+        // player if they are still inside), so fighting a boss from range is no longer safe. Every 7-10 s; world bosses a bigger one.
+        if (d.boss && this.now > (m.zoneT || 0) && dp < 420) {
+          m.zoneT = this.now + rnd(7, 10);
+          this.event("z", m, { x: Math.round(tg.x), y: Math.round(tg.y), r: m.world ? 110 : 85 });
+        }
         if (d.skill && this.useSkill(m, tg, dp)) return;
         const reach = d.range + d.size + PR + 4;
         m.atkT -= dt;
