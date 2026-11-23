@@ -1,10 +1,15 @@
 // Embervale social: whispers, parties (with shared EXP) and friends' online status.
-// Parties live only in memory: they last while their members are connected.
+// Parties live only in memory. Since game v1.52.2 a party keeps a member who disconnects (a restart, a lost
+// connection) as "away", by the hero id their game sends ("pid"); when that hero connects again they are put straight
+// back in. Only leaving, being removed by the leader, or 24 h away ends a membership.
 // Every handler is wrapped so a bad message only fails that socket.
 const { chatAllowed } = require("./mod");
 const MAX_PARTY = 12;
 const MSGS_PER_SEC = 5;
-const parties = new Map(); // id -> { id, leader: socketId, mode: "share" | "each", loot: "each" | "turns", turn, members: Set<socketId> }
+const parties = new Map(); // id -> { id, leader: socketId|null, leaderPid, mode: "share" | "each", loot: "each" | "turns", turn, members: Set<socketId>, away: Map<pid, {name, since}> }
+const AWAY_MAX_MS = 24 * 3600e3;
+const cleanPid = (v) => (typeof v === "string" && /^[A-Za-z0-9_-]{8,40}$/.test(v) ? v : null);
+const partySize = (p) => p.members.size + (p.away ? p.away.size : 0);
 let partySeq = 0;
 // #48 chat rooms: named rooms anyone can join from any region or channel (one room per player at a time)
 const MAX_ROOM = 50, MAX_ROOMS = 200;
@@ -28,32 +33,57 @@ const nameOf = (s) => clean(s?.data?.presence?.n, 16) || "Traveller";
 const int = (v, max) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
 
 function partyState(p, ns) {
-  return { id: p.id, leader: p.leader, mode: p.mode, loot: p.loot || "each", members: [...p.members].map((id) => ({ peer: id, name: nameOf(ns.sockets.get(id)) })) };
+  return { id: p.id, leader: p.leader, mode: p.mode, loot: p.loot || "each", members: [...p.members].map((id) => ({ peer: id, name: nameOf(ns.sockets.get(id)) })),
+    away: p.away ? [...p.away.values()].map((a) => a.name) : [] };
 }
 function sendParty(p, ns) {
   const st = partyState(p, ns);
   for (const id of p.members) ns.sockets.get(id)?.emit("party", st);
 }
-function leaveParty(socket, ns) {
+// keep: the member only disconnected (their place is kept as away); otherwise they left or were removed
+function leaveParty(socket, ns, keep) {
   const p = parties.get(socket.data.partyId);
   socket.data.partyId = null;
   if (!p) return;
   p.members.delete(socket.id);
-  socket.emit("party", null);
-  if (!p.members.size) { parties.delete(p.id); return; }
-  if (p.leader === socket.id) p.leader = [...p.members][0];
+  const pid = socket.data.pid;
+  if (!p.away) p.away = new Map();
+  if (keep && pid) p.away.set(pid, { name: nameOf(socket), since: Date.now() });
+  else { if (pid) p.away.delete(pid); socket.emit("party", null); }
   socket.data.vc = false; socket.data.vcParty = null; // (voice.js) leaving the party leaves its voice chat
-  if (p.members.size === 1) { // a party of one is no party
+  if (p.leader === socket.id) { p.leader = p.members.size ? [...p.members][0] : null; if (keep && pid && !p.members.size) p.leaderPid = pid; else if (p.leader) p.leaderPid = ns.sockets.get(p.leader)?.data.pid || null; }
+  if (!partySize(p)) { parties.delete(p.id); return; }
+  if (partySize(p) === 1 && p.members.size === 1) { // a party of one is no party
     const last = ns.sockets.get([...p.members][0]);
     parties.delete(p.id);
     if (last) { last.data.partyId = null; last.data.vc = false; last.data.vcParty = null; last.emit("party", null); last.emit("vcState", { peers: [] }); }
     return;
   }
+  if (!p.members.size) return; // everyone is away: the party waits for them
   sendParty(p, ns);
   // the rest of the party: who is still in voice
   const inVoice = [...p.members].filter((id) => { const s = ns.sockets.get(id); return s && s.data.vc; });
   for (const id of p.members) { const s = ns.sockets.get(id); if (s) s.emit("vcState", { peers: inVoice }); }
 }
+// a hero who was away comes back: straight back into their party
+function partyReturn(socket, ns) {
+  const pid = socket.data.pid; if (!pid || socket.data.partyId) return;
+  for (const p of parties.values()) {
+    if (!p.away || !p.away.has(pid)) continue;
+    p.away.delete(pid); p.members.add(socket.id); socket.data.partyId = p.id;
+    if (!p.leader || !p.members.has(p.leader) || p.leaderPid === pid) { p.leader = socket.id; p.leaderPid = pid; }
+    sendParty(p, ns);
+    for (const id of p.members) if (id !== socket.id) ns.sockets.get(id)?.emit("socialInfo", { info: `${nameOf(socket)} is back in the party.` });
+    return;
+  }
+}
+// members away for more than a day are let go; a party with nobody left ends
+setInterval(() => {
+  try { const t = Date.now();
+    for (const p of [...parties.values()]) { if (!p.away) continue; for (const [pid, a] of p.away) if (t - a.since > AWAY_MAX_MS) p.away.delete(pid);
+      if (!partySize(p)) parties.delete(p.id); }
+  } catch { /* ignore */ }
+}, 600_000).unref();
 
 function attachSocial(socket, ns) {
   let tokens = MSGS_PER_SEC, last = Date.now();
@@ -109,7 +139,7 @@ function attachSocial(socket, ns) {
     if (target.data.channel !== socket.data.channel) return error(`${nameOf(target)} is in another channel.`);
     if (target.data.partyId) return error(`${nameOf(target)} is already in a party.`);
     const p = myParty();
-    if (p && p.members.size >= MAX_PARTY) return error(`A party can have at most ${MAX_PARTY} members.`);
+    if (p && partySize(p) >= MAX_PARTY) return error(`A party can have at most ${MAX_PARTY} members.`);
     (target.data.invites ||= new Map()).set(socket.id, Date.now());
     target.emit("partyInvite", { fromPeer: socket.id, from: nameOf(socket) });
     socket.emit("socialInfo", { info: `Invited ${nameOf(target)} to your party.` });
@@ -122,11 +152,11 @@ function attachSocial(socket, ns) {
     if (socket.data.partyId) leaveParty(socket, ns);
     let p = parties.get(from.data.partyId);
     if (!p) {
-      p = { id: "p" + ++partySeq, leader: from.id, mode: "share", loot: "each", turn: 0, members: new Set([from.id]) };
+      p = { id: "p" + ++partySeq, leader: from.id, leaderPid: from.data.pid || null, mode: "share", loot: "each", turn: 0, members: new Set([from.id]), away: new Map() };
       parties.set(p.id, p);
       from.data.partyId = p.id;
     }
-    if (p.members.size >= MAX_PARTY) return error("That party is full.");
+    if (partySize(p) >= MAX_PARTY) return error("That party is full.");
     p.members.add(socket.id);
     socket.data.partyId = p.id;
     sendParty(p, ns);
@@ -136,9 +166,12 @@ function attachSocial(socket, ns) {
     ns.sockets.get(String(msg.peer))?.emit("socialInfo", { info: `${nameOf(socket)} declined your party invitation.` });
   });
   on("partyLeave", () => leaveParty(socket, ns));
+  on("pid", (msg) => { const pid = cleanPid(msg.pid); if (!pid) return; socket.data.pid = pid; partyReturn(socket, ns); });
   on("partyKick", (msg) => {
     const p = myParty();
     if (!p || p.leader !== socket.id) return;
+    if (msg.away) { const n = clean(msg.away, 16).toLowerCase(); for (const [pid, a] of p.away || []) if (a.name.toLowerCase() === n) p.away.delete(pid);
+      if (partySize(p) === 1) { parties.delete(p.id); socket.data.partyId = null; socket.emit("party", null); } else sendParty(p, ns); return; }
     const t = ns.sockets.get(String(msg.peer));
     if (!t || t === socket || !p.members.has(t.id)) return;
     leaveParty(t, ns);
@@ -182,7 +215,7 @@ function attachSocial(socket, ns) {
     socket.emit("friends", { online: [...online] });
   });
 
-  socket.on("disconnect", () => { try { leaveParty(socket, ns); } catch { /* ignore */ } try { leaveRoom(socket, ns); } catch { /* ignore */ } });
+  socket.on("disconnect", () => { try { leaveParty(socket, ns, true); } catch { /* ignore */ } try { leaveRoom(socket, ns); } catch { /* ignore */ } });
 }
 
 const getParty = (id) => (id && parties.get(id)) || null;
