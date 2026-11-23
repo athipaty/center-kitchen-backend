@@ -42,13 +42,17 @@ function leaveParty(socket, ns) {
   socket.emit("party", null);
   if (!p.members.size) { parties.delete(p.id); return; }
   if (p.leader === socket.id) p.leader = [...p.members][0];
+  socket.data.vc = false; socket.data.vcParty = null; // (voice.js) leaving the party leaves its voice chat
   if (p.members.size === 1) { // a party of one is no party
     const last = ns.sockets.get([...p.members][0]);
     parties.delete(p.id);
-    if (last) { last.data.partyId = null; last.emit("party", null); }
+    if (last) { last.data.partyId = null; last.data.vc = false; last.data.vcParty = null; last.emit("party", null); last.emit("vcState", { peers: [] }); }
     return;
   }
   sendParty(p, ns);
+  // the rest of the party: who is still in voice
+  const inVoice = [...p.members].filter((id) => { const s = ns.sockets.get(id); return s && s.data.vc; });
+  for (const id of p.members) { const s = ns.sockets.get(id); if (s) s.emit("vcState", { peers: inVoice }); }
 }
 
 function attachSocial(socket, ns) {
