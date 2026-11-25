@@ -4,6 +4,31 @@
 // bad message only fails that socket.
 const { getParty } = require("./social");
 
+/* ---- relay (TURN) servers ----
+   Phones on many mobile networks (shared addresses) cannot reach each other directly; a relay carries their voice.
+   Set ONE of these on the server (Render → Environment), nothing else needed in the game:
+     Cloudflare (free tier):  EMBER_TURN_CF_KEY_ID, EMBER_TURN_CF_TOKEN   (a TURN key from Cloudflare Realtime)
+     any TURN service:        EMBER_TURN_URLS (comma separated, e.g. turn:x.com:3478,turns:x.com:5349),
+                              EMBER_TURN_USERNAME, EMBER_TURN_CREDENTIAL
+   Without them voice still works for players whose networks allow direct connections. */
+let iceCache = null, iceAt = 0;
+async function relayServers() {
+  const env = process.env;
+  if (env.EMBER_TURN_CF_KEY_ID && env.EMBER_TURN_CF_TOKEN) {
+    if (iceCache && Date.now() - iceAt < 6 * 3600 * 1000) return iceCache; // short-lived credentials, renewed every 6 h (valid 24 h)
+    try {
+      const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(env.EMBER_TURN_CF_KEY_ID)}/credentials/generate`, {
+        method: "POST", headers: { Authorization: `Bearer ${env.EMBER_TURN_CF_TOKEN}`, "Content-Type": "application/json" }, body: JSON.stringify({ ttl: 86400 }) });
+      if (r.ok) { const j = await r.json(); const ice = j && j.iceServers; iceCache = Array.isArray(ice) ? ice : ice ? [ice] : []; iceAt = Date.now(); return iceCache; }
+      console.warn("embervale voice: Cloudflare TURN credentials failed", r.status);
+    } catch (e) { console.warn("embervale voice: Cloudflare TURN credentials failed", e.message); }
+    return iceCache || [];
+  }
+  if (env.EMBER_TURN_URLS && env.EMBER_TURN_USERNAME && env.EMBER_TURN_CREDENTIAL)
+    return [{ urls: env.EMBER_TURN_URLS.split(",").map((u) => u.trim()).filter(Boolean), username: env.EMBER_TURN_USERNAME, credential: env.EMBER_TURN_CREDENTIAL }];
+  return [];
+}
+
 const MAX_SIG = 16000;      // an offer or answer is a few kB; anything bigger is not one
 const SIGS_PER_SEC = 40;    // setup with a few party members sends a burst of candidates, then nothing
 
@@ -19,7 +44,10 @@ function attachVoice(socket, ns) {
   let tokens = SIGS_PER_SEC, last = Date.now();
   on("vcJoin", () => {
     if (!socket.data.partyId) { socket.emit("vcState", { peers: [], why: "Join a party first to use voice." }); return; }
-    socket.data.vc = true; socket.data.vcParty = socket.data.partyId; vcBroadcast(ns, socket.data.partyId);
+    socket.data.vc = true; socket.data.vcParty = socket.data.partyId;
+    // the relay list first, so the game has it before it opens any connection (game v1.60.3+ reads "vcIce")
+    relayServers().then((ice) => { try { socket.emit("vcIce", { iceServers: ice }); } catch { /* gone */ } })
+      .finally(() => { try { if (socket.data.vc) vcBroadcast(ns, socket.data.partyId); } catch { /* ignore */ } });
   });
   on("vcLeave", () => { const pid = socket.data.vcParty || socket.data.partyId; socket.data.vc = false; socket.data.vcParty = null; if (pid) vcBroadcast(ns, pid); });
   on("vcState", () => { if (socket.data.partyId) vcBroadcast(ns, socket.data.partyId); else socket.emit("vcState", { peers: [] }); });
@@ -36,4 +64,4 @@ function attachVoice(socket, ns) {
   socket.on("disconnect", () => { try { const pid = socket.data.vcParty || socket.data.partyId; if (socket.data.vc && pid) { socket.data.vc = false; vcBroadcast(ns, pid); } } catch { /* ignore */ } });
 }
 
-module.exports = { attachVoice, vcBroadcast };
+module.exports = { attachVoice, vcBroadcast, relayServers };
