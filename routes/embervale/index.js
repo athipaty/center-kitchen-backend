@@ -6,6 +6,7 @@ const EmberAccount = require("../../models/embervale/EmberAccount");
 const { signEmbervaleToken, requireEmbervaleAuth } = require("../../utils/embervaleAuth");
 const { onlineCount } = require("./socket");
 const { errorsRouter } = require("./errors");
+const { leaderboardRouter } = require("./leaderboard");
 
 const USERNAME_RE = /^[a-z0-9_]{3,16}$/;
 const MAX_SAVE_BYTES = 200_000;
@@ -152,6 +153,9 @@ router.delete("/character", requireEmbervaleAuth, async (req, res) => {
 
 // Error reports from players' games, and admin backups (routes/embervale/errors.js)
 router.use(errorsRouter);
+
+// Leaderboards: top 50 in four lists and last season's Hall of Fame (routes/embervale/leaderboard.js)
+router.use(leaderboardRouter);
 
 // Public: how many players are connected (for a landing page or the title screen).
 router.get("/status", (req, res) => res.json({ online: onlineCount() }));
