@@ -12,6 +12,11 @@ const { Server } = require("socket.io");
 require("dotenv").config({ override: true });
 
 const rateLimit = require('express-rate-limit');
+// Which apps this process serves (set per Render service):
+//   SERVER_ROLE=embervale  only the Embervale game (its own Render service: no other routes, no scheduled jobs)
+//   (unset)                every app, as before; EMBERVALE_OFF=1 then leaves the game out (once it has its own service)
+const GAME_ONLY = process.env.SERVER_ROLE === "embervale";
+const GAME_ON = GAME_ONLY || process.env.EMBERVALE_OFF !== "1";
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -86,6 +91,7 @@ app.use(express.json({ limit: '1mb' }));
 /* =====================
    ROUTES
 ===================== */
+if (!GAME_ONLY) {
 // --- ABT ---
 app.use('/api/abt', require('./routes/abt'));
 
@@ -174,12 +180,16 @@ app.use('/api/market/conversations', require('./routes/market/conversations'));
 app.use('/api/market/uploads', require('./routes/market/uploads'));
 require('./routes/market/chatSocket').attachMarketChat(io);
 
+}
+
 // --- Embervale (browser MMO: player accounts, cloud saves, live play on the /embervale socket namespace) ---
-app.use('/api/embervale', require('./routes/embervale'));
-require('./routes/embervale/socket').attachEmbervale(io);
+if (GAME_ON) {
+  app.use('/api/embervale', require('./routes/embervale'));
+  require('./routes/embervale/socket').attachEmbervale(io);
+}
 
 // --- Smoke Finder (Singapore "can I smoke here?" check; CORS is set up above) ---
-app.use('/api/smoke', smokeLimiter, require('./routes/smoke'));
+if (!GAME_ONLY) app.use('/api/smoke', smokeLimiter, require('./routes/smoke'));
 
 /* =====================
    DATABASE
@@ -188,6 +198,7 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
     console.log("✅ Connected to MongoDB");
+    if (GAME_ONLY) return; // the game's own service runs no scheduled jobs (the main service does)
     require("./jobs/trackerScheduler").start(io);
     require("./jobs/youtubeEpisodeScheduler").start(io);
     require("./jobs/egpCacheRefresh").start();
@@ -222,7 +233,7 @@ mongoose
 /* =====================
    HEALTH CHECK
 ===================== */
-app.get("/", (req, res) => res.send("API is running 🚀")); // health check
+app.get("/", (req, res) => res.send(GAME_ONLY ? "Embervale game server is running 🚀" : "API is running 🚀")); // health check
 
 /* =====================
    START SERVER
