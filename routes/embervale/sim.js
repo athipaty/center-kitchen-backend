@@ -196,7 +196,7 @@ class ZoneSim {
         m.atkT -= dt;
         if (dp <= reach) {
           m.face = sface(tg.x - m.x, tg.y - m.y); m.moving = false;
-          if (m.atkT <= 0) { m.atkT = d.boss ? 1.3 : 1.6; this.event("a", m, { t: tg.id }); }
+          if (m.atkT <= 0) { m.atkT = d.boss ? (d.enrage && m.hp < d.hp * d.enrage ? 0.9 : 1.3) : 1.6; this.event("a", m, { t: tg.id }); } // (game v1.86.0) an enraged boss swings faster
         } else if (!(m.stunUntil > this.now)) {
           const dx = tg.x - m.x, dy = tg.y - m.y, n = Math.hypot(dx, dy) || 1, s = d.spd * slow * dt * 1.15;
           this.moveEnt(m, (dx / n) * s, (dy / n) * s, Math.min(d.size * 0.6, 11)); m.face = sface(dx, dy); m.moving = true;
