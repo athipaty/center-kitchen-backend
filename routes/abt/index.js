@@ -311,7 +311,9 @@ router.delete('/procurement/:id', requireAuth, async (req, res) => {
   }
 })
 
-// AI summarize — reads the fileUrl (PDF/HTML) and extracts project summary
+// Summarize — reads the fileUrl (an e-GP page or a PDF) and fills in the project's details. No AI since it moved to
+// utils/egpEnrich.js extractAnnouncement: the old version sent Claude only a placeholder for PDFs (never the file),
+// so it was paying to guess from the title; the e-GP template wording is read directly instead.
 router.post('/procurement/:id/summarize', requireAuth, async (req, res) => {
   try {
     const item = await AbtProcurement.findById(req.params.id)
@@ -320,67 +322,27 @@ router.post('/procurement/:id/summarize', requireAuth, async (req, res) => {
     const url = item.fileUrl || item.externalUrl
     if (!url) return res.status(400).json({ error: 'ไม่มีลิงค์ไฟล์ กรุณาเพิ่มลิงค์ PDF หรือลิงค์ EGP ก่อน' })
 
-    // Fetch the document
-    let content = ''
+    let found = {}
     try {
-      const axios = require('axios')
-      const resp = await axios.get(url, {
-        responseType: 'arraybuffer',
-        timeout: 20000,
+      const resp = await require('axios').get(url, {
+        responseType: 'arraybuffer', timeout: 20000,
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AbtMaesai/1.0)' },
       })
-      const ct = resp.headers['content-type'] || ''
-      if (ct.includes('pdf')) {
-        // Send PDF bytes to Claude as base64
-        content = `[PDF document base64 omitted — ${resp.data.byteLength} bytes]`
-        // For PDFs, extract text via Claude files API or just send title
-      } else {
-        // HTML: decode Thai encoding
-        const decoded = new TextDecoder('windows-874').decode(resp.data)
-        // Strip HTML tags and collapse whitespace
-        content = decoded.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 8000)
-      }
+      found = await require('../../utils/egpEnrich').extractAnnouncement(Buffer.from(resp.data))
     } catch (fetchErr) {
-      content = `ชื่อโครงการ: ${item.title}`
+      return res.status(502).json({ error: 'เปิดไฟล์ไม่ได้ ลองตรวจลิงค์อีกครั้ง' })
     }
 
-    const Anthropic = require('@anthropic-ai/sdk')
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-    const message = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 512,
-      messages: [{
-        role: 'user',
-        content: `จากเอกสารประกาศจัดซื้อจัดจ้างต่อไปนี้ กรุณาสกัดข้อมูลและตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่น:
-{
-  "title": "ชื่อโครงการ (string)",
-  "winner": "ชื่อผู้ชนะการเสนอราคา (string หรือ null)",
-  "amount": "ราคาที่เสนอหรือราคาสุทธิ เป็นตัวเลขบาท ไม่มีจุลภาค (number หรือ null)",
-  "budget": "วงเงินงบประมาณหรือราคากลาง เป็นตัวเลขบาท (number หรือ null)",
-  "method": "วิธีการจัดหา (string หรือ null)"
-}
-
-เนื้อหาเอกสาร:
-${content}
-
-ชื่อรายการปัจจุบัน: ${item.title}`,
-      }],
-    })
-
-    let extracted = {}
-    try {
-      const text = message.content[0].text
-      const jsonMatch = text.match(/\{[\s\S]*\}/)
-      if (jsonMatch) extracted = JSON.parse(jsonMatch[0])
-    } catch { extracted = {} }
-
-    // Update the item with extracted fields (only non-null values)
+    const extracted = {
+      title: found.title || null, winner: found.winner || null,
+      amount: found.amount != null ? found.amount : null, budget: found.budget != null ? found.budget : null,
+      method: found.method || null,
+    }
+    // Update the item with what was found (only non-null values)
     const update = {}
-    if (extracted.title)  update.title  = extracted.title
-    if (extracted.winner) update.winner = extracted.winner
-    if (extracted.amount != null) update.amount = Number(extracted.amount)
-    if (extracted.budget != null) update.budget = Number(extracted.budget)
-    if (extracted.method) update.method = extracted.method
+    for (const k of ['title', 'winner', 'method']) if (extracted[k]) update[k] = extracted[k]
+    for (const k of ['amount', 'budget']) if (extracted[k] != null) update[k] = Number(extracted[k])
+    if (!Object.keys(update).length) return res.json({ extracted, item, message: 'ไม่พบข้อมูลในเอกสารนี้' })
 
     const updated = await AbtProcurement.findByIdAndUpdate(req.params.id, update, { new: true })
     res.json({ extracted, item: updated })

@@ -53,6 +53,13 @@ function isPdfBuffer(buf) {
   return buf.length >= 4 && buf.slice(0, 4).toString('latin1') === '%PDF'
 }
 
+// The page as plain text: scripts and styles dropped (their code used to leak into the agency name), tags removed
+function htmlToText(buf) {
+  return new TextDecoder('windows-874').decode(buf)
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ').replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ')
+}
+
 function extractFromHtmlText(text) {
   const titleM  = text.match(/ประกาศผู้ชนะการเสนอราคา\s+(.+?)\s+(?:นั้น|โดย|ตาม)/)
   const winnerM = text.match(/ผู้(?:ได้รับการคัดเลือก|ชนะการเสนอราคา)[^ก-๙]*ได้แก่\s+(.+?)\s+(?:โดยเสนอราคา|ซึ่งมี|งวด|เป็นเงิน)/)
@@ -65,7 +72,7 @@ function extractFromHtmlText(text) {
     winner: winnerM ? winnerM[1].trim() : null,
     amount: amountM ? thaiToNum(amountM[1]) : null,
     method: methodM ? methodM[1].trim() : null,
-    agency: agencyM ? agencyM[1].trim() : null,
+    agency: agencyM ? agencyM[1].split('ประกาศ').pop().replace(/^[\s()]+|[\s()]+$/g, '').trim() || null : null,
     province: findProvince(text),
     closingDate: findClosingDate(text),
   }
@@ -99,8 +106,7 @@ async function enrichAnnouncement(link) {
     })
 
     if (!isPdfBuffer(buf)) {
-      const text = new TextDecoder('windows-874').decode(buf)
-        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+      const text = htmlToText(buf)
       const fields = extractFromHtmlText(text)
       if (hasUsefulData(fields)) return { ...fields, enriched: true }
     }
@@ -114,4 +120,35 @@ async function enrichAnnouncement(link) {
   }
 }
 
-module.exports = { enrichAnnouncement, findProvince, findClosingDate, thaiToNum, PROVINCES }
+// Reads one fetched announcement (an e-GP HTML page or a PDF) into its fields, with no AI: the winner, amount,
+// method and title phrases are the standard e-GP template wording, and PDFs are read for their text first
+// (pdf-parse). Used by ABT's Summarize button.
+async function extractAnnouncement(buf) {
+  if (!isPdfBuffer(buf)) return extractFromHtmlText(htmlToText(buf))
+  const { PDFParse } = require('pdf-parse')
+  const parser = new PDFParse({ data: buf })
+  try {
+    const { text: raw } = await parser.getText()
+    // Thai PDFs often store "ำ" as nikhahit + sara aa, and lose a tone mark that sits over an upper vowel
+    // (it comes out as \u0000): "ทั้งสิ้น" reads "ทั\u0000งสิ\u0000น". So amounts are found in a copy without tone
+    // marks (the digits are never affected), and names are kept only when nothing in them was lost.
+    const text = raw.replace(/ํา/g, 'ำ')
+    const flat = text.replace(/\s+/g, ' ')
+    const loose = flat.replace(/[\u0000่-๋]/g, '')
+    const html = extractFromHtmlText(flat), pdf = extractFromPdfText(text)
+    const clean = (v) => (typeof v === 'string' && !v.includes('\u0000') ? v : null)
+    const moneyM = loose.match(/เป็นเงินทังสิน\s*([๐-๙\d][๐-๙\d,]*(?:\.[๐-๙\d]{2})?)\s*บาท/)
+    const money = moneyM ? thaiToNum(moneyM[1]) : null
+    const winner = clean(html.winner)
+    // in a winner announcement that sum is the winning price; in an invitation it is the budget
+    const hasWinner = /ผู(?:ได|้ได)?[\u0000่-๋]?รับการคัดเลือก|ผู[\u0000่-๋]?ชนะการเสนอราคา/.test(flat)
+    return {
+      title: clean(html.title) || undefined, winner, method: clean(html.method),
+      amount: html.amount != null ? html.amount : hasWinner ? money : null,
+      budget: pdf.budget != null ? pdf.budget : hasWinner ? null : money,
+      agency: clean(pdf.agency) || clean(html.agency), province: pdf.province || html.province, closingDate: pdf.closingDate || html.closingDate,
+    }
+  } finally { if (parser.destroy) await parser.destroy() }
+}
+
+module.exports = { enrichAnnouncement, extractAnnouncement, htmlToText, findProvince, findClosingDate, thaiToNum, PROVINCES }
