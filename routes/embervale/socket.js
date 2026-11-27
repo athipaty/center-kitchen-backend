@@ -19,6 +19,7 @@ const { attachErrors } = require("./errors");
 const { attachPvp } = require("./pvp");
 const { attachBrawl } = require("./brawl");
 const { attachVoice } = require("./voice");
+const { MOB_FULL_MS, MOB_IDLE_MS, mobDelta } = require("./netpack");
 
 const CHANNEL_CAP = 40;
 const MAX_PRESENCE_BYTES = 12_000;
@@ -112,11 +113,27 @@ function bossTick(ns, nowMs) {
   }
 }
 
-// a region's monsters to everyone in it (every tick, and at once after hits land: see flushHits)
-function sendMobs(ns, key, s) {
-  s.sentAt = Date.now();
-  const wb = s.sim.bossState();
-  ns.to(key).emit("mobs", { z: s.zone, mb: s.sim.snapshot(), ev: s.sim.evs, ...(wb ? { wb } : {}) });
+// a region's monsters to everyone in it (every tick, and at once after hits land: see flushHits).
+// Lighter since the game's v1.84.0: between full lists only the monsters that changed go out (games that sent dz:1),
+// nothing at all when nothing changed (but a small update every second), and nothing to players whose game is in the
+// background (hd): they get a full list the moment they come back (forceFull).
+function sendMobs(ns, key, s, force) {
+  const now = Date.now(), wb = s.sim.bossState(), snap = s.sim.snapshot(), evs = s.sim.evs;
+  const lastEv = evs.length ? evs[evs.length - 1].i : 0, wbKey = wb ? JSON.stringify(wb) : "";
+  const hidden = []; let allDelta = true;
+  for (const sid of ns.adapter.rooms.get(key) || []) {
+    const so = ns.sockets.get(sid); if (!so) continue;
+    if (so.data.presence && so.data.presence.hd) hidden.push(sid); else if (!so.data.mobDelta) allDelta = false;
+  }
+  const md = !force && !s.forceFull && allDelta && s.lastSnap && now - (s.fullAt || 0) < MOB_FULL_MS ? mobDelta(s.lastSnap, snap) : null;
+  let msg;
+  if (!md) { msg = { z: s.zone, mb: snap, ev: evs, ...(wb ? { wb } : {}) }; s.fullAt = now; s.forceFull = false; }
+  else {
+    if (!md.length && lastEv === s.lastEv && wbKey === s.lastWb && now - (s.sentAt || 0) < MOB_IDLE_MS) return;
+    msg = { z: s.zone, md, ...(lastEv !== s.lastEv ? { ev: evs } : {}), ...(wb ? { wb } : {}) };
+  }
+  s.sentAt = now; s.lastSnap = snap; s.lastEv = lastEv; s.lastWb = wbKey;
+  (hidden.length ? ns.to(key).except(hidden) : ns.to(key)).emit("mobs", msg);
 }
 // Hits on the server's monsters show to everyone right away instead of at the next tick (up to 100 ms later): a kill,
 // its loot and the HP bar arrive about as soon as the hit does. At most one extra send per region every 40 ms.
@@ -263,7 +280,10 @@ function attachEmbervale(io) {
         if (!socket.data.channel || !presence || typeof presence !== "object" || Array.isArray(presence)) return;
         if (JSON.stringify(presence).length > MAX_PRESENCE_BYTES) return;
         filterPresenceChat(socket, presence); // a muted player's chat is dropped; the rest is kept as report evidence
+        const wasHidden = !!(socket.data.presence && socket.data.presence.hd);
         socket.data.presence = presence;
+        socket.data.mobDelta = presence.dz === 1;
+        if (wasHidden && !presence.hd && socket.data.zoneRoom) { const sb = sims.get(socket.data.zoneRoom); if (sb) sb.forceFull = true; }
 
         // keep the socket in a per-region room so it gets that region's monster updates
         const zone = typeof presence.z === "string" ? presence.z.slice(0, 16) : null;
@@ -288,7 +308,7 @@ function attachEmbervale(io) {
           socket.data.zone = zone;
           socket.data.zoneRoom = zone && hasSim(zone) ? `${socket.data.channel}|${zone}` : null;
           socket.data.hxSeen = 0;
-          if (socket.data.zoneRoom) { socket.join(socket.data.zoneRoom); ensureSim(socket.data.zoneRoom, zone); }
+          if (socket.data.zoneRoom) { socket.join(socket.data.zoneRoom); const sa = ensureSim(socket.data.zoneRoom, zone); if (sa) sa.forceFull = true; }
         }
         // hits this player reports on the server's monsters
         const s = socket.data.zoneRoom && sims.get(socket.data.zoneRoom);
