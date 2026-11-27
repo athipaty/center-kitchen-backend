@@ -67,9 +67,9 @@ async function runOnce() {
 }
 
 function start() {
-  cron.schedule('*/30 * * * *', runOnce) // every 30 minutes
-  setTimeout(runOnce, 30_000)             // and shortly after boot
-  console.log('✅ fbGraphSync scheduled: every 30 min (active only when FACEBOOK_PAGE_ACCESS_TOKEN is set)')
+  cron.schedule('0 7 * * *', runOnce, { timezone: 'Asia/Bangkok' }) // once a day, 07:00 Thai time (that is enough for the homepage)
+  setTimeout(runOnce, 30_000)                                        // and shortly after boot
+  console.log('✅ fbGraphSync scheduled: daily 07:00 Bangkok (active only when FACEBOOK_PAGE_ACCESS_TOKEN is set)')
 }
 
 module.exports = { start, runOnce }
