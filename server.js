@@ -162,7 +162,9 @@ app.use('/api/ebay', ebayRouter);
 mongoose.connection.once('open', () => ebayRouter.setIo(io));
 
 // --- Youtube (motion-comic series generator) ---
-app.use('/api/youtube', require('./routes/youtube'));
+// Retired (no longer used): its scheduled job and "generate now" button render 3+ minute videos with Remotion (a
+// headless Chrome), which needs far more memory than this service's small plan has. Set YOUTUBE_ON=1 to bring it back.
+if (process.env.YOUTUBE_ON === "1") app.use('/api/youtube', require('./routes/youtube'));
 
 // --- Profile (portfolio site binary assets: photo, certificate) ---
 app.use('/api/profile', require('./routes/profile'));
@@ -200,7 +202,7 @@ mongoose
     console.log("✅ Connected to MongoDB");
     if (GAME_ONLY) return; // the game's own service runs no scheduled jobs (the main service does)
     require("./jobs/trackerScheduler").start(io);
-    require("./jobs/youtubeEpisodeScheduler").start(io);
+    if (process.env.YOUTUBE_ON === "1") require("./jobs/youtubeEpisodeScheduler").start(io); // retired, see /api/youtube above
     require("./jobs/egpCacheRefresh").start();
     // groceryPriceCheck disabled — it shares the same SCRAPER_API_KEY as the Amazon
     // tracker and its render=true FairPrice requests cost 10 credits each (30/day for
