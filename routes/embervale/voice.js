@@ -16,12 +16,22 @@ async function relayServers() {
   const env = process.env;
   if (env.EMBER_TURN_CF_KEY_ID && env.EMBER_TURN_CF_TOKEN) {
     if (iceCache && Date.now() - iceAt < 6 * 3600 * 1000) return iceCache; // short-lived credentials, renewed every 6 h (valid 24 h)
-    try {
-      const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(env.EMBER_TURN_CF_KEY_ID)}/credentials/generate`, {
-        method: "POST", headers: { Authorization: `Bearer ${env.EMBER_TURN_CF_TOKEN}`, "Content-Type": "application/json" }, body: JSON.stringify({ ttl: 86400 }) });
-      if (r.ok) { const j = await r.json(); const ice = j && j.iceServers; iceCache = Array.isArray(ice) ? ice : ice ? [ice] : []; iceAt = Date.now(); return iceCache; }
-      console.warn("embervale voice: Cloudflare TURN credentials failed", r.status);
-    } catch (e) { console.warn("embervale voice: Cloudflare TURN credentials failed", e.message); }
+    // the newer "generate-ice-servers" first (a list), then the older "generate" (one entry); browsers stall on port 53, so those urls go
+    const key = encodeURIComponent(env.EMBER_TURN_CF_KEY_ID.trim());
+    for (const path of ["generate-ice-servers", "generate"]) {
+      try {
+        const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${key}/credentials/${path}`, {
+          method: "POST", headers: { Authorization: `Bearer ${env.EMBER_TURN_CF_TOKEN.trim()}`, "Content-Type": "application/json" }, body: JSON.stringify({ ttl: 86400 }) });
+        if (r.ok) {
+          const j = await r.json(); const raw = j && j.iceServers; const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+          const ice = list.map((e) => ({ ...e, urls: [].concat(e.urls || []).filter((u) => !/:53(\?|$)/.test(u)) })).filter((e) => e.urls.length);
+          if (ice.length) { iceCache = ice; iceAt = Date.now(); return iceCache; }
+        }
+        console.warn(`embervale voice: Cloudflare TURN ${path} failed`, r.status,
+          r.status === 404 ? "(EMBER_TURN_CF_KEY_ID is not a TURN key id: use the Turn Token ID, not the API token or account id)" :
+          r.status === 401 || r.status === 403 ? "(EMBER_TURN_CF_TOKEN is wrong: use the API token shown with the TURN key)" : "");
+      } catch (e) { console.warn("embervale voice: Cloudflare TURN credentials failed", e.message); }
+    }
     return iceCache || [];
   }
   if (env.EMBER_TURN_URLS && env.EMBER_TURN_USERNAME && env.EMBER_TURN_CREDENTIAL)
